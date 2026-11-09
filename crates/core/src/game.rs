@@ -1,13 +1,15 @@
-//! The game state the frontend drives: one wanderer walking a world, a turn counter, and a message log.
+//! The game state the frontend drives: one wanderer walking a world, the region it is in, a turn counter,
+//! and a message log.
 //!
 //! Everything here is a pure function of the seed and the moves made so far, so the same seed and the same
-//! steps always give the same position, turn, and log.
+//! steps always give the same position, region, turn, and log.
 //!
 //! Coordinates follow the terrain's: `x` grows eastward and `y` grows southward, down the screen.
 
 use std::collections::VecDeque;
 
 use crate::biome::Biome;
+use crate::region::{Region, RegionCache};
 use crate::world::{Tile, World};
 
 /// Lines the message log keeps. Older lines fall off the front.
@@ -137,12 +139,24 @@ impl Log {
 }
 
 /// One game in progress: a world, the wanderer in it, the turn count, and what has been said.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Game {
     world: World,
+    /// Memoizes region lookups, which run on every step. Not part of the game's state.
+    regions: RegionCache,
     position: (i64, i64),
+    /// The region under the wanderer.
+    region: Region,
     turn: u64,
     log: Log,
+}
+
+/// Games are equal when their state is; what the region cache happens to hold doesn't count.
+impl PartialEq for Game {
+    fn eq(&self, other: &Game) -> bool {
+        (self.world, self.position, &self.region, self.turn, &self.log)
+            == (other.world, other.position, &other.region, other.turn, &other.log)
+    }
 }
 
 impl Game {
@@ -155,10 +169,11 @@ impl Game {
     pub fn new(seed: u64) -> Game {
         let world = World::new(seed);
         let position = find_land(&world, 0, 0).expect("no land near the origin");
-        let mut game = Game { world, position, turn: 0, log: Log::default() };
-        let name = game.biome().name.to_lowercase();
-        game.log.push(format!("You wake. The land here is {name}."));
-        game
+        let mut regions = RegionCache::new(world);
+        let region = region_of(&mut regions, position);
+        let mut log = Log::default();
+        log.push(format!("You wake in {}.", region.name));
+        Game { world, regions, position, region, turn: 0, log }
     }
 
     /// The world being walked.
@@ -185,6 +200,12 @@ impl Game {
         self.tile().biome.biome()
     }
 
+    /// The region the wanderer is in.
+    #[must_use]
+    pub const fn region(&self) -> &Region {
+        &self.region
+    }
+
     /// Successful moves so far.
     #[must_use]
     pub const fn turn(&self) -> u64 {
@@ -197,25 +218,31 @@ impl Game {
         &self.log
     }
 
-    /// Tries to step one tile in `dir`. Moves and passes a turn if the target is passable, saying so if the
-    /// biome changes; otherwise stays put and logs what is in the way.
+    /// Tries to step one tile in `dir`. Moves and passes a turn if the target is passable, naming the region
+    /// if that changes; otherwise stays put and logs what is in the way.
     pub fn step(&mut self, dir: Dir) -> Step {
         let (dx, dy) = dir.delta();
         let (x, y) = (self.position.0 + dx, self.position.1 + dy);
-        let from = self.tile().biome;
-        let to = self.world.tile(x, y).biome;
-        let target = to.biome();
+        let target = self.world.tile(x, y).biome.biome();
         if !target.passable {
+            // Biome names are sentence case ("Deep water"); mid-sentence they are common nouns.
             self.log.push(format!("The way is blocked by {}.", target.name.to_lowercase()));
             return Step::Blocked;
         }
         self.position = (x, y);
         self.turn += 1;
-        if to != from {
-            self.log.push(format!("You enter the {}.", target.name));
+        if self.regions.region_at(x, y) != self.region.id {
+            self.region = region_of(&mut self.regions, self.position);
+            self.log.push(format!("You enter {}.", self.region.name));
         }
         Step::Moved
     }
+}
+
+/// The region holding tile `(x, y)`, described.
+fn region_of(regions: &mut RegionCache, (x, y): (i64, i64)) -> Region {
+    let id = regions.region_at(x, y);
+    regions.region(id).expect("region_at only returns real regions")
 }
 
 #[cfg(test)]
@@ -329,28 +356,41 @@ mod tests {
     }
 
     #[test]
-    fn biome_messages_fire_only_on_change() {
+    fn wake_names_the_region() {
+        for seed in [0, 5] {
+            let game = Game::new(seed);
+            let (x, y) = game.position();
+            assert_eq!(game.region().id, game.world().region_at(x, y));
+            assert_eq!(game.log().lines().collect::<Vec<_>>(), [format!("You wake in {}.", game.region().name)]);
+        }
+    }
+
+    #[test]
+    fn region_messages_fire_only_on_change() {
         for seed in [0, 1, 5] {
             let mut game = Game::new(seed);
             let mut changes = 0;
             // Stop before the log fills, so a new line always shows as a longer log.
-            for i in 0..2_000 {
+            for i in 0..4_000 {
                 if game.log().len() == LOG_LIMIT {
                     break;
                 }
-                let (from, lines) = (game.tile().biome, game.log().len());
+                let (from, lines) = (game.region().id, game.log().len());
                 let dir = Dir::ALL[(i / 40) % 4];
                 if game.step(dir) == Step::Moved {
-                    let after = game.tile().biome;
+                    let after = game.region().id;
                     assert_eq!(game.log().len() > lines, after != from, "seed {seed} step {i}");
                     if after != from {
                         changes += 1;
                         let line = game.log().lines().last().unwrap();
-                        assert_eq!(line, format!("You enter the {}.", after.biome().name));
+                        assert_eq!(line, format!("You enter {}.", game.region().name));
                     }
                 }
             }
-            assert!(changes > 0, "seed {seed}: never changed biome, so the test proved nothing");
+            assert!(changes > 0, "seed {seed}: never changed region, so the test proved nothing");
+            // The cached region the game tracks is the one the world computes from scratch.
+            let (x, y) = game.position();
+            assert_eq!(game.region().id, game.world().region_at(x, y), "seed {seed}");
         }
     }
 

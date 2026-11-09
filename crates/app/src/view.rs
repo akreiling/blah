@@ -101,16 +101,23 @@ impl GameView {
             .child(bar("MP", 8, 10, MP))
             .child(pair("Turn", self.game.turn().to_string()));
 
-        let place = div().flex().flex_col().child(heading("WHERE")).child(pair("Position", format!("{x}, {y}"))).child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(8.0))
-                .h(px(LINE))
-                .child(div().size(px(12.0)).bg(color(biome.color)).border_1().border_color(rgb(FRAME)))
-                .child(div().text_color(rgb(TEXT)).child(biome.name)),
-        );
+        // The region's name, then the biome underfoot, which can differ at a region's ragged edges.
+        let place = div()
+            .flex()
+            .flex_col()
+            .child(heading("WHERE"))
+            .child(pair("Position", format!("{x}, {y}")))
+            .child(div().h(px(LINE)).truncate().text_color(rgb(TEXT)).child(capitalized(&self.game.region().name)))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.0))
+                    .h(px(LINE))
+                    .child(div().size(px(12.0)).bg(color(biome.color)).border_1().border_color(rgb(FRAME)))
+                    .child(div().text_color(rgb(DIM)).child(biome.name)),
+            );
 
         let debug = div()
             .flex()
@@ -254,6 +261,12 @@ fn bar(label: &'static str, value: u32, max: u32, fill: u32) -> Div {
         .child(div().flex().flex_row().gap(px(2.0)).children(cells))
         .child(div().flex_grow())
         .child(div().text_color(rgb(TEXT)).child(value.to_string()))
+}
+
+/// A name as a heading: "the Glass Marsh" becomes "The Glass Marsh".
+fn capitalized(name: &str) -> String {
+    let mut chars = name.chars();
+    chars.next().map_or_else(String::new, |first| first.to_uppercase().chain(chars).collect())
 }
 
 fn color([r, g, b]: [u8; 3]) -> Rgba {
