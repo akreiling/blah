@@ -35,9 +35,22 @@ The world is an endless grid of tiles, generated in square chunks. Each tile sam
 Biome comes from elevation, moisture, and temperature, using a Whittaker-style lookup table. The table is data,
 not code, so adding or retuning a biome is a table edit.
 
-A **region** is the ecological unit: a cluster of chunks sharing one biome, found by flood-filling biome
-identity across chunk boundaries (capped in size so that huge biomes still split into several regions).
-Regions get generated names ("the Glass Marsh") the same way species do.
+A **region** is the ecological unit: a connected stretch of mostly one biome, about 1,000 to 4,000 tiles, so a
+walk crosses one in a minute or two. Like terrain, it is a pure function of `(seed, tile)` and never depends on
+where exploring started. An unbounded flood fill from the player would depend on exactly that, so regions are
+built from bounded, local steps instead:
+
+- **Cells** split the plane into a Voronoi diagram around one hashed point per 48-tile grid square. Cells are
+  what stop a continent of jungle from becoming one region.
+- **Pieces** are a cell's same-biome components, with slivers under 32 tiles folded into a neighbor.
+- **Joins** attach a piece too small to stand alone (under 800 tiles, usually a biome cut off by a cell edge) to
+  an adjacent large piece, preferring its own biome. A piece under 400 tiles may join another biome. Joins
+  reach at most two pieces out and never chain, and a region is capped at 5,000 tiles.
+
+Water never shares a region with land: swimmers and walkers live in different worlds. A region's id is the
+first tile of its large piece, and its placeholder name ("the Glass Marsh") comes from the seed, the id, and
+word lists flavored by biome, until a remote model renames it. Looking up a region costs a hash lookup once the
+cells around it are labeled, about a millisecond per cell. The game keeps a cache of labeled cells.
 
 ## Life
 
