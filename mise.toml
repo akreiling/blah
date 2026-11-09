@@ -1,0 +1,6 @@
+[tools]
+just = "latest"
+rust = { version = "stable", components = "clippy,rustfmt" }
+
+[env]
+_.file = ".env.local"
