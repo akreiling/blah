@@ -2,6 +2,10 @@
 
 cargo := "mise exec -- cargo"
 
+# Launch the game: just run [seed]
+run *args:
+    {{cargo}} run --quiet -p blah -- {{args}}
+
 # Run every test in the workspace.
 test:
     {{cargo}} test --workspace

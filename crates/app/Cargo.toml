@@ -1,0 +1,13 @@
+[package]
+name = "blah"
+description = "The GPUI frontend: a window onto the world."
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+blah-core = { path = "../core" }
+gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
+
+[lints]
+workspace = true

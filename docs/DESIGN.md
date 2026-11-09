@@ -249,9 +249,11 @@ How we spend it:
   and sim tests are property-style ("500 generations in desert raise mean water retention").
 - **`gen`** has the remote clients (OpenRouter, PixelLab REST v2) behind traits, plus the job queue (submit,
   poll, collect), spending caps, the balance check, and fixtures.
-- **`app`** is the GPUI frontend. The map is one `canvas` element. Panels and overlays are ordinary views.
-  GPUI's actions and keybindings carry the one-key commands. GPUI is pinned to a git revision because its API
-  changes often.
+- **`app`** is the GPUI frontend. The map is a grid of tile elements, which is plenty at viewport size; it
+  becomes one `canvas` element if that stops being fast enough. Panels and overlays are ordinary views.
+  GPUI's actions and keybindings carry the one-key commands. GPUI comes from crates.io at an exact version
+  (`=0.2.2`) because its API changes often. It uses the `runtime_shaders` feature, which compiles the Metal
+  shaders at launch, so building needs only Xcode and not its separately downloaded Metal Toolchain.
 - **Save** is one SQLite file per world. It holds the seed, revealed regions with their populations and
   last-simulated time, the species graph, the name and sprite cache, the pen, and the wanderer. Terrain is
   never saved, because it can always be regenerated.
