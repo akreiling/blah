@@ -73,8 +73,9 @@ what its genes say it is.
 
 Every biome scores a phenotype. A desert rewards water retention and heat tolerance and punishes heavy fur.
 Swamp rewards swimming. Mountains reward climbing and cold tolerance. Biome productivity sets carrying capacity
-for plant eaters, plant eaters set it for predators, and so on up the food chain. Fitness weights live in the
-same data table as the biomes.
+for plant eaters, plant eaters set it for predators, and so on up the food chain. What a biome rewards,
+camouflage included, is a row of the same data table that defines the biomes, and the weights that combine a
+row into one score sit beside the table.
 
 ### Populations
 
@@ -177,8 +178,9 @@ nobody looks, and generating on first sight keeps spending tied to what actually
   sprite, so lineages look related.
 - **Individuals** vary procedurally on top of the species sprite: palette shifts from color genes, size from
   the size gene. This costs nothing and is instant.
-- **Fallbacks are first-class:** a syllable-model name and a mirrored procedural sprite built from the genome,
-  shown immediately and replaced when the remote result arrives.
+- **Fallbacks are first-class:** a name made of the region's biome epithet and the clade's root ("Dune
+  Skitter"), and a mirrored procedural sprite built from the genome, shown immediately and replaced when the
+  remote result arrives.
 
 Budget rules:
 
@@ -267,7 +269,7 @@ How we spend it:
 │                                  │ HP ████████░  41  │
 │                                  │ MP ███░░░░░░  12  │
 │        map viewport              │ Food 220  Gold 88 │
-│        (tiles, ~15×15)           ├───────────────────┤
+│        (tiles, 17×17)            ├───────────────────┤
 │                                  │ COMPANION         │
 │                                  │ [spr] Mirebiter   │
 │               @                  │ HP ██████░  loyal │
@@ -283,8 +285,8 @@ How we spend it:
 └──────────────────────────────────────────────────────┘
 ```
 
-- **NEARBY** compares local populations with the region you just left, so you feel the gradient as you walk.
-  How much it shows depends on Lore.
+- **NEARBY** compares each species in view with its clade in the most recent of your last 8 regions that has
+  it, so you feel the gradient as you walk. How much it shows depends on Lore.
 - **The message log** is both combat narration and world news.
 - **Overlays**, one key each: bestiary (species list with lineage tree, each branch tagged with where it
   diverged), genome inspector (on a target, gated by Lore), ability tree, world map (with a life overlay that
@@ -307,10 +309,15 @@ change.
 Each world has eight clades, one per silhouette family. Genes stretch and recolor a clade's silhouette but never
 swap it, which is what keeps a lineage recognizable across biomes.
 
-Selection is proportional to fitness rather than by tournament. Tournaments let a tiny camouflage edge count as
-much as surviving heat, and every lineage turned biome-colored. Pigment follows genes: heat- and cold-hardy
-creatures bleach pale, and water-adapted ones go dark. `just bestiary out.png [seed]` draws every clade across a
-row of biomes. It is the visual check that evolution shows.
+Selection is proportional to fitness rather than by tournament, so pressure scales with how much a trait
+matters. A slight camouflage edge stays slight instead of counting as much as surviving the heat, which keeps
+every lineage from turning the color of its biome. Pigment follows genes: heat- and cold-hardy creatures bleach
+pale, and water-adapted ones go dark. `just bestiary out.png [seed]` draws every clade across a row of biomes.
+It is the visual check that evolution shows.
+
+In the slice, a region's life is a pure function of `(seed, region)`: the clades that settle it, each from its
+own founders, evolved for the same fixed number of generations under the region's biome, with no seeding from
+neighbors and no elapsed time. Dying advances the turn counter, but the world does not drift.
 
 That makes a playable loop early: wander, meet evolved creatures, fight. Each half then gets deeper without
 waiting on the other. Taming, the pen, drift, and remote art come only once that loop is fun. The other
