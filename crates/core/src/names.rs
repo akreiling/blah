@@ -6,7 +6,8 @@
 //!
 //! A species name is a biome epithet and its clade's root: "Dune Skitter", "Fen Skitter". The root says
 //! which lineage it is and the epithet where it lives, so the relationship shows in the name. Every
-//! species of one region shares the region's epithet.
+//! species of one region shares the region's epithet. Each biome has its own epithets, never shared with
+//! another, and enough of them that two regions of one biome rarely give a clade the same name.
 //!
 //! Region names come in four shapes:
 //!
@@ -20,7 +21,7 @@
 
 use crate::biome::BiomeId;
 use crate::clade::Family;
-use crate::hash::{combine, derive, mix};
+use crate::hash::Rng;
 use crate::region::RegionId;
 
 /// One biome's flavor: what to call a place of this kind, what places of this kind are like, and what to
@@ -30,7 +31,7 @@ struct Flavor {
     biome: &'static str,
     nouns: &'static [&'static str],
     adjectives: &'static [&'static str],
-    /// First words of species names. Single words, so "Dune Skitter" stays two.
+    /// First words of species names. Single words, so "Dune Skitter" stays two, and never another biome's.
     epithets: &'static [&'static str],
 }
 
@@ -48,63 +49,78 @@ const FLAVORS: &[Flavor] = &[
     flavor("Deep water",
         &["Deep", "Deeps", "Abyss", "Sea", "Gulf", "Trench", "Expanse"],
         &["Drowned", "Sunless", "Fathomless", "Restless", "Salt", "Wide"],
-        &["Abyss", "Deep", "Brine", "Gulf", "Tide"]),
+        &["Abyss", "Deep", "Brine", "Gulf", "Tide", "Fathom", "Trench", "Murk",
+          "Kraken", "Undertow", "Leviathan", "Pelagic", "Swell", "Current", "Gloom", "Benthic"]),
     flavor("Shallow water",
         &["Shallows", "Shoals", "Sound", "Bay", "Lagoon", "Strait", "Reach"],
         &["Clear", "Tidal", "Rippling", "Sandy", "Bright", "Wading"],
-        &["Shoal", "Reef", "Lagoon", "Surf", "Kelp"]),
+        &["Shoal", "Reef", "Lagoon", "Surf", "Kelp", "Coral", "Eelgrass", "Ripple",
+          "Sandbar", "Inlet", "Cove", "Spray", "Wrack", "Seagrass", "Tidepool", "Brack"]),
     flavor("Snow peaks",
         &["Peaks", "Spires", "Crowns", "Horns", "Teeth", "Summits"],
         &["White", "Frozen", "Frostbitten", "Howling", "Icebound", "Shining"],
-        &["Peak", "Ice", "Crag", "Summit", "Glacier"]),
+        &["Peak", "Ice", "Summit", "Glacier", "Avalanche", "Cornice", "Serac", "Icefall",
+          "Whiteout", "Blizzard", "Aerie", "Crevasse", "Spindrift", "Snowcap", "Iceblink", "Pinnacle"]),
     flavor("Mountains",
         &["Mountains", "Crags", "Heights", "Range", "Tors", "Ridges"],
         &["Jagged", "Stern", "Thundering", "Granite", "High", "Shattered"],
-        &["Crag", "Tor", "Scree", "Ridge", "Granite"]),
+        &["Crag", "Tor", "Shale", "Ridge", "Granite", "Cliff", "Boulder", "Talus",
+          "Basalt", "Gorge", "Ledge", "Flint", "Col", "Cairn", "Bluff", "Slate"]),
     flavor("Badlands",
         &["Badlands", "Breaks", "Scarps", "Mesas", "Wastes", "Gullies"],
         &["Scorched", "Red", "Cracked", "Rust", "Bleached", "Crumbling"],
-        &["Mesa", "Rust", "Gully", "Scarp", "Cinder"]),
+        &["Mesa", "Rust", "Gully", "Scarp", "Cinder", "Butte", "Hoodoo", "Arroyo",
+          "Ochre", "Clinker", "Redrock", "Canyon", "Gulch", "Slag", "Brimstone", "Sinter"]),
     flavor("Hills",
         &["Hills", "Downs", "Rise", "Knolls", "Fells", "Uplands"],
         &["Rolling", "Windswept", "Gentle", "Barrow", "Folded", "Tumbled"],
-        &["Hill", "Down", "Fell", "Barrow", "Knoll"]),
+        &["Hill", "Down", "Fell", "Barrow", "Knoll", "Heath", "Brae", "Wold",
+          "Dell", "Hillock", "Gorse", "Hedge", "Chalk", "Sheep", "Bramble", "Lark"]),
     flavor("Tundra",
         &["Tundra", "Barrens", "Steppe", "Flats", "Wastes", "Expanse"],
         &["Frozen", "White", "Frostbitten", "Windswept", "Pale", "Bitter"],
-        &["Frost", "Rime", "Snow", "Tundra", "Permafrost"]),
+        &["Frost", "Rime", "Snow", "Tundra", "Permafrost", "Hoarfrost", "Lichen", "Sedge",
+          "Musk", "Sleet", "Polar", "Hail", "Icewind", "Frostbite", "Barren", "Cottongrass"]),
     flavor("Beach",
         &["Strand", "Shore", "Sands", "Coast", "Shingle", "Spit"],
         &["Bright", "Shell", "Driftwood", "Gull", "Tidewashed", "Pearl"],
-        &["Shore", "Strand", "Shingle", "Dune", "Shell"]),
+        &["Shore", "Strand", "Shingle", "Shell", "Dune", "Driftwood", "Pebble", "Tideline",
+          "Gull", "Sandspit", "Seafoam", "Cockle", "Barnacle", "Flotsam", "Spume", "Littoral"]),
     flavor("Taiga",
         &["Taiga", "Pinewood", "Firs", "Pines", "Spruces", "Needlewood"],
         &["Snowbound", "Hushed", "Frosted", "Dark", "Weeping", "Resin"],
-        &["Pine", "Spruce", "Needle", "Fir", "Resin"]),
+        &["Pine", "Spruce", "Needle", "Fir", "Resin", "Larch", "Boreal", "Pinecone",
+          "Hemlock", "Muskeg", "Bough", "Tamarack", "Pitch", "Taiga", "Duff", "Lynx"]),
     flavor("Swamp",
         &["Marsh", "Fen", "Fens", "Mire", "Bog", "Swamp", "Slough"],
         &["Sodden", "Sunken", "Murky", "Misty", "Reedy", "Weeping"],
-        &["Fen", "Bog", "Mire", "Marsh", "Reed"]),
+        &["Fen", "Bog", "Mire", "Marsh", "Reed", "Peat", "Cattail", "Bulrush",
+          "Quag", "Silt", "Sludge", "Cypress", "Mangrove", "Bayou", "Morass", "Slough"]),
     flavor("Desert",
         &["Desert", "Sands", "Dunes", "Erg", "Waste", "Barrens"],
         &["Burning", "Thirsting", "Bleached", "Shimmering", "Scorched", "Endless"],
-        &["Dune", "Sand", "Sun", "Dust", "Scorch"]),
+        &["Sand", "Sun", "Scorch", "Dust", "Erg", "Mirage", "Sirocco", "Oasis",
+          "Glare", "Sandstorm", "Thirst", "Saltpan", "Scarab", "Hardpan", "Simoom", "Heatwave"]),
     flavor("Savanna",
         &["Savanna", "Veld", "Plains", "Grasslands", "Scrub"],
         &["Golden", "Sunlit", "Dusty", "Thorn", "Tawny", "Baking"],
-        &["Veld", "Thorn", "Acacia", "Dust", "Tawny"]),
+        &["Veld", "Thorn", "Acacia", "Tawny", "Baobab", "Grassfire", "Termite", "Kopje",
+          "Bush", "Scrub", "Waterhole", "Mopane", "Sunbake", "Gazelle", "Wildgrass", "Dryland"]),
     flavor("Jungle",
         &["Jungle", "Tangle", "Wilds", "Thicket", "Canopy", "Rainwood"],
         &["Green", "Tangled", "Steaming", "Humming", "Verdant", "Vine"],
-        &["Vine", "Canopy", "Jungle", "Orchid", "Liana"]),
+        &["Vine", "Canopy", "Jungle", "Orchid", "Liana", "Monsoon", "Bromeliad", "Strangler",
+          "Palm", "Frond", "Teak", "Rattan", "Bamboo", "Kapok", "Understory", "Mahogany"]),
     flavor("Forest",
         &["Forest", "Wood", "Weald", "Holt", "Woods", "Greenwood"],
         &["Elder", "Mossy", "Deep", "Shaded", "Oaken", "Dim"],
-        &["Wood", "Oak", "Moss", "Bracken", "Glade"]),
+        &["Wood", "Oak", "Moss", "Bracken", "Glade", "Beech", "Elm", "Hazel",
+          "Acorn", "Fern", "Copse", "Birch", "Holly", "Ivy", "Rowan", "Toadstool"]),
     flavor("Grassland",
         &["Plains", "Meadows", "Fields", "Prairie", "Leas", "Grasslands"],
         &["Open", "Wide", "Long", "Gentle", "Wildflower", "Swaying"],
-        &["Meadow", "Prairie", "Field", "Clover", "Grass"]),
+        &["Meadow", "Prairie", "Field", "Clover", "Grass", "Thistle", "Buttercup", "Bluestem",
+          "Sward", "Hay", "Daisy", "Tallgrass", "Sorrel", "Yarrow", "Vetch", "Pasture"]),
 ];
 
 /// The fallback for a biome missing from [`FLAVORS`], so a new table row still gets names.
@@ -140,19 +156,9 @@ const SYLLABLE_VOWELS: &[&str] = &["a", "e", "i", "o"];
 const VOWEL_TAILS: &[&str] = &["an", "ar", "eth", "is", "ir", "ith", "ane", "esh", "une", "ael"];
 const CONSONANT_TAILS: &[&str] = &["mar", "dor", "wen", "ra", "vel", "mir", "thas", "gard", "nor", "wyn", "dris"];
 
-/// A stream of picks from one hash, so each choice in a name is independent of the others.
-struct Draw(u64);
-
-impl Draw {
-    fn below(&mut self, n: usize) -> usize {
-        self.0 = mix(self.0.wrapping_add(0x9e37_79b9_7f4a_7c15));
-        // The high bits, scaled rather than taken modulo, so small lists aren't biased.
-        (((self.0 >> 32) * n as u64) >> 32) as usize
-    }
-
-    fn pick<'a>(&mut self, list: &[&'a str]) -> &'a str {
-        list[self.below(list.len())]
-    }
+/// One word from `list`, drawn from `rng`. Each choice in a name is its own draw, so they are independent.
+fn pick<'a>(rng: &mut Rng, list: &[&'a str]) -> &'a str {
+    list[rng.below(list.len())]
 }
 
 fn flavor_of(biome: BiomeId) -> &'static Flavor {
@@ -160,26 +166,26 @@ fn flavor_of(biome: BiomeId) -> &'static Flavor {
     FLAVORS.iter().find(|f| f.biome == name).unwrap_or(&FALLBACK)
 }
 
-fn compound(draw: &mut Draw) -> String {
-    format!("{}{}", draw.pick(COMPOUND_HEADS), draw.pick(COMPOUND_TAILS))
+fn compound(rng: &mut Rng) -> String {
+    format!("{}{}", pick(rng, COMPOUND_HEADS), pick(rng, COMPOUND_TAILS))
 }
 
-fn syllabic(draw: &mut Draw) -> String {
-    let head = draw.pick(SYLLABLE_HEADS);
-    match draw.below(3) {
+fn syllabic(rng: &mut Rng) -> String {
+    let head = pick(rng, SYLLABLE_HEADS);
+    match rng.below(3) {
         0 => {
             // A tail that repeats the head's last letters ("Har" "ar") stutters; draw again, a few times.
-            let mut tail = draw.pick(VOWEL_TAILS);
+            let mut tail = pick(rng, VOWEL_TAILS);
             for _ in 0..4 {
                 if !head.to_lowercase().ends_with(&tail[..2]) {
                     break;
                 }
-                tail = draw.pick(VOWEL_TAILS);
+                tail = pick(rng, VOWEL_TAILS);
             }
             format!("{head}{tail}")
         }
-        1 => format!("{head}{}", draw.pick(CONSONANT_TAILS)),
-        _ => format!("{head}{}{}", draw.pick(SYLLABLE_VOWELS), draw.pick(CONSONANT_TAILS)),
+        1 => format!("{head}{}", pick(rng, CONSONANT_TAILS)),
+        _ => format!("{head}{}{}", pick(rng, SYLLABLE_VOWELS), pick(rng, CONSONANT_TAILS)),
     }
 }
 
@@ -188,19 +194,19 @@ fn syllabic(draw: &mut Draw) -> String {
 #[must_use]
 pub fn region_name(seed: u64, id: RegionId, biome: BiomeId) -> String {
     let (x, y) = id.anchor();
-    let mut draw = Draw(combine(combine(combine(derive(seed, b"regnames"), x as u64), y as u64), u64::from(biome.0)));
+    let mut rng = Rng::keyed(seed, b"regnames", &[x as u64, y as u64, u64::from(biome.0)]);
     let flavor = flavor_of(biome);
-    let noun = draw.pick(flavor.nouns);
-    match draw.below(20) {
+    let noun = pick(&mut rng, flavor.nouns);
+    match rng.below(20) {
         0..9 => {
-            let own = !flavor.adjectives.is_empty() && draw.below(2) == 0;
-            let adjective = draw.pick(if own { flavor.adjectives } else { ADJECTIVES });
+            let own = !flavor.adjectives.is_empty() && rng.below(2) == 0;
+            let adjective = pick(&mut rng, if own { flavor.adjectives } else { ADJECTIVES });
             format!("the {adjective} {noun}")
         }
-        9..14 => format!("{} {noun}", compound(&mut draw)),
-        14..17 => format!("{} {noun}", syllabic(&mut draw)),
+        9..14 => format!("{} {noun}", compound(&mut rng)),
+        14..17 => format!("{} {noun}", syllabic(&mut rng)),
         _ => {
-            let proper = if draw.below(2) == 0 { compound(&mut draw) } else { syllabic(&mut draw) };
+            let proper = if rng.below(2) == 0 { compound(&mut rng) } else { syllabic(&mut rng) };
             format!("the {noun} of {proper}")
         }
     }
@@ -228,7 +234,7 @@ const ROOTS: &[Roots] = &[
 #[must_use]
 pub fn clade_root(seed: u64, family: Family) -> &'static str {
     let roots = ROOTS.iter().find(|r| r.family == family).map_or(&["Thing"][..], |r| r.roots);
-    Draw(combine(derive(seed, b"cladroot"), family as u64)).pick(roots)
+    pick(&mut Rng::keyed(seed, b"cladroot", &[family as u64]), roots)
 }
 
 /// The placeholder name of the species of clade `root` in region `id` of biome `biome`: the region's
@@ -236,8 +242,8 @@ pub fn clade_root(seed: u64, family: Family) -> &'static str {
 #[must_use]
 pub fn species_name(seed: u64, id: RegionId, biome: BiomeId, root: &str) -> String {
     let (x, y) = id.anchor();
-    let mut draw = Draw(combine(combine(derive(seed, b"epithets"), x as u64), y as u64));
-    format!("{} {root}", draw.pick(flavor_of(biome).epithets))
+    let mut rng = Rng::keyed(seed, b"epithets", &[x as u64, y as u64]);
+    format!("{} {root}", pick(&mut rng, flavor_of(biome).epithets))
 }
 
 #[cfg(test)]
@@ -280,12 +286,30 @@ mod tests {
     }
 
     #[test]
-    fn draws_cover_their_range() {
-        let mut draw = Draw(7);
-        let mut seen = [false; 5];
-        for _ in 0..200 {
-            seen[draw.below(5)] = true;
+    fn epithets_are_many_and_each_biome_keeps_its_own() {
+        let roots: Vec<&str> = ROOTS.iter().flat_map(|r| r.roots).copied().collect();
+        let mut owner = std::collections::HashMap::new();
+        for flavor in FLAVORS {
+            assert!(flavor.epithets.len() >= 16, "{}: only {} epithets", flavor.biome, flavor.epithets.len());
+            for &e in flavor.epithets {
+                if let Some(other) = owner.insert(e, flavor.biome) {
+                    panic!("{e} is an epithet of both {other} and {}", flavor.biome);
+                }
+                // "Ooze Ooze" or "Drift Drifter" would stutter.
+                assert!(roots.iter().all(|r| !r.starts_with(e) && !e.starts_with(r)), "{e} echoes a root");
+            }
         }
-        assert!(seen.iter().all(|&s| s));
+    }
+
+    #[test]
+    fn same_biome_regions_mostly_name_a_clade_apart() {
+        // Region ids only key the draw, so any ids do; count how often two regions' names coincide.
+        let world = crate::World::new(1);
+        let ids: Vec<RegionId> = (0..40).map(|i| world.region_at(i * 173, i * 61 - 1_200)).collect();
+        for biome in BiomeId::all() {
+            let names: Vec<String> = ids.iter().map(|&id| species_name(1, id, biome, "Skitter")).collect();
+            let distinct: std::collections::HashSet<_> = names.iter().collect();
+            assert!(distinct.len() >= 12, "{}: {} names from 40 regions", biome.biome().name, distinct.len());
+        }
     }
 }
