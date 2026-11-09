@@ -147,8 +147,16 @@ swimmer retreats into water and a burrower goes underground.
 Both are generated **when the player first sees a species**, not at speciation. Most species are born in places
 nobody looks, and generating on first sight keeps spending tied to what actually gets seen.
 
-- **Names and bestiary lines:** OpenRouter, a cheap model. Input is the phenotype description plus biome and
-  parent species name, never the raw genome. Output is a name and one line of bestiary text.
+- **Names and bestiary lines:** `openai/gpt-6-luna` on OpenRouter, a fast, cheap text model. Input is the
+  phenotype description plus biome and parent species name, never the raw genome. Output is a name and one
+  line of bestiary text.
+- **Judging art:** `typesafe/jev-1.14` on OpenRouter, a decision model rather than a text generator. It
+  answers typed questions about text or images: pick an option, score against a rubric, judge a statement
+  true or false, or place a bounding box. Input costs $0.042 per million tokens and output is free. It never
+  writes content. Its jobs:
+  - check that a sprite depicts its phenotype before we cache it
+  - score how much a child sprite resembles its parent, which is the measurement for the lineage experiment
+  - box the creature in a sprite so it is centered and scaled on its tile
 - **Sprites:** PixelLab (see below). The prompt comes from the phenotype description, and a fixed game palette
   keeps every species looking like part of the same game. A child species is drawn by editing its parent's
   sprite, so lineages look related.
