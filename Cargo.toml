@@ -1,0 +1,16 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+publish = false
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[profile.dev]
+# World generation is arithmetic-heavy; unoptimized tests over large samples are needlessly slow.
+opt-level = 1

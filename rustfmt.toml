@@ -1,0 +1,3 @@
+# Wide, with short items kept on one line, as in luxd.
+max_width = 120
+use_small_heuristics = "Max"
