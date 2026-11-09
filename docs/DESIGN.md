@@ -193,6 +193,31 @@ Budget rules:
 Because art and names are recorded facts, two worlds with the same seed evolve the same species with
 different names and portraits.
 
+### Review
+
+Jev reviews everything Luna and PixelLab produce before it is cached. The pipeline is generate, then review,
+then either accept and cache, or reject and keep the placeholder. Review works unattended because the questions
+are fixed in code, the criteria are concrete, and each verdict is about one artifact. Using Jev to judge design
+choices does not work that way: whoever writes the options steers the answer, so that stays a by-hand second
+opinion.
+
+- **Names and bestiary lines.** Luna returns about five candidates in one call. Jev picks the one that best
+  fits the traits and biome. It rejects any candidate that contradicts the trait list, reads as silly or
+  modern, is a known creature or brand name, or is too close to an existing species name. If every candidate
+  fails, there is one retry, then the fallback name stays. Luna is cheap, so this runs every time.
+- **Sprites.** Jev checks that the sprite:
+  - depicts the phenotype
+  - is a single creature on a transparent background, not a scene
+  - for a child species, resembles its parent without being a copy of it
+  - stays consistent in style with a few accepted sprites
+
+  A `box` question crops the creature so it can be centered on its tile. A rejected sprite leaves the
+  procedural placeholder in place. Because generations are scarce, a species gets at most one retry, with the
+  prompt adjusted from the failed checks, and only when the daily budget allows.
+- **Thresholds.** Jev's probabilities are calibrated, so "accept at 0.7 or above" means something. The
+  thresholds are tuned during the lineage experiment.
+- **Verdicts** are stored with the art, so rejections can be studied and prompts improved.
+
 ### PixelLab specifics
 
 From the PixelLab docs (`https://api.pixellab.ai/mcp/docs`). PixelLab bills in "generations." The free tier
@@ -222,16 +247,17 @@ How we spend it:
 - **Child species sprite:** edit the parent's sprite rather than drawing from scratch. Either
   `edit_image_pixen` (1 generation, a text edit such as "flatter, wetter, add fins" derived from the change in
   phenotype), or `create_image_pixflux` with the parent as `init_image` at moderate `init_image_strength`
-  (about 50 keeps the composition, the default 150 is a real edit). Which one gives better lineages is an early
-  experiment.
+  (about 50 keeps the composition, the default 150 is a real edit). At 16px tiles only the pixen edit applies.
+  The lineage experiment tunes its edit prompts and the review thresholds.
 - **Palette:** pass the game palette as `palette`. `reduce_colors` (0.1 generation) snaps a result onto it
   afterward if needed.
 - **Terrain:** `create_topdown_tileset` standard costs 1 generation and produces a 16-tile Wang autotile set
   between a lower and an upper terrain, at a 16 or 32px tile size. Tilesets chain: pass one tileset's base tile
   id as `lower_base_tile_id` to the next (ocean → beach → grass → forest). Generating every biome pair would be
   combinatorial, so we only make transitions for biomes that the noise fields can place next to each other.
-- **Tile size:** 16 or 32px, decided by the first sprite experiment. 16px is closer to the genre. 32px makes
-  `pixflux` init-image edits available.
+- **Tile size:** 16px. It is closer to the genre and puts more of the world on screen. Sprites are drawn
+  scaled up. The cost is that `pixflux` init-image edits need at least 32×32, so lineages use
+  `edit_image_pixen`.
 
 ## UI
 
@@ -264,6 +290,20 @@ How we spend it:
   diverged), genome inspector (on a target, gated by Lore), ability tree, world map (with a life overlay that
   colors regions by dominant lineage), pen.
 - **Controls** are keyboard-first, one key per verb: attack, tame, look, inspect, camp, and so on.
+
+## First playable
+
+The full design is a lot for one person. A second opinion from Jev put it at "too large, likely to stall,"
+which matches our own read. So the first version is a thin slice through both halves of the game:
+- a small genome, of about 8 genes
+- a procedural sprite drawn from the genome
+- monsters drawn from each region's biome
+- bump-to-attack combat on the overworld
+
+That makes a playable loop early: wander, meet evolved creatures, fight. Each half then gets deeper without
+waiting on the other. Taming, the pen, drift, and remote art come only once that loop is fun. The other
+risk is evolution that players can't see. The slice has to make differences between regions visible from the
+first day.
 
 ## Architecture
 
