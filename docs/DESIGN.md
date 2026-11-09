@@ -153,7 +153,9 @@ nobody looks, and generating on first sight keeps spending tied to what actually
 - **Judging art:** `typesafe/jev-1.14` on OpenRouter, a decision model rather than a text generator. It
   answers typed questions about text or images: pick an option, score against a rubric, judge a statement
   true or false, or place a bounding box. Input costs $0.042 per million tokens and output is free. It never
-  writes content. Its jobs:
+  writes content. It is called through OpenRouter's `POST /api/alpha/decisions` endpoint, not chat completions,
+  with a body of `{model, state, questions}`; the question types are `choice`, `score`, `noul`, and `box`. Its
+  jobs:
   - check that a sprite depicts its phenotype before we cache it
   - score how much a child sprite resembles its parent, which is the measurement for the lineage experiment
   - box the creature in a sprite so it is centered and scaled on its tile
