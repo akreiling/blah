@@ -46,11 +46,12 @@ pub use biome::{BIOMES, Band, Biome, BiomeId, Fitness, SEA_LEVEL, classify};
 pub use chunk::{CHUNK_AREA, CHUNK_SIZE, Chunk, chunk_of, chunk_origin, local_of};
 pub use clade::{BodyPlan, CLADES, Clade, CladeId, Family, Pattern, clades};
 pub use game::{
-    Comparison, DEATH_TURNS, DESPAWN_RADIUS, Dir, Game, LAND_SEARCH_RADIUS, LOG_LIMIT, Log, REGEN_TURNS, SPAWN_MAX,
-    SPAWN_MIN, Step, TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity, find_land, individual, ring, spawn_chance,
+    Comparison, DEATH_TURNS, DESPAWN_RADIUS, Dir, Game, LAND_SEARCH_RADIUS, LOG_LIMIT, Log, LogEntry, LogKind,
+    REGEN_TURNS, SPAWN_MAX, SPAWN_MIN, Step, TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity, find_land, individual,
+    ring, spawn_chance,
 };
 pub use genome::{GENES, Gene, Genome, gene_delta};
-pub use hash::Rng;
+pub use hash::{Rng, hash_point};
 pub use life::{
     COMPARED, GENERATIONS, MARKS_AT, MAX_CLADES, MIN_CLADES, POOL_SIZE, RegionLife, Species, SpeciesId, TraitDelta,
     compare, evolve, fitness, founders, generations, grow_pool, potential, reach_toward,

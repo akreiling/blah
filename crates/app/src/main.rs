@@ -1,9 +1,10 @@
 //! The GPUI frontend: one window onto the world, with the wanderer at its center.
 //!
-//! Usage: `blah [seed]`. The seed is a `u64` and defaults to [`DEFAULT_SEED`].
+//! Usage: `blah [seed] [--steps N]`. The seed is a `u64` and defaults to [`DEFAULT_SEED`].
 //!
-//! Debug only: `blah [seed] --steps N` plays N turns by a fixed rule before the window opens (see
-//! [`autoplay`]), to get monsters and a fight on screen for a screenshot.
+//! `--steps N` is a development aid, in every build: it plays N turns by a fixed rule before the window
+//! opens (see [`autoplay`]), so a seed and a count always put the same scene on screen, monsters and a
+//! fight included, for checking a change or taking a screenshot.
 
 mod sprites;
 mod view;
@@ -13,12 +14,14 @@ use gpui::{
     prelude::*, size,
 };
 
-use blah_core::{Dir, Game, VIEW_RADIUS};
+use blah_core::{Dir, Game};
 
 use crate::view::GameView;
 
 /// The world a bare `blah` opens.
 const DEFAULT_SEED: u64 = 42;
+/// What to print when the command line can't be read.
+const USAGE: &str = "usage: blah [seed] [--steps N]";
 
 actions!(
     blah,
@@ -65,7 +68,7 @@ fn keymap() -> Vec<KeyBinding> {
 /// What the command line asked for.
 struct Args {
     seed: u64,
-    /// Debug only: turns to [`autoplay`] before the window opens.
+    /// Turns to [`autoplay`] before the window opens, a development aid.
     steps: u32,
 }
 
@@ -90,10 +93,10 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     Ok(Args { seed: seed.unwrap_or(DEFAULT_SEED), steps })
 }
 
-/// Debug only: plays `turns` turns by a fixed rule, so a seed and a count always give the same scene.
-/// Each turn it heads for the nearest monster in view, longer axis first (attacking on contact), and failing
-/// that tries east, south, north, and west in turn. Returns the log
-/// total before the last turn, so that turn's lines show as new.
+/// Plays `turns` turns by a fixed rule, so a seed and a count always give the same scene: a development
+/// aid behind `--steps`. Each turn it heads for the nearest monster in view, longer axis first (attacking on
+/// contact), and failing that tries east, south, north, and west in turn, waiting if every way is blocked.
+/// Returns the log total before the last turn, so that turn's lines show as new.
 fn autoplay(game: &mut Game, turns: u32) -> u64 {
     // With no turns played, everything logged so far is news.
     let mut mark = 0;
@@ -101,10 +104,8 @@ fn autoplay(game: &mut Game, turns: u32) -> u64 {
         mark = game.log().total();
         let (x, y) = game.position();
         let target = game
-            .monsters()
-            .iter()
+            .monsters_in_view()
             .map(|m| m.position)
-            .filter(|&(mx, my)| (mx - x).abs().max((my - y).abs()) <= VIEW_RADIUS)
             .min_by_key(|&(mx, my)| ((mx - x).abs() + (my - y).abs(), my, mx));
         let mut wanted: Vec<Dir> = match target {
             Some((mx, my)) => {
@@ -118,11 +119,7 @@ fn autoplay(game: &mut Game, turns: u32) -> u64 {
             None => Vec::new(),
         };
         wanted.extend([Dir::East, Dir::South, Dir::North, Dir::West]);
-        let open = |d: Dir| {
-            let (tx, ty) = (x + d.delta().0, y + d.delta().1);
-            game.monster_at(tx, ty).is_some() || game.world().tile(tx, ty).biome.biome().passable
-        };
-        match wanted.into_iter().find(|&d| open(d)) {
+        match wanted.into_iter().find(|&d| game.can_step(d)) {
             Some(d) => _ = game.step(d),
             None => _ = game.wait(),
         }
@@ -134,7 +131,7 @@ fn main() {
     let Args { seed, steps } = match parse_args(std::env::args().skip(1)) {
         Ok(args) => args,
         Err(e) => {
-            eprintln!("blah: {e}\nusage: blah [seed]");
+            eprintln!("blah: {e}\n{USAGE}");
             std::process::exit(2);
         }
     };

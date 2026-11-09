@@ -10,7 +10,7 @@ use gpui::{
     px, rgb,
 };
 
-use blah_core::{Comparison, Dir, Game, Gene, Monster, SpeciesId, Tile, VIEW_RADIUS};
+use blah_core::{Comparison, Dir, Game, Gene, LogKind, Monster, SpeciesId, Tile, VIEW_RADIUS, hash_point};
 
 use crate::sprites::{Key, SPRITE_PX, SpriteCache};
 use crate::{MoveEast, MoveNorth, MoveSouth, MoveWest, Wait};
@@ -75,50 +75,20 @@ const PIP_BACK: u32 = 0x10_08_08;
 const MORE: u32 = 0xf0_9a_4a;
 const LESS: u32 = 0x5c_b0_e8;
 
-/// What kind of news a log line is, which sets its color.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Tone {
-    Plain,
-    /// The wanderer took damage.
-    Hurt,
-    /// A monster died.
-    Kill,
-    /// The wanderer died, or woke from it.
-    Death,
-    /// A new region.
-    Place,
-}
-
-impl Tone {
-    /// Reads a line's tone from its wording. Core's log is plain text, so this follows its phrasing.
-    fn of(line: &str) -> Tone {
-        if line == "You fall." || line.starts_with("You wake, much later") {
-            Tone::Death
-        } else if line.ends_with(" dies.") {
-            Tone::Kill
-        } else if line.contains(" you for ") {
-            Tone::Hurt
-        } else if line.starts_with("You enter ") || line.starts_with("You wake in ") {
-            Tone::Place
-        } else {
-            Tone::Plain
-        }
-    }
-
-    /// The color of a line of this tone: bright if the latest action added it, dim if older.
-    const fn color(self, new: bool) -> u32 {
-        match (self, new) {
-            (Tone::Plain, true) => TEXT,
-            (Tone::Plain, false) => DIM,
-            (Tone::Hurt, true) => 0xff_6a_5a,
-            (Tone::Hurt, false) => 0x8c_44_3e,
-            (Tone::Kill, true) => 0x8c_e0_6a,
-            (Tone::Kill, false) => 0x4e_7a_40,
-            (Tone::Death, true) => 0xe0_70_ff,
-            (Tone::Death, false) => 0x7a_48_8a,
-            (Tone::Place, true) => HEADING,
-            (Tone::Place, false) => 0x86_70_3a,
-        }
+/// The color of a log line of `kind`: bright if the latest action added it, dim if older. Hurt, kills,
+/// death, and new regions stand out; the rest is plain text.
+const fn tint(kind: LogKind, new: bool) -> u32 {
+    match (kind, new) {
+        (LogKind::Blocked | LogKind::Attack | LogKind::Missed, true) => TEXT,
+        (LogKind::Blocked | LogKind::Attack | LogKind::Missed, false) => DIM,
+        (LogKind::Hurt, true) => 0xff_6a_5a,
+        (LogKind::Hurt, false) => 0x8c_44_3e,
+        (LogKind::Kill, true) => 0x8c_e0_6a,
+        (LogKind::Kill, false) => 0x4e_7a_40,
+        (LogKind::Death, true) => 0xe0_70_ff,
+        (LogKind::Death, false) => 0x7a_48_8a,
+        (LogKind::Region, true) => HEADING,
+        (LogKind::Region, false) => 0x86_70_3a,
     }
 }
 
@@ -146,11 +116,11 @@ impl GameView {
         cx.notify();
     }
 
-    /// The tones of the lines the latest action added.
-    fn news(&self) -> impl Iterator<Item = Tone> {
+    /// The kinds of the lines the latest action added.
+    fn news(&self) -> impl Iterator<Item = LogKind> {
         let log = self.game.log();
         let added = usize::try_from(log.total() - self.mark).unwrap_or(usize::MAX);
-        log.lines().rev().take(added).map(Tone::of)
+        log.entries().rev().take(added).map(|e| e.kind)
     }
 }
 
@@ -162,7 +132,7 @@ impl Focusable for GameView {
 
 impl Render for GameView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<GameView>) -> impl IntoElement {
-        let hurt = self.news().any(|t| matches!(t, Tone::Hurt | Tone::Death));
+        let hurt = self.news().any(|k| matches!(k, LogKind::Hurt | LogKind::Death));
         self.sprites.begin(window);
         let map = map(&self.game, &mut self.sprites, hurt);
         let panel = panel(&self.game, &mut self.sprites);
@@ -286,11 +256,9 @@ fn tile_base(base: [u8; 3], (x, y): (i64, i64)) -> Div {
 
 /// A brightness factor within about 5% of 1, fixed per tile.
 fn jitter(x: i64, y: i64) -> f32 {
-    // SplitMix64's finalizer over both coordinates: cheap, and neighbors come out unrelated.
-    let mut h = (x as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (y as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f);
-    h = (h ^ (h >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    h = (h ^ (h >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    h ^= h >> 31;
+    // Neighbors hash apart, so the shading looks like grain rather than stripes. Shading is only looks, so it
+    // takes a fixed key rather than the world's seed.
+    let h = hash_point(0, x, y);
     1.0 + ((h % 11) as f32 - 5.0) * 0.01
 }
 
@@ -374,7 +342,7 @@ fn place(game: &Game) -> Div {
         )
 }
 
-/// The species in view, nearest first, each with how it differs from its kin in the region before.
+/// The species in view, nearest first, each with how it differs from its kin in a region visited before.
 fn nearby(game: &Game, sprites: &mut SpriteCache) -> Div {
     let species: Vec<SpeciesId> = game.nearby_species().into_iter().take(NEARBY).collect();
     let list = div().flex().flex_col().gap(px(10.0)).child(heading("NEARBY"));
@@ -386,12 +354,7 @@ fn nearby(game: &Game, sprites: &mut SpriteCache) -> Div {
 
 fn nearby_entry(game: &Game, id: SpeciesId, sprites: &mut SpriteCache) -> Option<Div> {
     let species = game.species(id)?;
-    let (px0, py0) = game.position();
-    let count = game
-        .monsters()
-        .iter()
-        .filter(|m| m.species == id && (m.position.0 - px0).abs().max((m.position.1 - py0).abs()) <= VIEW_RADIUS)
-        .count();
+    let count = game.monsters_in_view().filter(|m| m.species == id).count();
     let image = sprites.get(Key::Species(id), &species.sprite);
     let card = div()
         .flex_none()
@@ -475,12 +438,11 @@ const fn trait_label(gene: Gene) -> &'static str {
 /// The last lines of the log, the latest action's bright and the rest dim, colored by what they report.
 fn log(game: &Game, mark: u64) -> Div {
     let log = game.log();
-    let lines: Vec<&str> = log.last(LOG_LINES).collect();
+    let entries: Vec<_> = log.last(LOG_LINES).collect();
     // The log total of the first line shown, counting from 0.
-    let first = log.total() - lines.len() as u64;
-    let rows = lines.into_iter().enumerate().map(|(i, line)| {
+    let first = log.total() - entries.len() as u64;
+    let rows = entries.into_iter().enumerate().map(|(i, entry)| {
         let new = first + i as u64 >= mark;
-        let tone = Tone::of(line);
         div()
             .h(px(LINE))
             .flex()
@@ -491,9 +453,9 @@ fn log(game: &Game, mark: u64) -> Div {
             .child(div().text_color(rgb(if new { HEADING } else { FAINT })).child("›"))
             .child(
                 div()
-                    .text_color(rgb(tone.color(new)))
-                    .when(new && tone == Tone::Death, |d| d.font_weight(FontWeight::BOLD))
-                    .child(SharedString::from(line.to_owned())),
+                    .text_color(rgb(tint(entry.kind, new)))
+                    .when(new && entry.kind == LogKind::Death, |d| d.font_weight(FontWeight::BOLD))
+                    .child(SharedString::from(entry.text.clone())),
             )
     });
     frame().w_full().h(px(LOG)).p(px(INSET)).flex().flex_col().justify_end().children(rows.collect::<Vec<_>>())
@@ -570,17 +532,6 @@ fn glyph_shade(c @ [r, g, b]: [u8; 3]) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn log_lines_are_toned_by_what_they_report() {
-        assert_eq!(Tone::of("The Dune Skitter bites you for 3."), Tone::Hurt);
-        assert_eq!(Tone::of("The Dune Skitter misses you."), Tone::Plain);
-        assert_eq!(Tone::of("You hit the Dune Skitter for 2."), Tone::Plain);
-        assert_eq!(Tone::of("The Dune Skitter dies."), Tone::Kill);
-        assert_eq!(Tone::of("You fall."), Tone::Death);
-        assert_eq!(Tone::of("You wake, much later, in the Gull Coast."), Tone::Death);
-        assert_eq!(Tone::of("You enter the Glass Marsh."), Tone::Place);
-    }
 
     #[test]
     fn tile_shading_is_slight_and_fixed() {

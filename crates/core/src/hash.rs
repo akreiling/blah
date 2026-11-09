@@ -16,8 +16,10 @@ pub(crate) const fn combine(state: u64, value: u64) -> u64 {
     mix(state ^ mix(value.wrapping_add(0x9e37_79b9_7f4a_7c15)))
 }
 
-/// Hash of a seed and a lattice point.
-pub(crate) const fn hash_point(seed: u64, x: i64, y: i64) -> u64 {
+/// Hash of a seed and a lattice point: 64 bits, each depending on every bit of all three inputs, so
+/// neighboring points come out unrelated. The same on every machine.
+#[must_use]
+pub const fn hash_point(seed: u64, x: i64, y: i64) -> u64 {
     combine(combine(seed, x as u64), y as u64)
 }
 

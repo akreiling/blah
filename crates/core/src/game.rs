@@ -118,43 +118,77 @@ pub fn ring(r: i64) -> impl Iterator<Item = (i64, i64)> {
     })
 }
 
+/// What a log line reports. Set where the line is written, so a frontend can style lines by what happened
+/// rather than by their wording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LogKind {
+    /// The wanderer is in a new region: waking at the start of a game, or walking into one.
+    Region,
+    /// A step ran into terrain that can't be entered.
+    Blocked,
+    /// The wanderer attacked a monster, hitting or missing.
+    Attack,
+    /// A monster attacked the wanderer and missed.
+    Missed,
+    /// A monster hurt the wanderer.
+    Hurt,
+    /// A monster died.
+    Kill,
+    /// The wanderer died, or woke after dying.
+    Death,
+}
+
+/// One line of the log and what it reports.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogEntry {
+    /// What the line reports.
+    pub kind: LogKind,
+    /// The line itself, a sentence for the player.
+    pub text: String,
+}
+
 /// A bounded log of messages, oldest first, holding the last [`LOG_LIMIT`] lines.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Log {
-    lines: VecDeque<String>,
+    entries: VecDeque<LogEntry>,
     total: u64,
 }
 
 impl Log {
-    /// Appends a line, dropping the oldest if the log is full.
-    pub fn push(&mut self, line: impl Into<String>) {
-        if self.lines.len() == LOG_LIMIT {
-            self.lines.pop_front();
+    /// Appends a line of `kind`, dropping the oldest if the log is full.
+    pub fn push(&mut self, kind: LogKind, line: impl Into<String>) {
+        if self.entries.len() == LOG_LIMIT {
+            self.entries.pop_front();
         }
-        self.lines.push_back(line.into());
+        self.entries.push_back(LogEntry { kind, text: line.into() });
         self.total += 1;
     }
 
-    /// Lines held, oldest first.
-    pub fn lines(&self) -> impl DoubleEndedIterator<Item = &str> + ExactSizeIterator {
-        self.lines.iter().map(String::as_str)
+    /// Entries held, oldest first.
+    pub fn entries(&self) -> impl DoubleEndedIterator<Item = &LogEntry> + ExactSizeIterator {
+        self.entries.iter()
     }
 
-    /// The last `n` lines (fewer if the log is shorter), oldest first.
-    pub fn last(&self, n: usize) -> impl Iterator<Item = &str> {
-        self.lines.iter().skip(self.lines.len().saturating_sub(n)).map(String::as_str)
+    /// The text of the entries held, oldest first.
+    pub fn lines(&self) -> impl DoubleEndedIterator<Item = &str> + ExactSizeIterator {
+        self.entries.iter().map(|e| e.text.as_str())
+    }
+
+    /// The last `n` entries (fewer if the log is shorter), oldest first.
+    pub fn last(&self, n: usize) -> impl Iterator<Item = &LogEntry> {
+        self.entries.iter().skip(self.entries.len().saturating_sub(n))
     }
 
     /// Number of lines held.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.lines.len()
+        self.entries.len()
     }
 
     /// Whether the log holds no lines.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
+        self.entries.is_empty()
     }
 
     /// Lines ever pushed, including those that have fallen off. The difference across an action is how many
@@ -275,7 +309,7 @@ impl Game {
         let mut regions = RegionCache::new(world);
         let region = region_of(&mut regions, position);
         let mut log = Log::default();
-        log.push(format!("You wake in {}.", region.name));
+        log.push(LogKind::Region, format!("You wake in {}.", region.name));
         let mut game = Game {
             world,
             regions,
@@ -404,15 +438,16 @@ impl Game {
         self.lives.get(&id.region)?.species_of(id.clade)
     }
 
+    /// The monsters within [`VIEW_RADIUS`] of the wanderer, the ones a frontend shows, in order of appearance.
+    pub fn monsters_in_view(&self) -> impl Iterator<Item = &Monster> {
+        self.monsters.iter().filter(|m| chebyshev(m.position, self.position) <= VIEW_RADIUS)
+    }
+
     /// The species of the monsters in view, nearest first, without repeats.
     #[must_use]
     pub fn nearby_species(&self) -> Vec<SpeciesId> {
-        let mut seen: Vec<(i64, SpeciesId)> = self
-            .monsters
-            .iter()
-            .filter(|m| chebyshev(m.position, self.position) <= VIEW_RADIUS)
-            .map(|m| (manhattan(m.position, self.position), m.species))
-            .collect();
+        let mut seen: Vec<(i64, SpeciesId)> =
+            self.monsters_in_view().map(|m| (manhattan(m.position, self.position), m.species)).collect();
         seen.sort();
         let mut out: Vec<SpeciesId> = Vec::new();
         for (_, s) in seen {
@@ -439,29 +474,40 @@ impl Game {
     /// unless that is already the last line, so pushing against a wall doesn't flood the log. Attacking or
     /// moving passes a turn, and the monsters act.
     pub fn step(&mut self, dir: Dir) -> Step {
-        let (dx, dy) = dir.delta();
-        let (x, y) = (self.position.0 + dx, self.position.1 + dy);
+        let (x, y) = self.ahead(dir);
+        if !self.can_step(dir) {
+            // Biome names are sentence case ("Deep water"); mid-sentence they are common nouns.
+            let line = format!("The way is blocked by {}.", self.world.tile(x, y).biome.biome().name.to_lowercase());
+            if self.log.lines().next_back() != Some(line.as_str()) {
+                self.log.push(LogKind::Blocked, line);
+            }
+            return Step::Blocked;
+        }
+        self.turn += 1;
         if let Some(target) = self.monsters.iter().position(|m| m.position == (x, y)) {
-            self.turn += 1;
             let mut rng = Rng::keyed(self.world.seed(), b"wanderer", &[self.turn]);
             self.wanderer_attacks(target, &mut rng);
             self.end_turn();
             return Step::Attacked;
         }
-        let target = self.world.tile(x, y).biome.biome();
-        if !target.passable {
-            // Biome names are sentence case ("Deep water"); mid-sentence they are common nouns.
-            let line = format!("The way is blocked by {}.", target.name.to_lowercase());
-            if self.log.lines().next_back() != Some(line.as_str()) {
-                self.log.push(line);
-            }
-            return Step::Blocked;
-        }
-        self.turn += 1;
         self.position = (x, y);
         self.update_region(true);
         self.end_turn();
         Step::Moved
+    }
+
+    /// Whether [`Game::step`] in `dir` would pass a turn: a monster stands there to attack, or the tile can be
+    /// entered. False exactly when the step would be [`Step::Blocked`].
+    #[must_use]
+    pub fn can_step(&self, dir: Dir) -> bool {
+        let (x, y) = self.ahead(dir);
+        self.monster_at(x, y).is_some() || self.world.tile(x, y).biome.biome().passable
+    }
+
+    /// The tile one step from the wanderer in `dir`.
+    const fn ahead(&self, dir: Dir) -> (i64, i64) {
+        let (dx, dy) = dir.delta();
+        (self.position.0 + dx, self.position.1 + dy)
     }
 
     /// Stays put for a turn, letting the monsters act.
@@ -505,7 +551,7 @@ impl Game {
             self.visited.remove(0);
         }
         if announce {
-            self.log.push(format!("You enter {}.", self.region.name));
+            self.log.push(LogKind::Region, format!("You enter {}.", self.region.name));
         }
     }
 
@@ -591,12 +637,12 @@ impl Game {
     fn wanderer_attacks(&mut self, index: usize, rng: &mut Rng) {
         let monster = &mut self.monsters[index];
         match damage(self.wanderer.stats.attack, monster.phenotype.stats.defense, rng) {
-            None => self.log.push(format!("You miss the {}.", monster.name)),
+            None => self.log.push(LogKind::Attack, format!("You miss the {}.", monster.name)),
             Some(d) => {
                 monster.hp -= d;
-                self.log.push(format!("You hit the {} for {d}.", monster.name));
+                self.log.push(LogKind::Attack, format!("You hit the {} for {d}.", monster.name));
                 if monster.hp <= 0 {
-                    self.log.push(format!("The {} dies.", monster.name));
+                    self.log.push(LogKind::Kill, format!("The {} dies.", monster.name));
                     self.monsters.remove(index);
                 }
             }
@@ -667,10 +713,10 @@ impl Game {
         let m = &self.monsters[i];
         let verb = self.clades[usize::from(m.species.clade.0)].plan.family.verb();
         match damage(m.phenotype.stats.attack, self.wanderer.stats.defense, rng) {
-            None => self.log.push(format!("The {} misses you.", m.name)),
+            None => self.log.push(LogKind::Missed, format!("The {} misses you.", m.name)),
             Some(d) => {
                 self.wanderer.hp -= d;
-                self.log.push(format!("The {} {verb} you for {d}.", m.name));
+                self.log.push(LogKind::Hurt, format!("The {} {verb} you for {d}.", m.name));
                 if self.wanderer.hp <= 0 {
                     self.die();
                 }
@@ -680,14 +726,14 @@ impl Game {
 
     /// The wanderer dies: time jumps, and they wake at home, whole, with the monsters gone.
     fn die(&mut self) {
-        self.log.push("You fall.");
+        self.log.push(LogKind::Death, "You fall.");
         self.deaths += 1;
         self.turn += DEATH_TURNS;
         self.position = self.home;
         self.wanderer.hp = self.wanderer.max_hp();
         self.monsters.clear();
         self.update_region(false);
-        self.log.push(format!("You wake, much later, in {}.", self.region.name));
+        self.log.push(LogKind::Death, format!("You wake, much later, in {}.", self.region.name));
     }
 
     /// Whether monster `i` may stand on `(x, y)`: not the wanderer's tile, not another monster's, and terrain
@@ -853,19 +899,20 @@ mod tests {
         for seed in [0, 1, 5] {
             let (mut game, dir) = facing_a_wall(seed);
             // Make sure the last line isn't already this wall's, so the first bump is logged.
-            game.log.push("marker");
+            game.log.push(LogKind::Region, "marker");
             let (position, turn, before) = (game.position(), game.turn(), game.log().total());
             assert_eq!(game.step(dir), Step::Blocked);
             assert_eq!((game.position(), game.turn()), (position, turn));
             let added = new_lines(&game, before);
             assert_eq!(added.len(), 1, "seed {seed}: {added:?}");
-            assert!(added[0].starts_with("The way is blocked by "), "seed {seed}: {added:?}");
+            assert_eq!(added[0].kind, LogKind::Blocked, "seed {seed}: {added:?}");
+            assert!(added[0].text.starts_with("The way is blocked by "), "seed {seed}: {added:?}");
             // Pushing on against the same wall says nothing new.
             for _ in 0..LOG_LIMIT + 5 {
                 assert_eq!(game.step(dir), Step::Blocked);
             }
             assert_eq!(game.log().total(), before + 1, "seed {seed}");
-            assert_eq!(game.log().last(2).next(), Some("marker"), "seed {seed}");
+            assert_eq!(game.log().last(2).next().map(|e| e.text.as_str()), Some("marker"), "seed {seed}");
         }
     }
 
@@ -892,10 +939,10 @@ mod tests {
         }
     }
 
-    /// The lines the last action added to the log.
-    fn new_lines(game: &Game, before: u64) -> Vec<String> {
+    /// The entries the last action added to the log.
+    fn new_lines(game: &Game, before: u64) -> Vec<LogEntry> {
         let added = (game.log().total() - before) as usize;
-        game.log().last(added).map(String::from).collect()
+        game.log().last(added).cloned().collect()
     }
 
     #[test]
@@ -908,8 +955,11 @@ mod tests {
                 let dir = Dir::ALL[(i / 40) % 4];
                 if game.step(dir) == Step::Moved && game.deaths() == deaths {
                     let after = game.region().id;
-                    let entered: Vec<_> =
-                        new_lines(&game, before).into_iter().filter(|l| l.starts_with("You enter ")).collect();
+                    let entered: Vec<_> = new_lines(&game, before)
+                        .into_iter()
+                        .filter(|e| e.kind == LogKind::Region)
+                        .map(|e| e.text)
+                        .collect();
                     assert_eq!(!entered.is_empty(), after != from, "seed {seed} step {i}");
                     if after != from {
                         changes += 1;
@@ -929,11 +979,11 @@ mod tests {
     fn log_keeps_the_last_lines() {
         let mut log = Log::default();
         for i in 0..LOG_LIMIT + 7 {
-            log.push(i.to_string());
+            log.push(LogKind::Region, i.to_string());
         }
         assert_eq!(log.len(), LOG_LIMIT);
         assert_eq!(log.lines().next(), Some("7"));
-        let tail: Vec<_> = log.last(3).collect();
+        let tail: Vec<_> = log.last(3).map(|e| e.text.as_str()).collect();
         assert_eq!(tail, [(LOG_LIMIT + 4).to_string(), (LOG_LIMIT + 5).to_string(), (LOG_LIMIT + 6).to_string()]);
         assert_eq!(log.last(1_000).count(), LOG_LIMIT);
         assert_eq!(log.total(), (LOG_LIMIT + 7) as u64);
@@ -1020,8 +1070,9 @@ mod tests {
         assert_eq!((game.position(), game.turn()), (position, turn + 1));
         let name = game.monsters().iter().find(|m| m.id == id).map_or_else(String::new, |m| m.name.clone());
         let first = new_lines(&game, before).remove(0);
-        assert!(first.starts_with("You hit the ") || first.starts_with("You miss the "), "{first}");
-        assert!(name.is_empty() || first.contains(&name));
+        assert_eq!(first.kind, LogKind::Attack, "{first:?}");
+        assert!(first.text.starts_with("You hit the ") || first.text.starts_with("You miss the "), "{first:?}");
+        assert!(name.is_empty() || first.text.contains(&name));
     }
 
     #[test]
@@ -1039,7 +1090,9 @@ mod tests {
             game.step(Dir::East);
             if !game.monsters().iter().any(|m| m.id == id) {
                 let lines = new_lines(&game, before);
-                assert!(lines.iter().any(|l| l.starts_with("The ") && l.ends_with(" dies.")), "{lines:?}");
+                let deaths: Vec<_> = lines.iter().filter(|e| e.kind == LogKind::Kill).collect();
+                assert_eq!(deaths.len(), 1, "{lines:?}");
+                assert!(deaths[0].text.starts_with("The ") && deaths[0].text.ends_with(" dies."), "{lines:?}");
                 died = true;
                 break;
             }
@@ -1069,6 +1122,76 @@ mod tests {
         assert_eq!(game.region().id, home_region);
         let last = game.log().lines().last().unwrap();
         assert_eq!(last, format!("You wake, much later, in {}.", game.region().name));
+    }
+
+    #[test]
+    fn log_kinds_mark_what_the_frontend_styles() {
+        // The frontend colors lines by kind and tints the wanderer when the latest turn added Hurt or Death.
+        let game = Game::new(0);
+        assert_eq!(game.log().entries().map(|e| e.kind).collect::<Vec<_>>(), [LogKind::Region]);
+
+        // A monster's attack is Hurt exactly when it lands.
+        let mut game = on_open_land(0, 2);
+        let (x, y) = game.position();
+        let id = put_monster(&mut game, (x + 1, y), 1.0);
+        let (i, _) = where_is(&game, id);
+        let mut rng = Rng::new(4);
+        let mut kinds = HashSet::new();
+        for _ in 0..40 {
+            game.wanderer.hp = game.wanderer.max_hp();
+            let before = game.log().total();
+            game.monster_attacks(i, &mut rng);
+            let added = new_lines(&game, before);
+            let hurt = game.wanderer.hp < game.wanderer.max_hp();
+            assert_eq!(added.len(), 1, "{added:?}");
+            assert_eq!(added[0].kind, if hurt { LogKind::Hurt } else { LogKind::Missed }, "{added:?}");
+            kinds.insert(added[0].kind);
+        }
+        assert_eq!(kinds.len(), 2, "every attack landed or every one missed, so the test proved little");
+
+        // The fatal blow is Hurt, and falling and waking are both Death.
+        for _ in 0..40 {
+            game.wanderer.hp = 1;
+            let before = game.log().total();
+            game.monster_attacks(i, &mut rng);
+            if game.deaths() > 0 {
+                let kinds: Vec<_> = new_lines(&game, before).into_iter().map(|e| e.kind).collect();
+                assert_eq!(kinds, [LogKind::Hurt, LogKind::Death, LogKind::Death]);
+                return;
+            }
+        }
+        panic!("the wanderer never died");
+    }
+
+    #[test]
+    fn can_step_is_whether_a_step_passes_a_turn() {
+        for seed in [0, 1, 5] {
+            let (mut game, wall) = facing_a_wall(seed);
+            assert!(!game.can_step(wall), "seed {seed}");
+            // A monster standing in the way is attacked, whatever the ground under it.
+            let (dx, dy) = wall.delta();
+            let (x, y) = game.position();
+            put_monster(&mut game, (x + dx, y + dy), 0.5);
+            assert!(game.can_step(wall), "seed {seed}");
+            assert_eq!(game.step(wall), Step::Attacked, "seed {seed}");
+        }
+        // Walking straight until something is in the way, then turning, every step agrees with can_step.
+        for seed in [0, 4] {
+            let mut game = Game::new(seed);
+            let (mut way, mut blocked) = (0, 0);
+            for i in 0..1_500 {
+                game.wanderer.hp = game.wanderer.max_hp();
+                let dir = Dir::ALL[way];
+                let can = game.can_step(dir);
+                let step = game.step(dir);
+                assert_eq!(can, step != Step::Blocked, "seed {seed} step {i}: {step:?}");
+                if step == Step::Blocked {
+                    blocked += 1;
+                    way = (way + 1) % 4;
+                }
+            }
+            assert!(blocked > 1, "seed {seed}: nothing was ever in the way, so the test proved little");
+        }
     }
 
     #[test]
@@ -1151,11 +1274,16 @@ mod tests {
         game.monsters.clear();
         let (x, y) = game.position();
         let ids: Vec<SpeciesId> = game.local_life().species.iter().map(|s| s.id).collect();
-        // Species 1 is nearest and seen twice, species 0 farther, and species 2 just out of view.
+        // Species 1 is nearest and seen twice, species 0 farther and again in the view's corner, and species 2
+        // just out of view.
         put_species(&mut game, 1, (x + 1, y), 0.5);
         put_species(&mut game, 0, (x - 2, y + 1), 0.5);
         put_species(&mut game, 1, (x, y + 2), 0.5);
-        put_species(&mut game, 2, (x + VIEW_RADIUS + 1, y), 0.5);
+        let corner = put_species(&mut game, 0, (x - VIEW_RADIUS, y - VIEW_RADIUS), 0.5);
+        let outside = put_species(&mut game, 2, (x + VIEW_RADIUS + 1, y), 0.5);
+        let in_view: Vec<MonsterId> = game.monsters_in_view().map(|m| m.id).collect();
+        assert_eq!(in_view.len(), 4, "seed {seed}");
+        assert!(in_view.contains(&corner) && !in_view.contains(&outside), "seed {seed}");
         let nearby = game.nearby_species();
         assert_eq!(nearby, [ids[1], ids[0]], "seed {seed}");
         for id in nearby {
@@ -1202,7 +1330,7 @@ mod tests {
         game.monster_acts(i, &mut rng);
         assert_eq!(game.monsters[i].position, (x + 1, y), "adjacent, it attacks rather than moves");
         let lines = new_lines(&game, before);
-        assert!(lines.len() == 1 && lines[0].contains(&game.monsters[i].name), "{lines:?}");
+        assert!(lines.len() == 1 && lines[0].text.contains(&game.monsters[i].name), "{lines:?}");
     }
 
     #[test]
