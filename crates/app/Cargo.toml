@@ -8,6 +8,8 @@ publish.workspace = true
 [dependencies]
 blah-core = { path = "../core" }
 gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
+# Only for the frame type GPUI images are built from; the version GPUI itself uses.
+image = { version = "0.25", default-features = false }
 
 [lints]
 workspace = true
