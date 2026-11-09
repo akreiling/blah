@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use blah_core::{
     BiomeId, CLADES, GENERATIONS, Phenotype, Region, RegionCache, RegionLife, Rng, SPRITE_SIZE, Sprite, World, clades,
-    grow_pool,
+    grow_pool, individual, ring,
 };
 
 /// Biomes shown, as columns, hot and dry to cold and wet.
@@ -58,7 +58,7 @@ fn main() {
             // Individuals: pool members with the same small variation the game gives a spawn.
             let mut rng = Rng::new(row as u64 * 31 + col as u64);
             for k in 0..3 {
-                let genome = pool[rng.below(pool.len())].mutate(&mut rng, 0.5, 0.03);
+                let genome = individual(&pool[rng.below(pool.len())], &mut rng);
                 let s = Sprite::draw(&Phenotype::of(&genome), &clade.plan, region.biome);
                 img.sprite(&s, x0 + 8 + k * (SPRITE_SIZE * SMALL + 2), y0 + 10 + SPRITE_SIZE * SCALE, SMALL);
             }
@@ -112,10 +112,6 @@ fn find_regions(world: &World) -> Vec<Region> {
             })
         })
         .collect()
-}
-
-fn ring(r: i64) -> impl Iterator<Item = (i64, i64)> {
-    (-r..=r).flat_map(move |dy| (-r..=r).filter(move |dx| dx.abs() == r || dy.abs() == r).map(move |dx| (dx, dy)))
 }
 
 /// Times growing the life of real regions, which happens when one is first entered.

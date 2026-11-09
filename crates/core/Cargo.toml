@@ -1,6 +1,6 @@
 [package]
 name = "blah-core"
-description = "Pure game core: world generation, and later genetics and the population sim."
+description = "Pure game core: world generation, regions, genetics and evolution, and the rules of play."
 edition.workspace = true
 version.workspace = true
 publish.workspace = true

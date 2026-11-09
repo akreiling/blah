@@ -2,8 +2,9 @@
 //! around it, a turn counter, and a message log.
 //!
 //! Everything here is a pure function of the seed and the actions taken so far, so the same seed and the
-//! same actions always give the same game. Randomness in a turn comes from a stream keyed by `(seed,
-//! turn)`.
+//! same actions always give the same game. Randomness in a turn comes from one stream per purpose: the
+//! wanderer's attack keyed by `(seed, turn)`, each monster's actions by `(seed, turn, monster)`, and
+//! spawning by `(seed, turn)` under its own label. A draw added to one of them never shifts another.
 //!
 //! A turn is the wanderer's action (a step, a bump attack, or a wait), then every monster's actions, then
 //! healing, despawning, and spawning. Monsters act by temperament and bank their speed as energy, so a fast
@@ -11,10 +12,11 @@
 //!
 //! Coordinates follow the terrain's: `x` grows eastward and `y` grows southward, down the screen.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::biome::Biome;
 use crate::clade::{Clade, CladeId, clades};
+use crate::genome::Genome;
 use crate::hash::Rng;
 use crate::life::{RegionLife, Species, SpeciesId, TraitDelta, compare};
 use crate::monster::{ACTION_COST, MAX_ACTIONS, Monster, MonsterId, Wanderer, damage};
@@ -105,8 +107,9 @@ pub fn find_land(world: &World, x: i64, y: i64) -> Option<(i64, i64)> {
     best.map(|(_, dy, dx)| (x + dx, y + dy))
 }
 
-/// The offsets at Chebyshev distance exactly `r` from the center: the border of a `(2r+1)`-wide square.
-fn ring(r: i64) -> impl Iterator<Item = (i64, i64)> {
+/// The offsets at Chebyshev distance exactly `r` from the center: the border of a `(2r+1)`-wide square, row
+/// by row from the top, each row from the left. Ring 0 is the center alone.
+pub fn ring(r: i64) -> impl Iterator<Item = (i64, i64)> {
     (-r..=r).flat_map(move |dy| {
         let edge = dy.abs() == r;
         // Top and bottom rows are whole; the rows between only have their two ends.
@@ -179,12 +182,18 @@ pub const DEATH_TURNS: u64 = 1_000;
 pub const TERRITORY: i64 = 4;
 /// Chance an idle monster takes a step.
 pub const WANDER_CHANCE: f32 = 0.5;
-/// Mutation rate and step that make an individual from a pool genome.
-const INDIVIDUAL: (f32, f32) = (0.5, 0.03);
+/// Chance each gene of a pool genome varies in an individual drawn from it; see [`individual`].
+const INDIVIDUAL_RATE: f32 = 0.5;
+/// Size of that variation.
+const INDIVIDUAL_SIGMA: f32 = 0.03;
 /// Spawn tiles tried per spawn before giving up for the turn.
 const SPAWN_TRIES: usize = 6;
 /// Regions remembered for comparison, most recent last.
 const VISITED_LIMIT: usize = 8;
+/// Region lives held before the ones nothing refers to are forgotten. Comfortably above what is always kept
+/// (the visited regions, the current one, and one per monster), so forgetting always makes room, and high
+/// enough that the regions around the wanderer, where spawns look, stay grown between turns.
+const LIVES_LIMIT: usize = 32;
 
 /// Most monsters around the wanderer in a region of this productivity: from 2 in barren land to 12 in jungle.
 #[must_use]
@@ -196,6 +205,13 @@ pub fn capacity(productivity: f32) -> usize {
 #[must_use]
 pub fn spawn_chance(productivity: f32) -> f32 {
     0.06 + 0.3 * productivity
+}
+
+/// One individual of a species: a genome from its pool with the small variation every spawn gets, so no
+/// two monsters of a species are quite alike.
+#[must_use]
+pub fn individual(pool_member: &Genome, rng: &mut Rng) -> Genome {
+    pool_member.mutate(rng, INDIVIDUAL_RATE, INDIVIDUAL_SIGMA)
 }
 
 /// How a species differs from its clade's population in a region visited earlier.
@@ -216,8 +232,9 @@ pub struct Game {
     regions: RegionCache,
     /// The world's clades, a function of the seed. Not part of the game's state.
     clades: Vec<Clade>,
-    /// The life of every region looked at so far, a function of the seed and the region for now. Not part
-    /// of the game's state yet; once regions grow from their neighbors, it will be.
+    /// The life of regions looked at lately, a function of the seed and the region for now, so any of it
+    /// can be grown again. Holds at most [`LIVES_LIMIT`] regions beyond those still referred to. Not part of
+    /// the game's state yet; once regions grow from their neighbors, it will be.
     lives: HashMap<RegionId, RegionLife>,
     position: (i64, i64),
     /// Where the wanderer wakes after dying.
@@ -380,7 +397,8 @@ impl Game {
         self.lives.get(&self.region.id).expect("the current region's life is grown on entry")
     }
 
-    /// A species the game has met: any species of a region entered, or of a monster spawned.
+    /// A species the game has met: any species of the current or a recently visited region, or of a monster
+    /// still about.
     #[must_use]
     pub fn species(&self, id: SpeciesId) -> Option<&Species> {
         self.lives.get(&id.region)?.species_of(id.clade)
@@ -417,47 +435,46 @@ impl Game {
     }
 
     /// Tries to step one tile in `dir`. A monster there is attacked instead. Otherwise the wanderer moves if
-    /// the target is passable, naming the region if that changes, or stays put and logs what is in the way.
-    /// Attacking or moving passes a turn, and the monsters act.
+    /// the target is passable, naming the region if that changes, or stays put and logs what is in the way,
+    /// unless that is already the last line, so pushing against a wall doesn't flood the log. Attacking or
+    /// moving passes a turn, and the monsters act.
     pub fn step(&mut self, dir: Dir) -> Step {
         let (dx, dy) = dir.delta();
         let (x, y) = (self.position.0 + dx, self.position.1 + dy);
         if let Some(target) = self.monsters.iter().position(|m| m.position == (x, y)) {
-            let mut rng = self.begin_turn();
+            self.turn += 1;
+            let mut rng = Rng::keyed(self.world.seed(), b"wanderer", &[self.turn]);
             self.wanderer_attacks(target, &mut rng);
-            self.end_turn(&mut rng);
+            self.end_turn();
             return Step::Attacked;
         }
         let target = self.world.tile(x, y).biome.biome();
         if !target.passable {
             // Biome names are sentence case ("Deep water"); mid-sentence they are common nouns.
-            self.log.push(format!("The way is blocked by {}.", target.name.to_lowercase()));
+            let line = format!("The way is blocked by {}.", target.name.to_lowercase());
+            if self.log.lines().next_back() != Some(line.as_str()) {
+                self.log.push(line);
+            }
             return Step::Blocked;
         }
-        let mut rng = self.begin_turn();
+        self.turn += 1;
         self.position = (x, y);
         self.update_region(true);
-        self.end_turn(&mut rng);
+        self.end_turn();
         Step::Moved
     }
 
     /// Stays put for a turn, letting the monsters act.
     pub fn wait(&mut self) -> Step {
-        let mut rng = self.begin_turn();
-        self.end_turn(&mut rng);
+        self.turn += 1;
+        self.end_turn();
         Step::Waited
     }
 
-    /// Starts a turn: counts it and returns its random stream.
-    fn begin_turn(&mut self) -> Rng {
-        self.turn += 1;
-        Rng::keyed(self.world.seed(), b"turnturn", &[self.turn])
-    }
-
     /// Everything after the wanderer's action: monsters act, the wanderer heals, monsters come and go.
-    fn end_turn(&mut self, rng: &mut Rng) {
+    fn end_turn(&mut self) {
         let deaths = self.deaths;
-        self.monsters_act(rng);
+        self.monsters_act();
         if self.deaths != deaths {
             return;
         }
@@ -467,8 +484,9 @@ impl Game {
         let here = self.position;
         self.monsters.retain(|m| chebyshev(m.position, here) <= DESPAWN_RADIUS);
         let productivity = self.local_life().productivity();
+        let mut rng = Rng::keyed(self.world.seed(), b"spawning", &[self.turn]);
         if self.monsters.len() < capacity(productivity) && rng.chance(spawn_chance(productivity)) {
-            self.spawn(rng);
+            self.spawn(&mut rng);
         }
     }
 
@@ -491,14 +509,27 @@ impl Game {
         }
     }
 
-    /// The life of region `id`, grown now if it hasn't been.
+    /// The life of region `id`, grown now if it isn't held. Growing one into a full cache first forgets
+    /// what nothing refers to.
     fn life(&mut self, id: RegionId) -> &RegionLife {
         if !self.lives.contains_key(&id) {
+            if self.lives.len() >= LIVES_LIMIT {
+                self.forget_lives();
+            }
             let region = self.regions.region(id).expect("ids come from region_at");
             let life = RegionLife::grow(self.world.seed(), &self.clades, &region);
             self.lives.insert(id, life);
         }
         &self.lives[&id]
+    }
+
+    /// Drops every region life except those the game still looks up: the current region's, the visited
+    /// regions' (for comparisons), and each monster's species' region.
+    fn forget_lives(&mut self) {
+        let mut keep: HashSet<RegionId> = self.visited.iter().copied().collect();
+        keep.insert(self.region.id);
+        keep.extend(self.monsters.iter().map(|m| m.species.region));
+        self.lives.retain(|id, _| keep.contains(id));
     }
 
     /// Fills the area around a new game to half its capacity, out of view.
@@ -531,7 +562,7 @@ impl Game {
             }
             let weights: Vec<f32> = life.species.iter().map(|s| s.abundance).collect();
             let species = &life.species[rng.weighted(&weights)];
-            let genome = species.pool[rng.below(species.pool.len())].mutate(rng, INDIVIDUAL.0, INDIVIDUAL.1);
+            let genome = individual(&species.pool[rng.below(species.pool.len())], rng);
             let phenotype = Phenotype::of(&genome);
             let tile = self.world.tile(x, y).biome;
             if !phenotype.access.allows(tile.biome()) {
@@ -572,16 +603,18 @@ impl Game {
         }
     }
 
-    /// Every monster acts, in order of appearance, as often as its speed allows. Stops if the wanderer dies.
-    fn monsters_act(&mut self, rng: &mut Rng) {
+    /// Every monster acts, in order of appearance, as often as its speed allows, each drawing from its own
+    /// stream for the turn. Stops if the wanderer dies.
+    fn monsters_act(&mut self) {
         let deaths = self.deaths;
         for i in 0..self.monsters.len() {
+            let mut rng = Rng::keyed(self.world.seed(), b"monsters", &[self.turn, self.monsters[i].id.0]);
             self.monsters[i].energy += self.monsters[i].phenotype.stats.speed;
             let mut actions = 0;
             while self.monsters[i].energy >= ACTION_COST && actions < MAX_ACTIONS {
                 self.monsters[i].energy -= ACTION_COST;
                 actions += 1;
-                self.monster_acts(i, rng);
+                self.monster_acts(i, &mut rng);
                 if self.deaths != deaths {
                     return;
                 }
@@ -665,8 +698,8 @@ impl Game {
             && self.monsters[i].phenotype.access.allows(self.world.tile(x, y).biome.biome())
     }
 
-    /// Moves monster `i` one step to the open neighbor that best satisfies `better`, which compares a
-    /// candidate's score against the current tile's. Returns whether it moved.
+    /// Moves monster `i` one step to the open neighbor with the lowest `score`, if that is lower than the
+    /// current tile's. Ties go to the smallest position. Returns whether it moved.
     fn step_by(&mut self, i: usize, score: impl Fn((i64, i64)) -> i64) -> bool {
         let here = self.monsters[i].position;
         let best = Dir::ALL
@@ -819,11 +852,20 @@ mod tests {
     fn blocked_moves_change_nothing_but_the_log() {
         for seed in [0, 1, 5] {
             let (mut game, dir) = facing_a_wall(seed);
-            let (position, turn, lines) = (game.position(), game.turn(), game.log().len());
+            // Make sure the last line isn't already this wall's, so the first bump is logged.
+            game.log.push("marker");
+            let (position, turn, before) = (game.position(), game.turn(), game.log().total());
             assert_eq!(game.step(dir), Step::Blocked);
             assert_eq!((game.position(), game.turn()), (position, turn));
-            assert_eq!(game.log().len(), (lines + 1).min(LOG_LIMIT));
-            assert!(game.log().lines().last().unwrap().starts_with("The way is blocked by "));
+            let added = new_lines(&game, before);
+            assert_eq!(added.len(), 1, "seed {seed}: {added:?}");
+            assert!(added[0].starts_with("The way is blocked by "), "seed {seed}: {added:?}");
+            // Pushing on against the same wall says nothing new.
+            for _ in 0..LOG_LIMIT + 5 {
+                assert_eq!(game.step(dir), Step::Blocked);
+            }
+            assert_eq!(game.log().total(), before + 1, "seed {seed}");
+            assert_eq!(game.log().last(2).next(), Some("marker"), "seed {seed}");
         }
     }
 
@@ -924,7 +966,12 @@ mod tests {
 
     /// A monster of the local region's first species, placed at `at`, with its aggression set.
     fn put_monster(game: &mut Game, at: (i64, i64), aggression: f32) -> MonsterId {
-        let species = game.local_life().species[0].clone();
+        put_species(game, 0, at, aggression)
+    }
+
+    /// [`put_monster`], of the local region's `which`th species.
+    fn put_species(game: &mut Game, which: usize, at: (i64, i64), aggression: f32) -> MonsterId {
+        let species = game.local_life().species[which].clone();
         let mut genome = species.pool[0];
         genome.set(crate::Gene::Aggression, aggression);
         // Land-bound and middling, so it can stand next to a land spawn and survives a hit or two.
@@ -1098,13 +1145,194 @@ mod tests {
     }
 
     #[test]
-    fn nearby_species_are_in_view_and_known() {
-        let mut game = Game::new(42);
-        play(&mut game, 200);
-        for id in game.nearby_species() {
-            let species = game.species(id).expect("a spawned monster's species is known");
+    fn nearby_species_are_in_view_nearest_first_and_once() {
+        let seed = (0..).find(|&s| Game::new(s).local_life().species.len() >= 3).unwrap();
+        let mut game = Game::new(seed);
+        game.monsters.clear();
+        let (x, y) = game.position();
+        let ids: Vec<SpeciesId> = game.local_life().species.iter().map(|s| s.id).collect();
+        // Species 1 is nearest and seen twice, species 0 farther, and species 2 just out of view.
+        put_species(&mut game, 1, (x + 1, y), 0.5);
+        put_species(&mut game, 0, (x - 2, y + 1), 0.5);
+        put_species(&mut game, 1, (x, y + 2), 0.5);
+        put_species(&mut game, 2, (x + VIEW_RADIUS + 1, y), 0.5);
+        let nearby = game.nearby_species();
+        assert_eq!(nearby, [ids[1], ids[0]], "seed {seed}");
+        for id in nearby {
+            let species = game.species(id).expect("a monster's species is known");
             assert!(!species.name.is_empty() && !species.description.is_empty());
         }
+    }
+
+    /// A game for `seed` with the wanderer in the middle of a square of land at least `2r + 1` wide, and no
+    /// monsters, so a monster placed near it can move any way.
+    fn on_open_land(seed: u64, r: i64) -> Game {
+        let mut game = Game::new(seed);
+        let world = *game.world();
+        let open =
+            |(cx, cy): (i64, i64)| (-r..=r).all(|dy| (-r..=r).all(|dx| is_land(biome_at(&world, (cx + dx, cy + dy)))));
+        let (x0, y0) = game.position();
+        let at = (0..100)
+            .flat_map(|k| ring(k).map(move |(dx, dy)| (x0 + dx, y0 + dy)))
+            .find(|&p| open(p))
+            .expect("open land near the start");
+        game.position = at;
+        game.update_region(false);
+        game.monsters.clear();
+        game
+    }
+
+    /// Monster `id`'s index and Manhattan distance from the wanderer.
+    fn where_is(game: &Game, id: MonsterId) -> (usize, i64) {
+        let i = game.monsters.iter().position(|m| m.id == id).unwrap();
+        (i, manhattan(game.monsters[i].position, game.position()))
+    }
+
+    #[test]
+    fn aggressive_monsters_close_in_and_attack() {
+        let mut game = on_open_land(0, 5);
+        let (x, y) = game.position();
+        let id = put_monster(&mut game, (x + 3, y), 1.0);
+        let mut rng = Rng::new(1);
+        let (i, d) = where_is(&game, id);
+        game.monster_acts(i, &mut rng);
+        assert_eq!(where_is(&game, id).1, d - 1, "it steps toward the wanderer it senses");
+        game.monsters[i].position = (x + 1, y);
+        let before = game.log().total();
+        game.monster_acts(i, &mut rng);
+        assert_eq!(game.monsters[i].position, (x + 1, y), "adjacent, it attacks rather than moves");
+        let lines = new_lines(&game, before);
+        assert!(lines.len() == 1 && lines[0].contains(&game.monsters[i].name), "{lines:?}");
+    }
+
+    #[test]
+    fn skittish_monsters_flee_and_fight_only_when_cornered() {
+        let mut game = on_open_land(0, 5);
+        let (x, y) = game.position();
+        let id = put_monster(&mut game, (x + 2, y), 0.0);
+        let mut rng = Rng::new(2);
+        let (i, d) = where_is(&game, id);
+        let before = game.log().total();
+        game.monster_acts(i, &mut rng);
+        assert_eq!(where_is(&game, id).1, d + 1, "it steps away from the wanderer it senses");
+        assert_eq!(game.log().total(), before, "fleeing says nothing");
+        // Hemmed in by three others and the wanderer, it fights.
+        game.monsters[i].position = (x + 1, y);
+        for at in [(x + 2, y), (x + 1, y - 1), (x + 1, y + 1)] {
+            put_monster(&mut game, at, 0.5);
+        }
+        game.monster_acts(i, &mut rng);
+        assert_eq!(game.monsters[i].position, (x + 1, y));
+        assert_eq!(game.log().total(), before + 1, "cornered, it attacks");
+    }
+
+    #[test]
+    fn territorial_monsters_guard_home_but_never_chase_far() {
+        let mut game = on_open_land(0, 5);
+        let (x, y) = game.position();
+        let id = put_monster(&mut game, (x + 3, y), 0.5);
+        let mut rng = Rng::new(3);
+        let (i, d) = where_is(&game, id);
+        assert!(chebyshev(game.monsters[i].home, (x, y)) <= TERRITORY);
+        game.monster_acts(i, &mut rng);
+        assert_eq!(where_is(&game, id).1, d - 1, "a trespasser near home is approached");
+        // Far from home, with the wanderer outside its territory, it heads home instead.
+        game.monsters[i].position = (x + 2, y);
+        game.monsters[i].home = (x + 2 + TERRITORY + 3, y);
+        game.monster_acts(i, &mut rng);
+        assert_eq!(game.monsters[i].position, (x + 3, y), "it goes back toward home");
+        // Adjacent and on its ground, it attacks.
+        game.monsters[i].position = (x + 1, y);
+        game.monsters[i].home = (x + 1, y);
+        let before = game.log().total();
+        game.monster_acts(i, &mut rng);
+        assert_eq!(game.monsters[i].position, (x + 1, y));
+        assert_eq!(game.log().total(), before + 1, "it attacks a trespasser beside it");
+    }
+
+    #[test]
+    fn speed_banks_as_energy_and_actions_are_capped() {
+        // An aggressive monster beside the wanderer attacks, logging one line, on every action it gets.
+        let actions = |speed: i32, turns: u64| {
+            let mut game = on_open_land(0, 2);
+            let (x, y) = game.position();
+            let id = put_monster(&mut game, (x + 1, y), 1.0);
+            let (i, _) = where_is(&game, id);
+            game.monsters[i].phenotype.stats.speed = speed;
+            let before = game.log().total();
+            for _ in 0..turns {
+                game.wanderer.hp = game.wanderer.max_hp();
+                game.monsters_act();
+                game.turn += 1;
+            }
+            (game.log().total() - before, game.monsters[i].energy)
+        };
+        // Speed is tenths of an action: 14 acts 14 times in ten turns, 6 acts 6 times, with nothing left over.
+        assert_eq!(actions(14, 10), (14, 0));
+        assert_eq!(actions(6, 10), (6, 0));
+        assert_eq!(actions(ACTION_COST, 10), (10, 0));
+        // Too slow to act at all in one turn; the speed is banked for the next.
+        assert_eq!(actions(4, 1), (0, 4));
+        // However fast, no more than MAX_ACTIONS a turn; the rest stays banked.
+        let (count, banked) = actions(3 * ACTION_COST, 10);
+        assert_eq!(count, 10 * u64::from(MAX_ACTIONS));
+        assert_eq!(banked, 10 * (3 * ACTION_COST - MAX_ACTIONS as i32 * ACTION_COST));
+    }
+
+    #[test]
+    fn one_monsters_draws_never_shift_anothers() {
+        // Two games alike but for an extra monster that acts first. If the streams were shared, its draws
+        // would shift everyone else's; with a stream per monster, the watched one moves the same either way.
+        let mut differed = 0;
+        for seed in [0, 4, 42] {
+            let (mut alone, _) = cleared(seed);
+            let (x, y) = alone.position();
+            let watched = put_monster(&mut alone, (x + 7, y), 0.5);
+            let mut crowded = alone.clone();
+            let extra = put_monster(&mut crowded, (x - 7, y), 0.5);
+            crowded.monsters.rotate_right(1);
+            let mut paths = (Vec::new(), Vec::new());
+            for _ in 0..12 {
+                for (game, path, keep) in [(&mut alone, &mut paths.0, watched), (&mut crowded, &mut paths.1, extra)] {
+                    game.wanderer.hp = game.wanderer.max_hp();
+                    game.wait();
+                    // Spawns would differ between the two (capacity counts the extra monster), so drop them.
+                    game.monsters.retain(|m| m.id == watched || m.id == keep);
+                    path.push(game.monsters.iter().find(|m| m.id == watched).map(|m| m.position));
+                }
+            }
+            assert_eq!(paths.0, paths.1, "seed {seed}");
+            differed += usize::from(paths.0.windows(2).any(|w| w[0] != w[1]));
+        }
+        assert!(differed > 0, "the watched monster never moved, so the test proved little");
+    }
+
+    #[test]
+    fn region_lives_stay_bounded_and_cover_what_is_looked_up() {
+        let mut game = Game::new(0);
+        let mut seen = HashSet::new();
+        // Short walks with long jumps between them, so the trip keeps reaching regions it hasn't grown.
+        for leg in 0..30 {
+            let (x, y) = game.position();
+            if let Some(to) = find_land(game.world(), x + 300, y + 40 * (leg % 3 - 1)) {
+                game.position = to;
+                game.update_region(true);
+            }
+            for i in 0..30 {
+                game.wanderer.hp = game.wanderer.max_hp();
+                game.step(Dir::ALL[(i / 10) % 4]);
+                seen.extend(game.lives.keys().copied());
+                assert!(game.lives.len() <= LIVES_LIMIT, "leg {leg}: {} lives held", game.lives.len());
+                assert!(game.lives.contains_key(&game.region().id), "leg {leg}: current region forgotten");
+                for r in &game.visited {
+                    assert!(game.lives.contains_key(r), "leg {leg}: visited region forgotten");
+                }
+                for m in game.monsters() {
+                    assert!(game.species(m.species).is_some(), "leg {leg}: {}'s species forgotten", m.name);
+                }
+            }
+        }
+        assert!(seen.len() > 2 * LIVES_LIMIT, "only {} regions grown, so little was forgotten", seen.len());
     }
 
     #[test]
