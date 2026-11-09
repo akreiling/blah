@@ -1,4 +1,4 @@
-//! The pure core of the game. For now: endless, deterministic terrain.
+//! The pure core of the game. For now: endless, deterministic terrain, and a wanderer walking it.
 //!
 //! The world is an endless grid of tiles. Each tile is a pure function of `(seed, x, y)`: four noise fields
 //! (elevation, moisture, temperature, age) sampled at the tile, and a biome looked up from the first three
@@ -18,10 +18,12 @@
 mod biome;
 mod chunk;
 mod fields;
+mod game;
 mod hash;
 mod noise;
 mod world;
 
 pub use biome::{BIOMES, Band, Biome, BiomeId, SEA_LEVEL, classify};
 pub use chunk::{CHUNK_AREA, CHUNK_SIZE, Chunk, chunk_of, chunk_origin, local_of};
+pub use game::{Dir, Game, LAND_SEARCH_RADIUS, LOG_LIMIT, Log, Step, find_land};
 pub use world::{Tile, World};
