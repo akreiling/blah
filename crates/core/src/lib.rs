@@ -16,6 +16,15 @@
 //!
 //! This crate does no I/O, reads no clock, and starts no threads.
 //!
+//! The same seed gives the same bits on every platform, terrain and life alike, because floats go only through
+//! operations IEEE 754 rounds exactly: `+ − × ÷`, `sqrt`, comparisons, `floor` and `round`, remainders, and
+//! casts. Rust never fuses them into multiply-adds, and sums run over slices in a fixed order. The math
+//! library (`exp`, `sin`, `powf`, `powi`, `hypot`, …) is never used: its results can differ in the last bit
+//! between platforms and Rust versions, and a last bit can flip a fitness-weighted draw and with it a whole gene
+//! pool. Where the sim needs an exponential or a circular mean, it builds one from exact operations. This
+//! crate's `clippy.toml` disallows the math library (tests that compare against it opt out), and two tests
+//! pin the exact bits that evolution and a scripted game produce.
+//!
 //! ```
 //! use blah_core::World;
 //!

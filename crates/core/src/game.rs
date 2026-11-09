@@ -1470,4 +1470,36 @@ mod tests {
             assert_eq!(points, ring(r).collect());
         }
     }
+
+    /// A scripted game's exact course, pinned: the same seed and moves must give the same monsters in the
+    /// same places with the same hit points on every machine, since spawns draw from evolved pools weighted by
+    /// fitness.
+    ///
+    /// If this fails and nobody meant to change the rules, spawning, or evolution, the sim's arithmetic came
+    /// out differently on this platform or toolchain (see `evolution_is_pinned_to_exact_bits` in `life`, which
+    /// narrows it down if it fails too). Find the cause; don't update the constant. Update it only when the
+    /// game was changed on purpose, and say so in the commit.
+    #[test]
+    fn scripted_play_is_pinned_to_exact_bits() {
+        use crate::hash::combine;
+        let mut h = 0;
+        for seed in [0, 42] {
+            let mut game = Game::new(seed);
+            for i in 0..240 {
+                game.step(Dir::ALL[(i / 9) % 4]);
+                let (x, y) = game.position();
+                h = [x as u64, y as u64, game.turn(), u64::from(game.deaths()), game.wanderer().hp as u64]
+                    .into_iter()
+                    .fold(h, combine);
+                for m in game.monsters() {
+                    h = [m.id.0, m.position.0 as u64, m.position.1 as u64, m.hp as u64].into_iter().fold(h, combine);
+                    h = m.genome.genes().iter().fold(h, |h, v| combine(h, u64::from(v.to_bits())));
+                }
+            }
+        }
+        assert_eq!(
+            h, 0x26ce_47cb_fd68_5d92,
+            "the sim's arithmetic changed; see this test's doc before touching the constant"
+        );
+    }
 }

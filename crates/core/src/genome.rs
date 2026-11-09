@@ -136,11 +136,18 @@ impl Genome {
     /// the short way around. In `[0, 1]`.
     #[must_use]
     pub fn distance(&self, other: &Genome) -> f32 {
-        let sum: f32 = Gene::ALL.iter().map(|&g| gene_delta(g, self.get(g), other.get(g)).powi(2)).sum();
+        let sum: f32 = Gene::ALL
+            .iter()
+            .map(|&g| {
+                let d = gene_delta(g, self.get(g), other.get(g));
+                d * d
+            })
+            .sum();
         (sum / GENES as f32).sqrt()
     }
 
-    /// The mean of a set of genomes, gene by gene; hue is a circular mean. `None` for an empty set.
+    /// The mean of a set of genomes, gene by gene. Hue is a circular mean: the point on the wheel nearest all
+    /// the hues, found without trigonometry so it is the same on every platform. `None` for an empty set.
     #[must_use]
     pub fn mean(genomes: &[Genome]) -> Option<Genome> {
         if genomes.is_empty() {
@@ -150,18 +157,49 @@ impl Genome {
         let mut mean = [0.0; GENES];
         for gene in Gene::ALL {
             let values = genomes.iter().map(|g| g.get(gene));
-            mean[gene as usize] = if gene.wraps() {
-                let (s, c) = values.fold((0.0, 0.0), |(s, c), v| {
-                    let a = v * std::f32::consts::TAU;
-                    (s + a.sin(), c + a.cos())
-                });
-                f32::atan2(s, c) / std::f32::consts::TAU
-            } else {
-                values.sum::<f32>() / n
-            };
+            mean[gene as usize] =
+                if gene.wraps() { circular_mean(&values.collect::<Vec<_>>()) } else { values.sum::<f32>() / n };
         }
         Some(Genome::new(mean))
     }
+}
+
+/// The mean of values on a wheel of circumference 1, such as hues: the point with the least sum of squared
+/// distances to them, each measured the short way around (their Fréchet mean). In `[0, 1)`. Uses only
+/// exactly rounded arithmetic, no trigonometry, so it is the same on every platform.
+///
+/// Measured that way, the sum is a quadratic in the candidate point between the places where the point's
+/// opposite crosses one of the values, and each quadratic piece is least at `(S + k) / n`, wrapped, for some
+/// integer `k`, where `S` is the sum of the values and `n` their count. So the minimum is one of the `n`
+/// points `(S + k) / n` for `k` in `0..n`. Each is scored by its sum of squared distances, and the lowest
+/// wins, the smallest `k` on a tie.
+///
+/// When the values have no single nearest point, as for an opposite pair (0 and 0.5 give 0.25 and 0.75 equal
+/// scores) or values spread evenly around the wheel, the candidates tie or differ only by rounding. The result
+/// is then whichever scores lowest after rounding, or the smallest `k` on an exact tie (0.25 for that pair): a
+/// fixed function of the values and their order, but one of several equally good answers. For the clustered
+/// hues of a pool it agrees closely with the mean direction of the hues as angles. `0.0` for no values.
+fn circular_mean(values: &[f32]) -> f32 {
+    let n = values.len() as f32;
+    let sum: f32 = values.iter().sum();
+    let spread = |c: f32| -> f32 {
+        values
+            .iter()
+            .map(|&v| {
+                let d = gene_delta(Gene::Hue, c, v);
+                d * d
+            })
+            .sum()
+    };
+    let mut best = (f32::INFINITY, 0.0);
+    for k in 0..values.len() {
+        let c = ((sum + k as f32) / n).rem_euclid(1.0);
+        let s = spread(c);
+        if s < best.0 {
+            best = (s, c);
+        }
+    }
+    best.1
 }
 
 /// `b - a` for one gene, the short way around for a circular gene, so it lies in `[-0.5, 0.5]` there.
@@ -225,5 +263,49 @@ mod tests {
         assert!(mean.get(Gene::Hue) < 0.01 || mean.get(Gene::Hue) > 0.99, "{}", mean.get(Gene::Hue));
         assert!((gene_delta(Gene::Hue, 0.95, 0.05) - 0.1).abs() < 1e-6);
         assert!(a.distance(&b) < 0.04);
+    }
+
+    #[test]
+    fn circular_mean_wraps_through_zero() {
+        for (values, expect) in
+            [(&[0.95, 0.05][..], 0.0), (&[0.9, 0.98, 0.04], 0.973_333), (&[0.02, 0.97, 0.99], 0.993_333)]
+        {
+            let mean = circular_mean(values);
+            assert!((0.0..1.0).contains(&mean), "{values:?}: {mean}");
+            assert!(gene_delta(Gene::Hue, mean, expect).abs() < 1e-5, "{values:?}: {mean}, not {expect}");
+        }
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // The mean direction of the hues as angles is the reference here.
+    fn circular_mean_agrees_with_the_angle_mean_on_clusters() {
+        let angle_mean = |values: &[f32]| {
+            let (s, c) = values.iter().fold((0.0, 0.0), |(s, c), &v| {
+                let a = f64::from(v) * std::f64::consts::TAU;
+                (s + a.sin(), c + a.cos())
+            });
+            (f64::atan2(s, c) / std::f64::consts::TAU) as f32
+        };
+        // Clusters about as wide as an evolved pool's hues usually are, centered all around the wheel.
+        let mut rng = Rng::new(1);
+        for _ in 0..5_000 {
+            let center = rng.unit();
+            let values: Vec<f32> =
+                (0..2 + rng.below(23)).map(|_| (center + (rng.unit() * 2.0 - 1.0) * 0.1).rem_euclid(1.0)).collect();
+            let (exact, angles) = (circular_mean(&values), angle_mean(&values));
+            assert!(gene_delta(Gene::Hue, exact, angles).abs() < 0.01, "{values:?}: {exact} against {angles}");
+        }
+    }
+
+    #[test]
+    fn circular_mean_settles_ties_by_the_first_candidate() {
+        // Opposite hues have two equally near points, a quarter turn either side; the first candidate wins
+        // whichever order the hues come in.
+        assert_eq!(circular_mean(&[0.0, 0.5]), 0.25);
+        assert_eq!(circular_mean(&[0.5, 0.0]), 0.25);
+        assert_eq!(circular_mean(&[0.25, 0.75]), 0.5);
+        // Four hues evenly spaced have four equally near points, between each pair.
+        assert_eq!(circular_mean(&[0.0, 0.25, 0.5, 0.75]), 0.375);
+        assert_eq!(circular_mean(&[]), 0.0);
     }
 }

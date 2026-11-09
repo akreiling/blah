@@ -210,8 +210,8 @@ mod tests {
         let n = pairs.len() as f64;
         let (ma, mb) = pairs.iter().fold((0.0, 0.0), |(a, b), p| (a + p.0 / n, b + p.1 / n));
         let cov = pairs.iter().map(|p| (p.0 - ma) * (p.1 - mb)).sum::<f64>() / n;
-        let va = pairs.iter().map(|p| (p.0 - ma).powi(2)).sum::<f64>() / n;
-        let vb = pairs.iter().map(|p| (p.1 - mb).powi(2)).sum::<f64>() / n;
+        let va = pairs.iter().map(|p| (p.0 - ma) * (p.0 - ma)).sum::<f64>() / n;
+        let vb = pairs.iter().map(|p| (p.1 - mb) * (p.1 - mb)).sum::<f64>() / n;
         let r = cov / (va * vb).sqrt();
         assert!(r.abs() < 0.15, "moisture and age correlate: r = {r:.3}");
     }

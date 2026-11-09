@@ -12,7 +12,8 @@
 //! a small palette: a four-step ramp of the body color plus belly, markings, eyes, and outline. Shading is
 //! by position alone (lit from above), so the mirror stays exact.
 //!
-//! [`Sprite::draw`] is a pure function. Drawing is cheap, about a microsecond per pixel at most.
+//! [`Sprite::draw`] is a pure function, built only from exactly rounded arithmetic like the rest of the sim,
+//! so a species looks the same on every platform. Drawing is cheap, about a microsecond per pixel at most.
 
 use crate::biome::BiomeId;
 use crate::clade::{BodyPlan, Family, Pattern};
@@ -183,12 +184,12 @@ impl Canvas {
     }
 
     fn ellipse(&mut self, cu: f32, cv: f32, ru: f32, rv: f32, mat: Mat) {
-        self.fill(mat, |u, v| ((u - cu) / ru).powi(2) + ((v - cv) / rv).powi(2) <= 1.0);
+        self.fill(mat, |u, v| in_ellipse(u, v, cu, cv, ru, rv));
     }
 
     /// An ellipse cut off below `v_max`.
     fn ellipse_above(&mut self, cu: f32, cv: f32, ru: f32, rv: f32, v_max: f32, mat: Mat) {
-        self.fill(mat, |u, v| v <= v_max && ((u - cu) / ru).powi(2) + ((v - cv) / rv).powi(2) <= 1.0);
+        self.fill(mat, |u, v| v <= v_max && in_ellipse(u, v, cu, cv, ru, rv));
     }
 
     /// A filled polygon with vertices on the right half.
@@ -209,7 +210,8 @@ impl Canvas {
 
     /// A one-pixel line.
     fn line(&mut self, (u0, v0): (f32, f32), (u1, v1): (f32, f32), mat: Mat) {
-        let steps = ((u1 - u0).hypot(v1 - v0) * self.k * 3.0).ceil().max(1.0) as usize;
+        let (du, dv) = (u1 - u0, v1 - v0);
+        let steps = ((du * du + dv * dv).sqrt() * self.k * 3.0).ceil().max(1.0) as usize;
         for s in 0..=steps {
             let t = s as f32 / steps as f32;
             let (x, y) = self.pixel(u0 + (u1 - u0) * t, v0 + (v1 - v0) * t);
@@ -223,7 +225,8 @@ impl Canvas {
         self.fill(mat, |u, v| {
             let (du, dv) = (u1 - u0, v1 - v0);
             let t = (((u - u0) * du + (v - v0) * dv) / (du * du + dv * dv).max(1e-6)).clamp(0.0, 1.0);
-            (u - u0 - du * t).hypot(v - v0 - dv * t) <= r
+            let (eu, ev) = (u - u0 - du * t, v - v0 - dv * t);
+            eu * eu + ev * ev <= r * r
         });
     }
 
@@ -434,6 +437,12 @@ impl Canvas {
         }
         Sprite(out)
     }
+}
+
+/// Whether `(u, v)` lies in the ellipse centered at `(cu, cv)` with radii `ru` and `rv`.
+fn in_ellipse(u: f32, v: f32, cu: f32, cv: f32, ru: f32, rv: f32) -> bool {
+    let (a, b) = ((u - cu) / ru, (v - cv) / rv);
+    a * a + b * b <= 1.0
 }
 
 /// The shade a covering gives an interior pixel, from the position shade (0 dark to 3 lit). Slime returns

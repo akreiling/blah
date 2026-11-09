@@ -45,25 +45,63 @@ const REACH: f32 = 0.35;
 /// How well a phenotype suits a biome, in `(0, 1]`: `exp(−penalty)`, where the penalty sums the terms
 /// described on [`Fitness`] with the weights beside [`BIOMES`](crate::BIOMES). Every term is zero or more,
 /// and all of them are zero only for a creature that is exactly what the biome wants.
+///
+/// The exponential is computed from exactly rounded operations rather than the platform's `exp`, so the same
+/// genome scores the same bits everywhere; see the crate docs.
 #[must_use]
 pub fn fitness(p: &Phenotype, biome: &Biome) -> f32 {
     let f: &Fitness = &biome.fitness;
     let g = &p.genome;
     let limbs = g.get(Gene::Limbs);
+    let sq = |x: f32| x * x;
     // Limb pressure costs the shortfall from the end it pays for: all legs when positive, none when negative.
     let limb_shortfall = f.limbs.max(0.0) * (1.0 - limbs) + (-f.limbs).max(0.0) * limbs;
-    let mut penalty = W_TOLERANCE * ((p.heat - f.heat).powi(2) + (p.cold - f.cold).powi(2))
-        + W_WET * (p.water - f.wet).powi(2)
-        + W_INSULATION * ((p.covering.traits().insulation - f.insulation).abs() - INSULATION_SLACK).max(0.0).powi(2)
-        + W_DRY * (p.covering.traits().needs_wet - f.wet).max(0.0).powi(2)
-        + W_SIZE * (p.size - f.size).powi(2)
+    let mut penalty = W_TOLERANCE * (sq(p.heat - f.heat) + sq(p.cold - f.cold))
+        + W_WET * sq(p.water - f.wet)
+        + W_INSULATION * sq(((p.covering.traits().insulation - f.insulation).abs() - INSULATION_SLACK).max(0.0))
+        + W_DRY * sq((p.covering.traits().needs_wet - f.wet).max(0.0))
+        + W_SIZE * sq(p.size - f.size)
         + W_LIMBS * limb_shortfall
-        + W_AGGRESSION * (g.get(Gene::Aggression) - f.aggression).powi(2)
-        + W_CAMO * f.camo_strength * (2.0 * gene_delta(Gene::Hue, p.hue, f.camo_hue)).powi(2);
+        + W_AGGRESSION * sq(g.get(Gene::Aggression) - f.aggression)
+        + W_CAMO * f.camo_strength * sq(2.0 * gene_delta(Gene::Hue, p.hue, f.camo_hue));
     if !p.access.allows(biome) {
         penalty += STRANDED;
     }
-    (-penalty).exp()
+    exp_neg(penalty)
+}
+
+/// Inputs above this are scored as this. `e^(−80)` is about 1.8e-35, still a normal `f32` (the smallest is
+/// about 1.2e-38), so [`exp_neg`] never returns zero or a subnormal, which proportional selection would divide
+/// by. Fitness penalties stay far below it: every term at its worst plus [`STRANDED`] sums to at most 16.25.
+const EXP_NEG_MAX: f64 = 80.0;
+/// Times [`exp_neg`] halves its input before the series, and so squares the series after it.
+const EXP_NEG_HALVINGS: u32 = 8;
+/// Terms of the Taylor series in [`exp_neg`] after the constant 1.
+const EXP_NEG_TERMS: u32 = 8;
+
+/// `e^(−p)` for `p` in `[0, 80]` (clamped into it), built only from operations IEEE 754 rounds exactly, in a
+/// fixed order, so it gives the same bits on every platform; the platform's `exp` comes from its math library,
+/// which can differ in the last bit, and a last bit is enough to flip a fitness-weighted draw.
+///
+/// It computes `e^p = (e^(p / 2^8))^(2^8)` in `f64`: `x = p / 256` is at most 0.3125, where eight Taylor terms,
+/// in the nested form `1 + x(1 + x/2(1 + x/3(…)))`, leave a relative error below 1e-10; eight squarings raise
+/// that to the 256th power, growing the error 256-fold; and the reciprocal, rounded to `f32`, is the answer.
+/// Over the penalties fitness produces (`x` below 0.07) the series error is negligible and the result is within
+/// rounding of the true value, so it agrees with a good `f32::exp` to an ulp.
+///
+/// Every step is a non-decreasing function of its input under round-to-nearest (the series has only
+/// non-negative terms, squaring a positive number is increasing, and the reciprocal reverses the order), so
+/// the result never increases as `p` grows. At `p = 0` every step is exact and the result is exactly 1.
+fn exp_neg(p: f32) -> f32 {
+    let x = f64::from(p).clamp(0.0, EXP_NEG_MAX) / f64::from(1u32 << EXP_NEG_HALVINGS);
+    let mut e = 1.0;
+    for k in (1..=EXP_NEG_TERMS).rev() {
+        e = 1.0 + x / f64::from(k) * e;
+    }
+    for _ in 0..EXP_NEG_HALVINGS {
+        e *= e;
+    }
+    (1.0 / e) as f32
 }
 
 /// The genome `base` would become if every gene moved straight toward what `biome` rewards, by at most
@@ -129,8 +167,8 @@ pub const fn generations(_region: &Region) -> u32 {
 }
 
 /// Runs `generations` generations of selection under `biome` on `pool`, in place. Each generation keeps the
-/// [`ELITE`] fittest unchanged and fills the rest with mutated children of parents drawn in proportion to
-/// fitness. Pure given `rng`.
+/// fittest few unchanged and fills the rest with mutated children of parents drawn in proportion to fitness.
+/// Pure given `rng`.
 ///
 /// Selection is proportional rather than by rank so that pressure scales with how much a trait matters: a
 /// slight camouflage edge stays slight, instead of counting as much as surviving the heat once everything
@@ -218,7 +256,7 @@ impl RegionLife {
         let biome = region.biome.biome();
         let mut rng = region_rng(seed, b"settlers", region.id, CladeId(0));
         // Clades that could come to fit are likelier to settle; cubing sharpens that preference.
-        let mut weights: Vec<f32> = clades.iter().map(|c| potential(c, biome).powi(3)).collect();
+        let mut weights: Vec<f32> = clades.iter().map(|c| potential(c, biome)).map(|p| p * p * p).collect();
         let count = (MIN_CLADES + rng.below(MAX_CLADES - MIN_CLADES + 1)).min(clades.len());
         let mut chosen = Vec::with_capacity(count);
         for _ in 0..count {
@@ -316,6 +354,7 @@ mod tests {
     use super::*;
     use crate::clade::clades;
     use crate::genome::GENES;
+    use crate::hash::combine;
     use crate::world::World;
 
     fn biome(name: &str) -> BiomeId {
@@ -394,6 +433,74 @@ mod tests {
                 assert!(f > 0.0 && f <= 1.0, "{}: fitness {f} for {genome:?}", biome.name);
             }
         }
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // The platform's exp is the reference here, compared within a bound.
+    fn exact_exp_tracks_the_platform_exp() {
+        // Every penalty fitness can produce, and on to the clamp, in steps of 0.001.
+        for i in 0..=80_000 {
+            let p = i as f32 / 1000.0;
+            let (exact, platform) = (exp_neg(p), (-p).exp());
+            let error = ((exact - platform) / platform).abs();
+            assert!(error < 1e-6, "e^-{p}: {exact} against {platform}, relative error {error}");
+        }
+    }
+
+    #[test]
+    fn exact_exp_is_one_at_zero_then_falls_and_never_reaches_zero() {
+        assert_eq!(exp_neg(0.0).to_bits(), 1.0f32.to_bits());
+        let mut last = exp_neg(0.0);
+        for i in 1..=1_000_000 {
+            let p = i as f32 / 10_000.0;
+            let e = exp_neg(p);
+            assert!(e > 0.0 && e <= 1.0 && e.is_normal(), "e^-{p} = {e}");
+            if f64::from(p) <= EXP_NEG_MAX {
+                assert!(e < last, "e^-{p} = {e} does not fall below {last}");
+            } else {
+                assert_eq!(e, last, "past the clamp, e^-{p} = {e} should hold at {last}");
+            }
+            last = e;
+        }
+    }
+
+    /// Hashes the exact bits of everything grown in a region: each species' clade, pool, mean, abundance,
+    /// and sprite.
+    fn life_bits(life: &RegionLife) -> u64 {
+        let mut h = combine(life.region.anchor().0 as u64, life.region.anchor().1 as u64);
+        for s in &life.species {
+            h = combine(h, u64::from(s.id.clade.0));
+            let genes = s.pool.iter().chain([&s.mean]).flat_map(|g| g.genes());
+            for v in genes.chain([s.abundance]) {
+                h = combine(h, u64::from(v.to_bits()));
+            }
+            h = s.sprite.rgba().iter().fold(h, |h, &b| combine(h, u64::from(b)));
+        }
+        h
+    }
+
+    /// Evolution's exact output, pinned. A region's life is meant to be the same bits for the same seed on
+    /// every machine; the sim uses only exactly rounded float operations so that it can be.
+    ///
+    /// If this fails and nobody meant to change what evolution produces, the sim's arithmetic came out
+    /// differently on this platform or toolchain: something inexact (a math-library call, a fused
+    /// multiply-add, an unordered sum) has crept in, and a fitness-weighted draw went the other way. Find it;
+    /// don't update the constant. Update the constant only when the sim was changed on purpose (new fitness
+    /// terms, retuned weights, a different selection rule), and say so in the commit.
+    #[test]
+    fn evolution_is_pinned_to_exact_bits() {
+        let mut h = 0;
+        for seed in [1, 2, 3] {
+            let world = World::new(seed);
+            for (x, y) in [(0, 0), (400, -250)] {
+                let region = world.region(world.region_at(x, y)).unwrap();
+                h = combine(h, life_bits(&RegionLife::grow(seed, &clades(seed), &region)));
+            }
+        }
+        assert_eq!(
+            h, 0x88c9_037c_d476_d608,
+            "the sim's arithmetic changed; see this test's doc before touching the constant"
+        );
     }
 
     #[test]
