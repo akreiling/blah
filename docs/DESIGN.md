@@ -300,6 +300,18 @@ which matches our own read. So the first version is a thin slice through both ha
 - monsters drawn from each region's biome
 - bump-to-attack combat on the overworld
 
+The slice uses eight genes: size, limbs, covering, heat, cold, water, aggression, and hue. Covering bands run
+fur, feather, chitin, scale, slime, from warm and dry to bare and wet, so a small mutation is a plausible
+change.
+
+Each world has eight clades, one per silhouette family. Genes stretch and recolor a clade's silhouette but never
+swap it, which is what keeps a lineage recognizable across biomes.
+
+Selection is proportional to fitness rather than by tournament. Tournaments let a tiny camouflage edge count as
+much as surviving heat, and every lineage turned biome-colored. Pigment follows genes: heat- and cold-hardy
+creatures bleach pale, and water-adapted ones go dark. `just bestiary out.png [seed]` draws every clade across a
+row of biomes. It is the visual check that evolution shows.
+
 That makes a playable loop early: wander, meet evolved creatures, fight. Each half then gets deeper without
 waiting on the other. Taming, the pen, drift, and remote art come only once that loop is fun. The other
 risk is evolution that players can't see. The slice has to make differences between regions visible from the

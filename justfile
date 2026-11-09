@@ -18,3 +18,7 @@ lint:
 # Print a terrain map: just map [seed] [x] [y] [width] [height] [step] [--plain]
 map *args:
     {{cargo}} run --quiet --release -p blah-core --example ascii_map -- {{args}}
+
+# Write a contact sheet of every clade across biomes, and time region growth: just bestiary out.png [seed]
+bestiary *args:
+    {{cargo}} run --quiet --release -p blah-core --example bestiary_sheet -- {{args}}

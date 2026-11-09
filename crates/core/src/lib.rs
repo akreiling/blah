@@ -1,13 +1,18 @@
-//! The pure core of the game. For now: endless, deterministic terrain, its regions, and a wanderer walking
-//! it.
+//! The pure core of the game. For now: endless, deterministic terrain, its regions, the life evolved in
+//! them, and a wanderer walking it and fighting what it meets.
 //!
 //! The world is an endless grid of tiles. Each tile is a pure function of `(seed, x, y)`: four noise fields
 //! (elevation, moisture, temperature, age) sampled at the tile, and a biome looked up from the first three
 //! in [`BIOMES`]. Nothing is stored and nothing depends on the order tiles are asked for, so a tile read on
 //! its own equals the same tile read as part of a [`Chunk`], on any machine.
 //!
-//! Tiles group into [`Region`]s, the units life will live in, which are just as pure: see [`World::region_at`]
+//! Tiles group into [`Region`]s, the units life lives in, which are just as pure: see [`World::region_at`]
 //! and, for lookups on every step, [`RegionCache`].
+//!
+//! Life descends from a few [`Clade`]s per world. A creature is a [`Genome`], read into a [`Phenotype`]
+//! (stats, temperament, terrain, a description) and drawn as a [`Sprite`]. Each region's [`RegionLife`] is
+//! its clades evolved under its biome's [`Fitness`] row, so the same lineage looks and acts differently from
+//! biome to biome. A [`Game`] spawns individuals from those pools around the wanderer.
 //!
 //! This crate does no I/O, reads no clock, and starts no threads.
 //!
@@ -23,18 +28,40 @@
 
 mod biome;
 mod chunk;
+mod clade;
 mod fields;
 mod game;
+mod genome;
 mod hash;
+mod life;
+mod monster;
 mod names;
 mod noise;
+mod phenotype;
 mod region;
+mod sprite;
 mod world;
 
-pub use biome::{BIOMES, Band, Biome, BiomeId, SEA_LEVEL, classify};
+pub use biome::{BIOMES, Band, Biome, BiomeId, Fitness, SEA_LEVEL, classify};
 pub use chunk::{CHUNK_AREA, CHUNK_SIZE, Chunk, chunk_of, chunk_origin, local_of};
-pub use game::{Dir, Game, LAND_SEARCH_RADIUS, LOG_LIMIT, Log, Step, find_land};
+pub use clade::{BodyPlan, CLADES, Clade, CladeId, Family, Pattern, clades};
+pub use game::{
+    Comparison, DEATH_TURNS, DESPAWN_RADIUS, Dir, Game, LAND_SEARCH_RADIUS, LOG_LIMIT, Log, REGEN_TURNS, SPAWN_MAX,
+    SPAWN_MIN, Step, TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity, find_land, spawn_chance,
+};
+pub use genome::{GENES, Gene, Genome, gene_delta};
+pub use hash::Rng;
+pub use life::{
+    COMPARED, GENERATIONS, MARKS_AT, MAX_CLADES, MIN_CLADES, POOL_SIZE, RegionLife, Species, SpeciesId, TraitDelta,
+    compare, evolve, fitness, founders, generations, grow_pool, potential, reach_toward,
+};
+pub use monster::{ACTION_COST, MAX_ACTIONS, MISS_CHANCE, Monster, MonsterId, WANDERER_STATS, Wanderer, damage};
+pub use phenotype::{
+    AGGRESSIVE_AT, AQUATIC_AT, Access, COVERINGS, Covering, CoveringTraits, HARDY_AT, Phenotype, SKITTISH_BELOW,
+    SWIM_AT, Stats, Temperament, WADE_AT,
+};
 pub use region::{
     Bounds, CELL_SPACING, CORE_TILES, MAX_REGION_TILES, Means, Region, RegionCache, RegionId, SLIVER_TILES, STRAY_TILES,
 };
+pub use sprite::{SPRITE_SIZE, Sprite};
 pub use world::{Tile, World};

@@ -1,7 +1,14 @@
-//! Placeholder region names: the offline fallback until a remote model renames a region, or forever.
+//! Placeholder names for regions and species: the offline fallback until a remote model renames them, or
+//! forever.
 //!
-//! A name is a pure function of `(seed, region id, biome)`, drawn from the word lists below. All of the
-//! wording lives in this file as data. Names come in four shapes:
+//! Every name is a pure function of the seed and what it names, drawn from the word lists below. All of
+//! the wording lives in this file as data.
+//!
+//! A species name is a biome epithet and its clade's root: "Dune Skitter", "Fen Skitter". The root says
+//! which lineage it is and the epithet where it lives, so the relationship shows in the name. Every
+//! species of one region shares the region's epithet.
+//!
+//! Region names come in four shapes:
 //!
 //! - "the Glass Marsh": an adjective, either general or the biome's own, and a biome noun
 //! - "Ashfold Hills": a compound proper name built from English-like parts
@@ -12,72 +19,96 @@
 //! climate words live in each biome's own list.
 
 use crate::biome::BiomeId;
+use crate::clade::Family;
 use crate::hash::{combine, derive, mix};
 use crate::region::RegionId;
 
-/// One biome's flavor: what to call a place of this kind, and what places of this kind are like.
+/// One biome's flavor: what to call a place of this kind, what places of this kind are like, and what to
+/// call the things that live there.
 struct Flavor {
     /// Must equal a name in [`BIOMES`](crate::BIOMES); `every_biome_has_a_flavor` checks.
     biome: &'static str,
     nouns: &'static [&'static str],
     adjectives: &'static [&'static str],
+    /// First words of species names. Single words, so "Dune Skitter" stays two.
+    epithets: &'static [&'static str],
 }
 
-const fn flavor(biome: &'static str, nouns: &'static [&'static str], adjectives: &'static [&'static str]) -> Flavor {
-    Flavor { biome, nouns, adjectives }
+const fn flavor(
+    biome: &'static str,
+    nouns: &'static [&'static str],
+    adjectives: &'static [&'static str],
+    epithets: &'static [&'static str],
+) -> Flavor {
+    Flavor { biome, nouns, adjectives, epithets }
 }
 
 #[rustfmt::skip]
 const FLAVORS: &[Flavor] = &[
     flavor("Deep water",
         &["Deep", "Deeps", "Abyss", "Sea", "Gulf", "Trench", "Expanse"],
-        &["Drowned", "Sunless", "Fathomless", "Restless", "Salt", "Wide"]),
+        &["Drowned", "Sunless", "Fathomless", "Restless", "Salt", "Wide"],
+        &["Abyss", "Deep", "Brine", "Gulf", "Tide"]),
     flavor("Shallow water",
         &["Shallows", "Shoals", "Sound", "Bay", "Lagoon", "Strait", "Reach"],
-        &["Clear", "Tidal", "Rippling", "Sandy", "Bright", "Wading"]),
+        &["Clear", "Tidal", "Rippling", "Sandy", "Bright", "Wading"],
+        &["Shoal", "Reef", "Lagoon", "Surf", "Kelp"]),
     flavor("Snow peaks",
         &["Peaks", "Spires", "Crowns", "Horns", "Teeth", "Summits"],
-        &["White", "Frozen", "Frostbitten", "Howling", "Icebound", "Shining"]),
+        &["White", "Frozen", "Frostbitten", "Howling", "Icebound", "Shining"],
+        &["Peak", "Ice", "Crag", "Summit", "Glacier"]),
     flavor("Mountains",
         &["Mountains", "Crags", "Heights", "Range", "Tors", "Ridges"],
-        &["Jagged", "Stern", "Thundering", "Granite", "High", "Shattered"]),
+        &["Jagged", "Stern", "Thundering", "Granite", "High", "Shattered"],
+        &["Crag", "Tor", "Scree", "Ridge", "Granite"]),
     flavor("Badlands",
         &["Badlands", "Breaks", "Scarps", "Mesas", "Wastes", "Gullies"],
-        &["Scorched", "Red", "Cracked", "Rust", "Bleached", "Crumbling"]),
+        &["Scorched", "Red", "Cracked", "Rust", "Bleached", "Crumbling"],
+        &["Mesa", "Rust", "Gully", "Scarp", "Cinder"]),
     flavor("Hills",
         &["Hills", "Downs", "Rise", "Knolls", "Fells", "Uplands"],
-        &["Rolling", "Windswept", "Gentle", "Barrow", "Folded", "Tumbled"]),
+        &["Rolling", "Windswept", "Gentle", "Barrow", "Folded", "Tumbled"],
+        &["Hill", "Down", "Fell", "Barrow", "Knoll"]),
     flavor("Tundra",
         &["Tundra", "Barrens", "Steppe", "Flats", "Wastes", "Expanse"],
-        &["Frozen", "White", "Frostbitten", "Windswept", "Pale", "Bitter"]),
+        &["Frozen", "White", "Frostbitten", "Windswept", "Pale", "Bitter"],
+        &["Frost", "Rime", "Snow", "Tundra", "Permafrost"]),
     flavor("Beach",
         &["Strand", "Shore", "Sands", "Coast", "Shingle", "Spit"],
-        &["Bright", "Shell", "Driftwood", "Gull", "Tidewashed", "Pearl"]),
+        &["Bright", "Shell", "Driftwood", "Gull", "Tidewashed", "Pearl"],
+        &["Shore", "Strand", "Shingle", "Dune", "Shell"]),
     flavor("Taiga",
         &["Taiga", "Pinewood", "Firs", "Pines", "Spruces", "Needlewood"],
-        &["Snowbound", "Hushed", "Frosted", "Dark", "Weeping", "Resin"]),
+        &["Snowbound", "Hushed", "Frosted", "Dark", "Weeping", "Resin"],
+        &["Pine", "Spruce", "Needle", "Fir", "Resin"]),
     flavor("Swamp",
         &["Marsh", "Fen", "Fens", "Mire", "Bog", "Swamp", "Slough"],
-        &["Sodden", "Sunken", "Murky", "Misty", "Reedy", "Weeping"]),
+        &["Sodden", "Sunken", "Murky", "Misty", "Reedy", "Weeping"],
+        &["Fen", "Bog", "Mire", "Marsh", "Reed"]),
     flavor("Desert",
         &["Desert", "Sands", "Dunes", "Erg", "Waste", "Barrens"],
-        &["Burning", "Thirsting", "Bleached", "Shimmering", "Scorched", "Endless"]),
+        &["Burning", "Thirsting", "Bleached", "Shimmering", "Scorched", "Endless"],
+        &["Dune", "Sand", "Sun", "Dust", "Scorch"]),
     flavor("Savanna",
         &["Savanna", "Veld", "Plains", "Grasslands", "Scrub"],
-        &["Golden", "Sunlit", "Dusty", "Thorn", "Tawny", "Baking"]),
+        &["Golden", "Sunlit", "Dusty", "Thorn", "Tawny", "Baking"],
+        &["Veld", "Thorn", "Acacia", "Dust", "Tawny"]),
     flavor("Jungle",
         &["Jungle", "Tangle", "Wilds", "Thicket", "Canopy", "Rainwood"],
-        &["Green", "Tangled", "Steaming", "Humming", "Verdant", "Vine"]),
+        &["Green", "Tangled", "Steaming", "Humming", "Verdant", "Vine"],
+        &["Vine", "Canopy", "Jungle", "Orchid", "Liana"]),
     flavor("Forest",
         &["Forest", "Wood", "Weald", "Holt", "Woods", "Greenwood"],
-        &["Elder", "Mossy", "Deep", "Shaded", "Oaken", "Dim"]),
+        &["Elder", "Mossy", "Deep", "Shaded", "Oaken", "Dim"],
+        &["Wood", "Oak", "Moss", "Bracken", "Glade"]),
     flavor("Grassland",
         &["Plains", "Meadows", "Fields", "Prairie", "Leas", "Grasslands"],
-        &["Open", "Wide", "Long", "Gentle", "Wildflower", "Swaying"]),
+        &["Open", "Wide", "Long", "Gentle", "Wildflower", "Swaying"],
+        &["Meadow", "Prairie", "Field", "Clover", "Grass"]),
 ];
 
 /// The fallback for a biome missing from [`FLAVORS`], so a new table row still gets names.
-const FALLBACK: Flavor = flavor("", &["Lands", "Reaches", "Country"], &[]);
+const FALLBACK: Flavor = flavor("", &["Lands", "Reaches", "Country"], &[], &["Far"]);
 
 /// Adjectives that fit any biome.
 #[rustfmt::skip]
@@ -175,6 +206,40 @@ pub fn region_name(seed: u64, id: RegionId, biome: BiomeId) -> String {
     }
 }
 
+/// One family's possible clade roots. Each family has its own list, so roots never collide within a world.
+struct Roots {
+    family: Family,
+    roots: &'static [&'static str],
+}
+
+#[rustfmt::skip]
+const ROOTS: &[Roots] = &[
+    Roots { family: Family::Crawler, roots: &["Skitter", "Clicker", "Scuttler", "Creeper", "Borer", "Tickler"] },
+    Roots { family: Family::Serpent, roots: &["Coil", "Slither", "Asp", "Hooder", "Winder", "Hisser"] },
+    Roots { family: Family::Beast,   roots: &["Prowler", "Gnasher", "Mauler", "Snuffler", "Brute", "Grizzle"] },
+    Roots { family: Family::Flier,   roots: &["Flitter", "Swoop", "Glider", "Screecher", "Wingling", "Kite"] },
+    Roots { family: Family::Blob,    roots: &["Gloop", "Ooze", "Wobbler", "Jelly", "Quiver", "Blub"] },
+    Roots { family: Family::Crab,    roots: &["Pincher", "Clacker", "Snapper", "Nipper", "Sidler", "Clawback"] },
+    Roots { family: Family::Toad,    roots: &["Croaker", "Gulper", "Hopper", "Bloat", "Puffer", "Warty"] },
+    Roots { family: Family::Ray,     roots: &["Glide", "Skate", "Lash", "Manta", "Drifter", "Whiptail"] },
+];
+
+/// The root name of `family`'s clade in the world for `seed`.
+#[must_use]
+pub fn clade_root(seed: u64, family: Family) -> &'static str {
+    let roots = ROOTS.iter().find(|r| r.family == family).map_or(&["Thing"][..], |r| r.roots);
+    Draw(combine(derive(seed, b"cladroot"), family as u64)).pick(roots)
+}
+
+/// The placeholder name of the species of clade `root` in region `id` of biome `biome`: the region's
+/// epithet and the root, as in "Dune Skitter".
+#[must_use]
+pub fn species_name(seed: u64, id: RegionId, biome: BiomeId, root: &str) -> String {
+    let (x, y) = id.anchor();
+    let mut draw = Draw(combine(combine(derive(seed, b"epithets"), x as u64), y as u64));
+    format!("{} {root}", draw.pick(flavor_of(biome).epithets))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +261,22 @@ mod tests {
             let part = part.to_lowercase();
             assert!(!nouns.contains(&part), "{part} is also a noun");
         }
+    }
+
+    #[test]
+    fn species_names_pair_an_epithet_with_the_root() {
+        for flavor in FLAVORS {
+            assert!(!flavor.epithets.is_empty(), "{}", flavor.biome);
+            assert!(flavor.epithets.iter().all(|e| !e.contains(' ')), "{}", flavor.biome);
+        }
+        for roots in ROOTS {
+            assert!(roots.roots.iter().all(|r| !r.contains(' ')));
+        }
+        assert_eq!(ROOTS.len(), Family::ALL.len());
+        let id = crate::World::new(3).region_at(0, 0);
+        let desert = BiomeId::all().find(|b| b.biome().name == "Desert").unwrap();
+        let name = species_name(3, id, desert, "Skitter");
+        assert!(name.ends_with(" Skitter") && name.split(' ').count() == 2, "{name}");
     }
 
     #[test]

@@ -7,3 +7,7 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Only the bestiary_sheet example writes images; the library itself never does I/O.
+png = "0.18"
