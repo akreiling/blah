@@ -10,14 +10,17 @@
 //! frontier: [`founders`] is where neighboring regions' pools will seed a new region instead of the bare
 //! clade base, and [`generations`] is where region age will set how much history a region gets.
 
-use crate::biome::{Biome, BiomeId, Fitness};
+use crate::biome::{
+    Biome, BiomeId, Fitness, INSULATION_SLACK, STRANDED, W_AGGRESSION, W_CAMO, W_DRY, W_INSULATION, W_LIMBS, W_SIZE,
+    W_TOLERANCE, W_WET,
+};
 use crate::clade::{Clade, CladeId};
 use crate::genome::{Gene, Genome, gene_delta};
 use crate::hash::Rng;
 use crate::names;
 use crate::phenotype::{COVERINGS, Phenotype};
 use crate::region::{Region, RegionId};
-use crate::sprite::{Sprite, rgb_to_hsv};
+use crate::sprite::Sprite;
 
 /// Genomes in a population's pool.
 pub const POOL_SIZE: usize = 24;
@@ -39,55 +42,28 @@ const ELITE: usize = 2;
 /// How far each gene can move toward a biome's ideal when judging how fit a clade could become.
 const REACH: f32 = 0.35;
 
-/// Weight of the squared distance from the preferred heat and cold tolerances.
-const W_TOLERANCE: f32 = 2.5;
-/// Weight of the squared distance from the preferred water affinity.
-const W_WET: f32 = 3.0;
-/// Weight of the squared distance of insulation from a band around the preferred insulation.
-const W_INSULATION: f32 = 1.4;
-/// Half-width of the band of insulation a biome accepts without penalty. Wide enough that a lineage's own
-/// covering survives mild biomes and only harsh ones remake it.
-const INSULATION_SLACK: f32 = 0.25;
-/// Weight of the squared shortfall of a biome's wetness below what a covering needs (slime dries out).
-const W_DRY: f32 = 3.0;
-/// Weight of the squared distance from the preferred size.
-const W_SIZE: f32 = 1.5;
-/// Weight of limb pressure, per unit of limbs gene.
-const W_LIMBS: f32 = 0.4;
-/// Weight of the squared distance from the preferred aggression.
-const W_AGGRESSION: f32 = 2.0;
-/// Weight of camouflage: squared hue distance from the biome's own color, scaled by how colorful the biome
-/// is, so gray tundra barely cares and green jungle does. Kept weak: enough to drift a lineage's color
-/// toward its ground, not enough to make every creature in a biome the same color.
-const W_CAMO: f32 = 0.1;
-/// Penalty for being unable to stand on the biome at all.
-const STRANDED: f32 = 3.0;
-
 /// How well a phenotype suits a biome, in `(0, 1]`: `exp(−penalty)`, where the penalty sums the terms
-/// described on [`Fitness`] with the weights in this module.
+/// described on [`Fitness`] with the weights beside [`BIOMES`](crate::BIOMES). Every term is zero or more,
+/// and all of them are zero only for a creature that is exactly what the biome wants.
 #[must_use]
 pub fn fitness(p: &Phenotype, biome: &Biome) -> f32 {
     let f: &Fitness = &biome.fitness;
     let g = &p.genome;
+    let limbs = g.get(Gene::Limbs);
+    // Limb pressure costs the shortfall from the end it pays for: all legs when positive, none when negative.
+    let limb_shortfall = f.limbs.max(0.0) * (1.0 - limbs) + (-f.limbs).max(0.0) * limbs;
     let mut penalty = W_TOLERANCE * ((p.heat - f.heat).powi(2) + (p.cold - f.cold).powi(2))
         + W_WET * (p.water - f.wet).powi(2)
         + W_INSULATION * ((p.covering.traits().insulation - f.insulation).abs() - INSULATION_SLACK).max(0.0).powi(2)
         + W_DRY * (p.covering.traits().needs_wet - f.wet).max(0.0).powi(2)
         + W_SIZE * (p.size - f.size).powi(2)
-        - W_LIMBS * f.limbs * g.get(Gene::Limbs)
-        + W_AGGRESSION * (g.get(Gene::Aggression) - f.aggression).powi(2);
-    let (hue, saturation) = camouflage(biome);
-    penalty += W_CAMO * saturation * (2.0 * gene_delta(Gene::Hue, p.hue, hue)).powi(2);
+        + W_LIMBS * limb_shortfall
+        + W_AGGRESSION * (g.get(Gene::Aggression) - f.aggression).powi(2)
+        + W_CAMO * f.camo_strength * (2.0 * gene_delta(Gene::Hue, p.hue, f.camo_hue)).powi(2);
     if !p.access.allows(biome) {
         penalty += STRANDED;
     }
     (-penalty).exp()
-}
-
-/// The hue and saturation of a biome's color, which camouflage is judged against.
-fn camouflage(biome: &Biome) -> (f32, f32) {
-    let (h, s, _) = rgb_to_hsv(biome.color);
-    (h, s)
 }
 
 /// The genome `base` would become if every gene moved straight toward what `biome` rewards, by at most
@@ -108,7 +84,6 @@ pub fn reach_toward(base: &Genome, biome: &Biome, reach: f32) -> Genome {
     } else {
         base.get(Gene::Limbs)
     };
-    let (hue, _) = camouflage(biome);
     let targets = [
         (Gene::Size, f.size),
         (Gene::Limbs, limbs),
@@ -117,7 +92,7 @@ pub fn reach_toward(base: &Genome, biome: &Biome, reach: f32) -> Genome {
         (Gene::Cold, f.cold),
         (Gene::Water, f.wet),
         (Gene::Aggression, f.aggression),
-        (Gene::Hue, hue),
+        (Gene::Hue, f.camo_hue),
     ];
     let mut out = *base;
     for (gene, target) in targets {
@@ -340,6 +315,7 @@ pub fn compare(species: &Species, other: &Species) -> Vec<TraitDelta> {
 mod tests {
     use super::*;
     use crate::clade::clades;
+    use crate::genome::GENES;
     use crate::world::World;
 
     fn biome(name: &str) -> BiomeId {
@@ -402,6 +378,41 @@ mod tests {
     }
 
     #[test]
+    fn fitness_stays_in_its_range() {
+        // Every corner of the genome cube and a spread inside it, scored in every biome, along with each
+        // biome's own ideal reached from every corner: near the ideal is where a bonus would overshoot 1.
+        let corners: Vec<Genome> = (0..1u32 << GENES)
+            .map(|bits| Genome::new(std::array::from_fn(|i| if bits >> i & 1 == 1 { 1.0 } else { 0.0 })))
+            .collect();
+        let mut rng = Rng::new(17);
+        let spread: Vec<Genome> = (0..500).map(|_| Genome::new(std::array::from_fn(|_| rng.unit()))).collect();
+        for id in BiomeId::all() {
+            let biome = id.biome();
+            let ideals = corners.iter().map(|g| reach_toward(g, biome, 1.0));
+            for genome in corners.iter().copied().chain(spread.iter().copied()).chain(ideals) {
+                let f = fitness(&Phenotype::of(&genome), biome);
+                assert!(f > 0.0 && f <= 1.0, "{}: fitness {f} for {genome:?}", biome.name);
+            }
+        }
+    }
+
+    #[test]
+    fn limb_pressure_pays_toward_its_end() {
+        let fit_with = |name: &str, limbs: f32| {
+            let biome = biome(name).biome();
+            let mut g = reach_toward(&Genome::new([0.5; GENES]), biome, 1.0);
+            g.set(Gene::Limbs, limbs);
+            fitness(&Phenotype::of(&g), biome)
+        };
+        // Rough ground pays for legs, water for none, and the end paid for costs nothing.
+        assert!(fit_with("Mountains", 1.0) > fit_with("Mountains", 0.5));
+        assert!(fit_with("Deep water", 0.0) > fit_with("Deep water", 0.5));
+        assert!(fit_with("Mountains", 1.0) <= 1.0 && fit_with("Deep water", 0.0) <= 1.0);
+        // Where there is no pressure, legs don't matter.
+        assert_eq!(fit_with("Grassland", 0.0), fit_with("Grassland", 1.0));
+    }
+
+    #[test]
     fn region_life_picks_a_few_clades_and_shares_add_up() {
         let world = World::new(9);
         let c = clades(9);
@@ -414,6 +425,18 @@ mod tests {
         for s in &life.species {
             assert_eq!(s.pool.len(), POOL_SIZE);
             assert!(s.name.ends_with(c[s.id.clade.0 as usize].root));
+        }
+        // Across many regions, each holds distinct clades, in clade order.
+        for seed in [9, 10, 11] {
+            let world = World::new(seed);
+            let c = clades(seed);
+            for i in 0..12 {
+                let region = world.region(world.region_at(i * 150 - 900, (i * 97) % 600 - 300)).unwrap();
+                let life = RegionLife::grow(seed, &c, &region);
+                let ids: Vec<CladeId> = life.species.iter().map(|s| s.id.clade).collect();
+                assert!(ids.windows(2).all(|w| w[0] < w[1]), "seed {seed} {}: clades {ids:?}", region.name);
+                assert!((MIN_CLADES..=MAX_CLADES).contains(&ids.len()), "seed {seed} {}: {ids:?}", region.name);
+            }
         }
     }
 

@@ -92,11 +92,11 @@ impl Access {
     /// Whether a creature with this access can stand on `biome`.
     #[must_use]
     pub const fn allows(self, biome: &Biome) -> bool {
-        match (biome.water, biome.passable) {
-            (false, true) => self.land,
-            (false, false) => false,
-            (true, true) => self.shallow,
-            (true, false) => self.deep,
+        match (biome.water, biome.deep) {
+            (true, true) => self.deep,
+            (true, false) => self.shallow,
+            // Land the wanderer can't cross (snow peaks) is closed to creatures too.
+            (false, _) => self.land && biome.passable,
         }
     }
 }

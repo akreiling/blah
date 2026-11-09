@@ -194,7 +194,17 @@ mod tests {
         for (i, clade) in c.iter().enumerate() {
             assert_eq!((clade.id.0 as usize, clade.plan.family), (i, Family::ALL[i]));
         }
-        let roots: std::collections::HashSet<_> = c.iter().map(|c| c.root).collect();
-        assert_eq!(roots.len(), CLADES, "root names must be unique within a world");
+    }
+
+    #[test]
+    fn roots_are_unique_within_every_world_and_vary_between_worlds() {
+        let mut seen = std::collections::HashSet::new();
+        for seed in (0..200).chain([u64::MAX]) {
+            let c = clades(seed);
+            let roots: std::collections::HashSet<_> = c.iter().map(|c| c.root).collect();
+            assert_eq!(roots.len(), CLADES, "seed {seed}: root names must be unique within a world");
+            seen.extend(roots);
+        }
+        assert!(seen.len() > 2 * CLADES, "only {} roots across 201 worlds", seen.len());
     }
 }

@@ -2,7 +2,8 @@
 //!
 //! Every biome is one row with its look, its game properties, the climate envelope it claims, and the
 //! creature it rewards. Retuning or adding a biome is an edit to [`BIOMES`] and nothing else; code refers
-//! to biomes by their properties (`passable`, `water`) rather than by name.
+//! to biomes by their properties (`passable`, `water`, `deep`) rather than by name. The weights that turn a
+//! row's [`Fitness`] into one score sit beside the table, so all of what selection rewards is in this file.
 
 /// An inclusive range of a field value in `[0, 1]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,7 +42,11 @@ pub struct Biome {
     pub passable: bool,
     /// Whether this is open water, for coastline and swimmer logic.
     pub water: bool,
-    /// Placeholder for the food web: plant biomass relative to the richest biome. Not tuned yet.
+    /// Whether this water is too deep to wade, so only swimmers enter it. Only water rows are deep.
+    pub deep: bool,
+    /// Plant biomass relative to the richest biome, in `[0, 1]`. It sets how many creatures a region holds
+    /// and how often they appear (see [`capacity`](crate::capacity) and
+    /// [`spawn_chance`](crate::spawn_chance)), and later the base of the food web.
     pub productivity: f32,
     /// Elevation this biome claims.
     pub elevation: Band,
@@ -55,9 +60,11 @@ pub struct Biome {
 
 /// What a biome rewards in a creature: the fitness function, as data.
 ///
-/// Limbs are a pressure, one way or the other. Everything else is a target the creature is scored against
-/// by squared distance, so tolerating heat that never comes costs as much as lacking it. The weights that
-/// turn these into one score live with the scoring, in `life.rs`.
+/// Limbs are a pressure, one way or the other. Camouflage is a hue the creature is scored against by how
+/// far its own hue is around the wheel, scaled by how much it matters here. Everything else is a target the
+/// creature is scored against by squared distance, so tolerating heat that never comes costs as much as
+/// lacking it. The weights that turn these into one score sit beside [`BIOMES`];
+/// [`fitness`](crate::fitness) does the scoring.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fitness {
     /// Preferred heat tolerance: how hot it gets.
@@ -76,6 +83,12 @@ pub struct Fitness {
     pub limbs: f32,
     /// Preferred aggression: high where food is scarce, low on open plains where prey survives by running.
     pub aggression: f32,
+    /// The hue that hides a creature here, in `[0, 1)` around the color wheel from red: the ground's own
+    /// color. Set apart from the display color so that retouching the map palette never changes evolution.
+    pub camo_hue: f32,
+    /// How much camouflage matters here, in `[0, 1]`: how colorful the ground is, so gray tundra barely
+    /// cares and green jungle does.
+    pub camo_strength: f32,
 }
 impl Biome {
     /// Whether this biome's envelope contains the given climate.
@@ -125,16 +138,28 @@ const fn row(
     color: [u8; 3],
     passable: bool,
     water: bool,
+    deep: bool,
     productivity: f32,
     bands: [Band; 3],
     fitness: Fitness,
 ) -> Biome {
     let [elevation, moisture, temperature] = bands;
-    Biome { name, glyph, color, passable, water, productivity, elevation, moisture, temperature, fitness }
+    Biome { name, glyph, color, passable, water, deep, productivity, elevation, moisture, temperature, fitness }
 }
 
-const fn fit(heat: f32, cold: f32, wet: f32, insulation: f32, size: f32, limbs: f32, aggression: f32) -> Fitness {
-    Fitness { heat, cold, wet, insulation, size, limbs, aggression }
+#[expect(clippy::too_many_arguments, reason = "one argument per table column")]
+const fn fit(
+    heat: f32,
+    cold: f32,
+    wet: f32,
+    insulation: f32,
+    size: f32,
+    limbs: f32,
+    aggression: f32,
+    camo_hue: f32,
+    camo_strength: f32,
+) -> Fitness {
+    Fitness { heat, cold, wet, insulation, size, limbs, aggression, camo_hue, camo_strength }
 }
 
 const ANY: Band = Band::ANY;
@@ -150,42 +175,72 @@ const fn b(min: f32, max: f32) -> Band {
 /// thresholds were tuned by eye with the `ascii_map` example. Cold coasts are tundra rather than beach
 /// because Tundra sits above Beach.
 ///
-/// Each row's second line is its [`Fitness`], tuned by eye with the `bestiary_sheet` example.
+/// Each row's second line is its [`Fitness`], tuned by eye with the `bestiary_sheet` example. Its last two
+/// columns are camouflage: the hue that hides a creature and how much hiding matters. They start from the
+/// hue and saturation of the row's display color, but are set by hand so the palette can change on its own.
 #[rustfmt::skip]
 pub const BIOMES: &[Biome] = &[
-    //  name             glyph  color             pass   water  prod  elevation        moisture         temperature
-    //  fit( heat,  cold,   wet, insul,  size, limbs,  aggr)
-    row("Deep water",    '~', [ 22,  54, 112], false, true,  0.20, [b(0.000, 0.300), ANY,             ANY            ],
-        fit( 0.10,  0.50,  1.00,  0.05,  0.75, -1.00,  0.70)),
-    row("Shallow water", '-', [ 48, 104, 170], true,  true,  0.50, [b(0.300, SEA),   ANY,             ANY            ],
-        fit( 0.30,  0.20,  0.85,  0.10,  0.45, -0.70,  0.40)),
-    row("Snow peaks",    'A', [236, 240, 246], false, false, 0.02, [b(0.860, 1.000), ANY,             b(0.000, 0.320)],
-        fit( 0.00,  1.00,  0.15,  1.00,  0.70,  0.40,  0.60)),
-    row("Mountains",     '^', [128, 118, 110], true,  false, 0.15, [b(0.790, 1.000), ANY,             ANY            ],
-        fit( 0.10,  0.70,  0.20,  0.70,  0.55,  0.60,  0.60)),
-    row("Badlands",      '#', [168,  84,  52], true,  false, 0.08, [b(0.700, 1.000), b(0.000, 0.250), b(0.600, 1.000)],
-        fit( 0.90,  0.15,  0.05,  0.25,  0.35,  0.50,  0.80)),
-    row("Hills",         'n', [118, 132,  82], true,  false, 0.40, [b(0.720, 1.000), ANY,             ANY            ],
-        fit( 0.20,  0.40,  0.25,  0.65,  0.50,  0.30,  0.45)),
-    row("Tundra",        '_', [168, 178, 168], true,  false, 0.15, [ANY,             ANY,             b(0.000, 0.130)],
-        fit( 0.00,  1.00,  0.25,  1.00,  0.80,  0.00,  0.55)),
-    row("Beach",         '.', [226, 210, 150], true,  false, 0.20, [b(SEA,   0.407), ANY,             ANY            ],
-        fit( 0.50,  0.10,  0.55,  0.25,  0.35,  0.00,  0.30)),
-    row("Taiga",         't', [ 52,  98,  82], true,  false, 0.40, [ANY,             b(0.400, 1.000), b(0.000, 0.380)],
-        fit( 0.05,  0.80,  0.35,  0.90,  0.65,  0.00,  0.50)),
-    row("Swamp",         ',', [ 74,  96,  60], true,  false, 0.80, [b(SEA,   0.520), b(0.700, 1.000), b(0.380, 1.000)],
-        fit( 0.50,  0.10,  0.75,  0.00,  0.50, -0.40,  0.65)),
-    row("Desert",        ':', [222, 196, 120], true,  false, 0.10, [ANY,             b(0.000, 0.280), b(0.450, 1.000)],
-        fit( 1.00,  0.10,  0.00,  0.30,  0.25,  0.30,  0.75)),
-    row("Savanna",       ';', [184, 170,  86], true,  false, 0.50, [ANY,             b(0.000, 0.520), b(0.640, 1.000)],
-        fit( 0.75,  0.05,  0.15,  0.20,  0.75,  0.20,  0.45)),
-    row("Jungle",        '%', [ 32, 120,  48], true,  false, 1.00, [ANY,             ANY,             b(0.640, 1.000)],
-        fit( 0.70,  0.00,  0.50,  0.10,  0.60,  0.00,  0.60)),
-    row("Forest",        '&', [ 46, 110,  58], true,  false, 0.70, [ANY,             b(0.480, 1.000), ANY            ],
-        fit( 0.20,  0.30,  0.40,  0.60,  0.50,  0.00,  0.45)),
-    row("Grassland",     '"', [118, 168,  78], true,  false, 0.60, [ANY,             ANY,             ANY            ],
-        fit( 0.30,  0.25,  0.30,  0.55,  0.55,  0.00,  0.20)),
+    //  name             glyph  color             pass   water  deep   prod  elevation        moisture         temperature
+    //  fit( heat,  cold,   wet, insul,  size, limbs,  aggr,   hue,  camo)
+    row("Deep water",    '~', [ 22,  54, 112], false, true,  true,  0.20, [b(0.000, 0.300), ANY,             ANY            ],
+        fit( 0.10,  0.50,  1.00,  0.05,  0.75, -1.00,  0.70, 0.607, 0.804)),
+    row("Shallow water", '-', [ 48, 104, 170], true,  true,  false, 0.50, [b(0.300, SEA),   ANY,             ANY            ],
+        fit( 0.30,  0.20,  0.85,  0.10,  0.45, -0.70,  0.40, 0.590, 0.718)),
+    row("Snow peaks",    'A', [236, 240, 246], false, false, false, 0.02, [b(0.860, 1.000), ANY,             b(0.000, 0.320)],
+        fit( 0.00,  1.00,  0.15,  1.00,  0.70,  0.40,  0.60, 0.600, 0.041)),
+    row("Mountains",     '^', [128, 118, 110], true,  false, false, 0.15, [b(0.790, 1.000), ANY,             ANY            ],
+        fit( 0.10,  0.70,  0.20,  0.70,  0.55,  0.60,  0.60, 0.074, 0.141)),
+    row("Badlands",      '#', [168,  84,  52], true,  false, false, 0.08, [b(0.700, 1.000), b(0.000, 0.250), b(0.600, 1.000)],
+        fit( 0.90,  0.15,  0.05,  0.25,  0.35,  0.50,  0.80, 0.046, 0.690)),
+    row("Hills",         'n', [118, 132,  82], true,  false, false, 0.40, [b(0.720, 1.000), ANY,             ANY            ],
+        fit( 0.20,  0.40,  0.25,  0.65,  0.50,  0.30,  0.45, 0.213, 0.379)),
+    row("Tundra",        '_', [168, 178, 168], true,  false, false, 0.15, [ANY,             ANY,             b(0.000, 0.130)],
+        fit( 0.00,  1.00,  0.25,  1.00,  0.80,  0.00,  0.55, 0.333, 0.056)),
+    row("Beach",         '.', [226, 210, 150], true,  false, false, 0.20, [b(SEA,   0.407), ANY,             ANY            ],
+        fit( 0.50,  0.10,  0.55,  0.25,  0.35,  0.00,  0.30, 0.132, 0.336)),
+    row("Taiga",         't', [ 52,  98,  82], true,  false, false, 0.40, [ANY,             b(0.400, 1.000), b(0.000, 0.380)],
+        fit( 0.05,  0.80,  0.35,  0.90,  0.65,  0.00,  0.50, 0.442, 0.469)),
+    row("Swamp",         ',', [ 74,  96,  60], true,  false, false, 0.80, [b(SEA,   0.520), b(0.700, 1.000), b(0.380, 1.000)],
+        fit( 0.50,  0.10,  0.75,  0.00,  0.50, -0.40,  0.65, 0.269, 0.375)),
+    row("Desert",        ':', [222, 196, 120], true,  false, false, 0.10, [ANY,             b(0.000, 0.280), b(0.450, 1.000)],
+        fit( 1.00,  0.10,  0.00,  0.30,  0.25,  0.30,  0.75, 0.124, 0.459)),
+    row("Savanna",       ';', [184, 170,  86], true,  false, false, 0.50, [ANY,             b(0.000, 0.520), b(0.640, 1.000)],
+        fit( 0.75,  0.05,  0.15,  0.20,  0.75,  0.20,  0.45, 0.143, 0.533)),
+    row("Jungle",        '%', [ 32, 120,  48], true,  false, false, 1.00, [ANY,             ANY,             b(0.640, 1.000)],
+        fit( 0.70,  0.00,  0.50,  0.10,  0.60,  0.00,  0.60, 0.364, 0.733)),
+    row("Forest",        '&', [ 46, 110,  58], true,  false, false, 0.70, [ANY,             b(0.480, 1.000), ANY            ],
+        fit( 0.20,  0.30,  0.40,  0.60,  0.50,  0.00,  0.45, 0.365, 0.582)),
+    row("Grassland",     '"', [118, 168,  78], true,  false, false, 0.60, [ANY,             ANY,             ANY            ],
+        fit( 0.30,  0.25,  0.30,  0.55,  0.55,  0.00,  0.20, 0.259, 0.536)),
 ];
+
+// The weights that turn a biome's [`Fitness`] into one score, the same for every biome; see
+// [`fitness`](crate::fitness). Each term is a penalty, zero when the creature is just what the biome wants.
+
+/// Weight of the squared distance from the preferred heat and cold tolerances.
+pub(crate) const W_TOLERANCE: f32 = 2.5;
+/// Weight of the squared distance from the preferred water affinity.
+pub(crate) const W_WET: f32 = 3.0;
+/// Weight of the squared distance of insulation from a band around the preferred insulation.
+pub(crate) const W_INSULATION: f32 = 1.4;
+/// Half-width of the band of insulation a biome accepts without penalty. Wide enough that a lineage's own
+/// covering survives mild biomes and only harsh ones remake it.
+pub(crate) const INSULATION_SLACK: f32 = 0.25;
+/// Weight of the squared shortfall of a biome's wetness below what a covering needs (slime dries out).
+pub(crate) const W_DRY: f32 = 3.0;
+/// Weight of the squared distance from the preferred size.
+pub(crate) const W_SIZE: f32 = 1.5;
+/// Weight of limb pressure: per unit of pressure, the cost of the whole way from the limbs gene to the end
+/// the pressure pays for.
+pub(crate) const W_LIMBS: f32 = 0.4;
+/// Weight of the squared distance from the preferred aggression.
+pub(crate) const W_AGGRESSION: f32 = 2.0;
+/// Weight of camouflage: squared hue distance from [`Fitness::camo_hue`], scaled by
+/// [`Fitness::camo_strength`]. Kept weak: enough to drift a lineage's color toward its ground, not enough
+/// to make every creature in a biome the same color.
+pub(crate) const W_CAMO: f32 = 0.1;
+/// Penalty for being unable to stand on the biome at all.
+pub(crate) const STRANDED: f32 = 3.0;
 
 #[cfg(test)]
 mod tests {
@@ -198,6 +253,18 @@ mod tests {
         let names: HashSet<&str> = BIOMES.iter().map(|b| b.name).collect();
         assert_eq!(glyphs.len(), BIOMES.len());
         assert_eq!(names.len(), BIOMES.len());
+    }
+
+    #[test]
+    fn only_water_is_deep_and_fitness_columns_are_in_range() {
+        for row in BIOMES {
+            assert!(!row.deep || row.water, "{} is deep but not water", row.name);
+            let f = row.fitness;
+            assert!((0.0..1.0).contains(&f.camo_hue), "{}: camo hue {}", row.name, f.camo_hue);
+            assert!((0.0..=1.0).contains(&f.camo_strength), "{}: camo strength {}", row.name, f.camo_strength);
+            assert!((-1.0..=1.0).contains(&f.limbs), "{}: limb pressure {}", row.name, f.limbs);
+            assert!((0.0..=1.0).contains(&row.productivity), "{}: productivity {}", row.name, row.productivity);
+        }
     }
 
     #[test]

@@ -583,25 +583,6 @@ pub(crate) fn hsv(h: f32, s: f32, v: f32) -> [u8; 3] {
     [byte(r), byte(g), byte(b)]
 }
 
-/// Hue `[0, 1)`, saturation, and value of an RGB color.
-pub(crate) fn rgb_to_hsv([r, g, b]: [u8; 3]) -> (f32, f32, f32) {
-    let (r, g, b) = (f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0);
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let d = max - min;
-    let h = if d == 0.0 {
-        0.0
-    } else if max == r {
-        ((g - b) / d).rem_euclid(6.0) / 6.0
-    } else if max == g {
-        ((b - r) / d + 2.0) / 6.0
-    } else {
-        ((r - g) / d + 4.0) / 6.0
-    };
-    let s = if max == 0.0 { 0.0 } else { d / max };
-    (h, s, max)
-}
-
 // The families. Each paints back to front, raising the layer for each part that should read as separate.
 // Local units: at full size one unit is one pixel, and the right half spans u = 0 to 7.
 
@@ -815,7 +796,7 @@ fn ray(c: &mut Canvas, p: &BodyPlan, pairs: u8) {
 mod tests {
     use super::*;
     use crate::clade::clades;
-    use crate::genome::{GENES, Genome};
+    use crate::genome::{Gene, Genome};
 
     fn sprites() -> Vec<Sprite> {
         let mut out = Vec::new();
@@ -856,13 +837,48 @@ mod tests {
 
     #[test]
     fn genes_change_the_picture() {
-        let clade = &clades(7)[0];
-        let base = Phenotype::of(&clade.base);
-        let mut genes = clade.base.genes();
-        genes[GENES - 1] = (genes[GENES - 1] + 0.5) % 1.0;
-        let recolored = Phenotype::of(&Genome::new(genes));
+        // Each gene the module doc says shows, moved between two values that differ in what is drawn, changes
+        // the sprite for every family. Heat and cold only bleach past a threshold, and water only darkens past
+        // wading, so their pairs straddle those.
+        let pairs = [
+            (Gene::Size, 0.1, 0.9),
+            (Gene::Limbs, 0.0, 1.0),
+            (Gene::Covering, 0.05, 0.95),
+            (Gene::Heat, 0.2, 1.0),
+            (Gene::Cold, 0.2, 1.0),
+            (Gene::Water, 0.3, 1.0),
+            (Gene::Hue, 0.1, 0.6),
+        ];
         let biome = BiomeId(14);
-        assert_ne!(Sprite::draw(&base, &clade.plan, biome), Sprite::draw(&recolored, &clade.plan, biome));
+        for clade in clades(7) {
+            for (gene, a, b) in pairs {
+                let draw = |v: f32| {
+                    let mut g = clade.base;
+                    g.set(gene, v);
+                    Sprite::draw(&Phenotype::of(&g), &clade.plan, biome)
+                };
+                assert_ne!(draw(a), draw(b), "{:?}: {gene:?} {a} vs {b} looks the same", clade.plan.family);
+            }
+        }
+    }
+
+    /// Hue `[0, 1)`, saturation, and value of an RGB color: the inverse of [`hsv`], to check it against.
+    fn rgb_to_hsv([r, g, b]: [u8; 3]) -> (f32, f32, f32) {
+        let (r, g, b) = (f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0);
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let d = max - min;
+        let h = if d == 0.0 {
+            0.0
+        } else if max == r {
+            ((g - b) / d).rem_euclid(6.0) / 6.0
+        } else if max == g {
+            ((b - r) / d + 2.0) / 6.0
+        } else {
+            ((r - g) / d + 4.0) / 6.0
+        };
+        let s = if max == 0.0 { 0.0 } else { d / max };
+        (h, s, max)
     }
 
     #[test]
