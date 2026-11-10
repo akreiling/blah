@@ -25,6 +25,18 @@ questions were reworded to stop describing the old rules, so those two are not d
 
 The spear gained an upside (armored foes) and the greatsword a third. Plate is still lopsided against
 the listed situations. The most important missing rule moved from gear swapping to the Focus economy.
+
+**Third run** ([`../jev/loadout-review-2026-11-10-3.md`](../jev/loadout-review-2026-11-10-3.md)), after
+the approved [death-rule revision](../../systems/actions.md#death-and-retreat): wake at home with
+1 Health and no Focus, recover gradually at safe home, and retrieve carried gear from where you fell.
+The script also no longer describes death as a Focus refill. The death-exploit question was unchanged
+from the second run; its probability fell from 0.82 to 0.28. The review cost $0.001537.
+This is an opinion on the revised text, not evidence that the unimplemented rule works in play.
+Focus economy remains the highest-ranked missing rule (0.33); action ambiguity remains high (0.83).
+
+The packet below preserves the original rules and prototype evidence for context. Its full-restore
+death design is superseded by the linked rule; the executable prototype still uses full restoration.
+
 ## Instructions for the reviewer
 
 You are reviewing a proposed design and a small executable prototype for a turn-based, ecology-driven

@@ -159,10 +159,11 @@ ecology.
 
 ### Death and time
 
-Dying is a legitimate way out, so its cost has to be real. The world keeps going during the 1,000 turns
-you are gone: wounded creatures recover, populations regrow and move, anything you dropped stays where
-you fell, and sites carry on without you. Dying on purpose to refill Focus near a fight hands that fight
-back to a rested enemy.
+Dying is a legitimate way out, so its cost has to be real, but recoverable
+([actions](actions.md#death-and-retreat)). You wake at home with 1 Health and no Focus and rest to
+recover. What you carried stays where you fell, still yours, until you go back for it. The world keeps
+going meanwhile: wounded creatures recover, populations move, and sites carry on without you. Dying on
+purpose refills nothing, costs your gear's location, and hands the fight back to a rested enemy.
 
 ## How builds fall out
 

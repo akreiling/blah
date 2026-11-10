@@ -68,8 +68,8 @@ RULES = {
         "pierce": "Pointed and blunt hits ignore most of a stiff armor's protection; edged hits do not.",
         "charge": "Moving into an enemy hits harder the heavier you are; heavy targets resist being moved.",
         "casting": "Wood and cloth carry magic freely. Channeling through metal, worn or held, costs half again "
-        "as much Focus; warding magic costs no extra in metal. Magic costs Focus, restored at a safe home or "
-        "by death.",
+        "as much Focus; warding magic costs no extra in metal. Magic costs Focus, restored gradually by "
+        "resting at a safe home, not by death.",
         "magic_role": "A basic strike always works, so magic does what strikes cannot: reach beyond the adjacent "
         "tile, hit several creatures, exploit weaknesses, get past armor from inside, protect, distract, heal.",
         "gear_changes": "Swapping weapons takes one turn; you carry only what your mass allows. Changing armor "
@@ -86,8 +86,13 @@ RULES = {
         "Strong river current or high wind: heavy gear keeps its footing; light gear is swept or knocked down.",
         "Thorny brush: plate and leather pass; robes tear and cost a little Health.",
         "Tunnels and tight spaces: long weapons and greatswords cannot swing freely; daggers and fists can.",
-        "Death returns you home with full Health and Focus after 1,000 turns. The world keeps going meanwhile: "
-        "wounded creatures recover, populations regrow and move, dropped items stay where you fell.",
+        "Death returns you home with 1 Health and no Focus after 1,000 turns. Home is safe; resting there "
+        "restores both gradually over turns, and you may leave early. All carried gear stays where you fell, "
+        "still owned, visible, never deleted, and recoverable by returning; home-stored gear is unaffected. "
+        "Repeated deaths leave independent drops. Skills, committed development, and maximum Health remain; "
+        "elapsed time awards no practice. The world keeps going: wounded creatures recover, populations move, "
+        "and durable encounter progress and claimed rewards persist. Death does not reset the world or "
+        "promote the killer in reaction to your build; any growth follows ordinary ecology rules.",
     ],
 }
 
@@ -171,7 +176,7 @@ MISSING = {
     "gear_swapping": "When and how gear can be changed",
     "magic_counters": "What protects against magic other than material",
     "detection": "How creatures notice noise and sight in detail",
-    "focus_economy": "How Focus is earned and spent beyond home and death",
+    "focus_economy": "How Focus is earned and spent beyond resting at home",
     "ranged": "Ranged attacks and how they read properties",
 }
 

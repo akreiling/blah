@@ -112,16 +112,30 @@ shelters and simple visible safety rules.
 
 ## Death and retreat
 
-Preserve the existing high-level rule:
+Dying is a legitimate way out of a fight. It must never leave you better off than retreating would have.
 
-- Death returns the character home.
-- Skills, committed development, and owned equipment remain.
-- Game time advances.
-- No practice is awarded for the elapsed interval.
+**What happens when you die:**
 
-Death is not a world reset. Durable apex actors, treasure claims, discovered arcs, and completed objectives
-must survive it. The current clearing of transient nearby monsters cannot become the persistence policy for
-named encounters.
+- You wake at home after game time advances (1,000 turns in the current slice).
+- You wake with **1 Health and no Focus**, and recover by resting at home. Resting restores both
+  gradually, over turns, while the world keeps moving. You may leave before you are fully recovered.
+- Home is safe to rest in, so waking weak cannot chain into a second death.
+- **What you carried stays where you fell.** It is still yours, and is never deleted. Getting it back
+  means returning to the place that killed you. Gear stored at home is unaffected.
+- Skills and committed development remain. No practice is awarded for the elapsed interval.
+
+The dropped gear is explicit, visible, and recoverable, not a silent loss. Dying again before recovering
+it leaves the new gear at the new place; nothing is destroyed. In the first prototype, dropped gear stays
+put. Creatures taking it is a later, separate rule.
+
+**What death does not do:**
+
+- Refill Health or Focus. "Die to refill" must not be the cheapest recovery.
+- Reset the world. Durable apex actors, treasure claims, discovered arcs, and completed objectives
+  survive it. Wounded creatures recover during the time you are away. The current clearing of transient
+  nearby monsters cannot become the persistence policy for named encounters.
+- Promote the creature that killed you as a reaction to your build. A creature's own history may
+  change it, under ordinary [ecology](ecology.md) rules.
 
 Retreat is possible before commitment unless the encounter explicitly and visibly establishes otherwise.
 After an encounter is abandoned, apply a defined recovery policy: for the first prototype, combatants
@@ -131,5 +145,5 @@ phase transition can use different recovery rules only if they are explicit.
 This prevents harmless repeated chip damage from replacing a confrontation without silently restoring
 everything as soon as the player steps out of view.
 
-Until ecology catches up over time, death's cost is primarily location and lost journey time. Do not claim
-that the current slice already has the eventual world consequences.
+**Current code differs.** The composition proof still restores full Health and Focus on death and keeps
+carried gear. That is the behavior this rule replaces; do not describe it as the intended design.

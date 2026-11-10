@@ -66,6 +66,23 @@ For authored fixtures, generated legal compositions, and newly discovered player
 - [ ] Receive the same accepted result twice.
 - [ ] Resolve the site while a draft is still in flight.
 
+## Death and recovery matrix
+
+These check the proposed [death rule](actions.md#death-and-retreat), not the current composition proof.
+
+- [ ] From the same injured, Focus-depleted state, compare dying with retreating: dying never leaves
+      the character better off in Health, Focus, or accessible gear, including after equal recovery time.
+- [ ] Death advances time and returns the character home with 1 Health and no Focus, not a refill.
+- [ ] Home is safe; resting restores Health and Focus gradually as world time advances, and leaving
+      before full recovery is allowed.
+- [ ] All carried gear remains visibly recoverable at the death location, with ownership intact;
+      gear stored at home is unchanged.
+- [ ] Die again before recovering the first drop: both drops persist independently, including through
+      save/load and cache eviction. Recovering either drop neither deletes nor duplicates items.
+- [ ] Skills, committed development, and maximum Health are unchanged; elapsed time grants no practice.
+- [ ] Wounded enemies recover during the absence, but durable encounter progress and claimed rewards
+      persist. Death does not reset the world or deterministically promote the killer.
+
 ## Generated-content adversarial cases
 
 - [ ] Unknown schema or rules version.
