@@ -97,7 +97,7 @@ current preview. See [the move controls](composition-poc.md#try-it) for the full
 
 ## Stage 3: measured prototype pacing
 
-Run `just skill-pacing [seeds] [actions] [baseline|cautious|compare|move-compare]`
+Run `just skill-pacing [seeds] [actions] [baseline|cautious|compare|move-compare|move-effect [horizon]]`
 (defaults: 8 seeds, 600 actions, baseline). It creates fresh
 `Game::new` characters and drives the same public actions as the app. No injected skill, resources,
 or trial creatures. `just test` includes the probe's determinism, action-accounting, and play-style checks.
@@ -195,6 +195,42 @@ different amounts of Focus for different outcomes. Pulse pays off as a top-up fo
 as a replacement for the free strike. The cautious caster rarely earns it (2 of 16 runs), so its
 effect there is unmeasured. These numbers are provisional, and the probe does not measure human use
 or late-rank moves.
+
+## Stage 5: paired per-move effects
+
+Run `just skill-pacing 16 1200 move-effect [horizon]` (default horizon 20). It replays the
+baseline-move pilot from `Game::new`. At every decision where that pilot picks a learned move, it clones
+the game and the pilot. One copy uses the move; the other takes the action the pilot would otherwise
+have taken. Both then continue with the same move-aware pilot for the horizon. Every random draw is
+keyed by turn (and creature), so both copies roll the same dice until one of them dies and its clock
+jumps. The difference therefore isolates that single decision, unlike the Stage 4 policy comparison.
+
+Each row reports the mean difference per decision (move minus alternative) in kills, deaths, final
+Health, and final Focus, with a standard error clustered by run, because decisions in one run share a
+trajectory. Only effects consistent across horizons 10, 20, and 50 and at least two standard errors
+from zero are treated as findings.
+
+| Style · move | Decisions (runs) | Kills, h10 / h20 / h50 | Deaths, h10 / h20 / h50 |
+| --- | ---: | --- | --- |
+| Spear · Reach | 499 (16) | +0.014 / **+0.088 ± 0.029** / **+0.186 ± 0.075** | **−0.010 / −0.010 / −0.018** |
+| Staff · Sweep | 50 (8) | +0.020 / +0.060 / +0.120 (not significant) | −0.020 / **−0.060 ± 0.024** / **−0.060 ± 0.024** |
+| Sneak · Withdraw | 805 (16) | **−0.075 ± 0.026** / **−0.124 ± 0.041** / **−0.118 ± 0.056** | 0.000 / 0.000 / −0.001 |
+| Dagger · Withdraw | 1,118 (16) | −0.035 ± 0.012 / −0.009 / +0.027 | ≈ 0 |
+| Club · Shove | 601 (16) | +0.007 / +0.003 / +0.040 ± 0.022 | ≈ 0 |
+| Slip away (all styles), caster · Pulse | 28–268 per style | no consistent effect | ≈ 0 |
+
+Reach is the clearest gain: each use is worth about 0.09–0.19 extra kills over the next 20–50 actions
+and about one death fewer per 55–100 uses, for 2 Focus. Sweep appears to prevent deaths, but its
+sample is small. The sneak style loses kills by withdrawing from fights it could finish, so for that
+style Withdraw is a poor substitute for the free strike; the dagger fighter's Withdraw costs a little
+in the short term and is neutral later. Shove, Slip away, and Pulse show no reliable effect on kills
+or deaths at these horizons. Pulse's purpose is converting a hit into an earlier cast (Stage 4), which
+these short horizons only partly capture.
+
+**Decision:** the paired evidence does not justify a cost change. Reach is strong for its cost but its
+per-use gain is modest; revisit it only if later content makes the spear dominant. Withdraw's weakness
+for the sneak style is a choice problem, not a cost problem. These remain pilot-dependent measurements,
+not human play.
 
 ## Award learning from outcomes
 

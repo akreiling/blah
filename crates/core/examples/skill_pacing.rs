@@ -1,5 +1,6 @@
 //! Fresh-character pacing probes, not a model of human play or a balanced progression target.
-//! Run with `just skill-pacing [seeds] [actions] [baseline|cautious|compare|move-compare]`.
+//! Run with `just skill-pacing [seeds] [actions] [baseline|cautious|compare|move-compare]`, or
+//! `just skill-pacing [seeds] [actions] move-effect [horizon]` for paired per-move effects.
 //! No injected practice, monsters, or resources.
 
 use std::collections::{HashSet, VecDeque};
@@ -12,6 +13,8 @@ use blah_core::{
 #[path = "skill_pacing/retreat.rs"]
 mod retreat;
 use retreat::{Policy, Recovery};
+#[path = "skill_pacing/paired.rs"]
+mod paired;
 
 const LEARNED_MOVES: [LearnedMove; 6] = [
     LearnedMove::Withdraw,
@@ -148,7 +151,7 @@ fn toward(game: &Game, goal: (i64, i64), avoid: bool) -> Option<Dir> {
     best.1
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Pilot {
     returning: bool,
     waypoint: usize,
@@ -397,6 +400,17 @@ fn record_move_use(
     }
 }
 
+/// The base pilot's action, and what the policy actually does with learned moves available.
+fn decide(pilot: &mut Pilot, game: &Game, style: Style, policy: Policy) -> (Action, Action) {
+    let fallback = match policy.base() {
+        Policy::Baseline => pilot.choose_baseline(game, style),
+        Policy::Cautious => pilot.choose_cautious(game, style),
+        Policy::BaselineMoves | Policy::CautiousMoves => unreachable!("base policy is normalized"),
+    };
+    let chosen = if policy.uses_moves() { move_aware_action(game, style, pilot.returning, fallback) } else { fallback };
+    (fallback, chosen)
+}
+
 #[cfg(test)]
 fn run(seed: u64, actions: u64, style: Style) -> Report {
     run_policy(seed, actions, style, Policy::Baseline)
@@ -438,13 +452,7 @@ fn run_policy(seed: u64, actions: u64, style: Style, policy: Policy) -> Report {
                 })
                 .map(|m| m.id),
         );
-        let fallback = match policy.base() {
-            Policy::Baseline => pilot.choose_baseline(&game, style),
-            Policy::Cautious => pilot.choose_cautious(&game, style),
-            Policy::BaselineMoves | Policy::CautiousMoves => unreachable!("base policy is normalized"),
-        };
-        let chosen =
-            if policy.uses_moves() { move_aware_action(&game, style, pilot.returning, fallback) } else { fallback };
+        let (_, chosen) = decide(&mut pilot, &game, style, policy);
         let deaths_before = game.deaths();
         report.recovery.before(&game, action, pilot.returning, chosen);
         let target_ids = action_targets(&game, chosen);
@@ -520,15 +528,27 @@ fn main() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let seeds = positive_arg(args.next(), 8)?;
     let actions = positive_arg(args.next(), 600)?;
-    let policies: &[Policy] = match args.next().as_deref() {
+    let mode = args.next();
+    if mode.as_deref() == Some("move-effect") {
+        let horizon = positive_arg(args.next(), 20)?;
+        if args.next().is_some() {
+            return Err("Usage: skill-pacing [seeds] [actions] move-effect [horizon]".into());
+        }
+        paired::run(seeds, actions, horizon);
+        return Ok(());
+    }
+    let policies: &[Policy] = match mode.as_deref() {
         None | Some("baseline") => &[Policy::Baseline],
         Some("cautious") => &[Policy::Cautious],
         Some("compare") => &[Policy::Baseline, Policy::Cautious],
         Some("move-compare") => &POLICIES,
-        Some(_) => return Err("Policy must be baseline, cautious, compare, or move-compare".into()),
+        Some(_) => return Err("Policy must be baseline, cautious, compare, move-compare, or move-effect".into()),
     };
     if args.next().is_some() {
-        return Err("Usage: skill-pacing [seeds] [actions] [baseline|cautious|compare|move-compare]".into());
+        return Err(
+            "Usage: skill-pacing [seeds] [actions] [baseline|cautious|compare|move-compare|move-effect [horizon]]"
+                .into(),
+        );
     }
     println!(
         "policy,style,seed,actions,turns,encounters,kills,deaths,rests,techniques,sneak_moves,waits,health,focus_left,weapon,focus_rank,stealth"

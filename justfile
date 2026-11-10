@@ -32,6 +32,6 @@ jev-review *args:
 composition-demo:
     {{cargo}} run --quiet -p blah-core --example composition_demo
 
-# Measure skill pacing and learned moves: just skill-pacing [seeds] [actions] [baseline|cautious|compare|move-compare]
+# Measure skill pacing and learned moves: just skill-pacing [seeds] [actions] [baseline|cautious|compare|move-compare|move-effect [horizon]]
 skill-pacing *args:
     {{cargo}} run --quiet --release -p blah-core --example skill_pacing -- {{args}}
