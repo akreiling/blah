@@ -556,13 +556,10 @@ fn wanderer(game: &Game) -> Div {
             div()
                 .flex()
                 .flex_row()
-                .gap(px(24.0))
-                .child(
-                    pair(game.maneuver().weapon.name(), w.weapons.get(game.maneuver().weapon).rank().name().into())
-                        .flex_1(),
-                )
-                .child(pair("Focus", w.focus_skill.rank().name().into()).flex_1())
-                .child(pair("Stealth", w.stealth.rank().name().into()).flex_1()),
+                .gap(px(12.0))
+                .child(skill_rank(game.maneuver().weapon.name(), w.weapons.get(game.maneuver().weapon).rank()))
+                .child(skill_rank("Focus", w.focus_skill.rank()))
+                .child(skill_rank("Stealth", w.stealth.rank())),
         )
         .child(
             div()
@@ -580,6 +577,17 @@ fn wanderer(game: &Game) -> Div {
                 .child(pair("Turn", game.turn().to_string()).flex_1())
                 .child(pair("Deaths", game.deaths().to_string()).flex_1()),
         )
+}
+
+/// Each skill gets a bounded column, with its rank below the label rather than beside it.
+fn skill_rank(label: &'static str, rank: blah_core::Rank) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .child(small_line(label))
+        .child(div().h(px(LINE)).truncate().child(rank.name()))
 }
 
 /// The region's name, then the biome underfoot, which can differ at a region's ragged edges.

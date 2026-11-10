@@ -71,18 +71,21 @@ below *practiced*. Two paid technique hits still take Focus to *practiced*.
 
 ## Stage 3: measured prototype pacing
 
-Run `just skill-pacing [seeds] [actions]` (defaults: 8 seeds, 600 actions per run). It creates fresh
+Run `just skill-pacing [seeds] [actions] [baseline|cautious|compare]`
+(defaults: 8 seeds, 600 actions, baseline). It creates fresh
 `Game::new` characters and drives the same public actions as the app. No injected skill, resources,
 or trial creatures. `just test` includes the probe's determinism, action-accounting, and play-style checks.
 
 The six policies use all four weapons as free-striking fighters, a sneaking dagger opener, and a
 staff-equipped touch-fire caster. They seek visible non-skittish creatures, explore cardinal waypoints
 six tiles from home, and try to retreat at 10 Health or, for specialists, below 8 Focus. They rest
-at home, clearing nearby threats when those prevent rest. The caster falls back to free staff strikes;
+at home. The caster falls back to free staff strikes;
 the sneak uses the paid technique only at an opening. These are simple, fallible policies, not expert
 players. They do not assess whether a particular creature is safe to fight.
 
-Output has two CSV tables: per-run totals and rank milestones. An **action** is a command that spends
+Output has three CSV tables: per-run totals, rank milestones, and retreat/recovery episodes.
+The optional cautious policy and episode definitions are in [retreat and recovery](retreat-recovery.md).
+An **action** is a command that spends
 a turn, including rest and sneak toggles. **Turns** additionally include death's 1,000-turn penalty.
 An **encounter** counts a distinct non-skittish creature observed in its normal sensing range or
 targeted by an attack, including unseen observers. It is not a completed fight, kill, or guarantee of
@@ -90,7 +93,9 @@ teaching eligibility. Milestones report upper medians among runs that reached th
 the reached/run count and minimum/maximum action count. Unreached ranks remain explicit, not zero.
 Encounter medians are calculated separately, not necessarily from the median-action run.
 
-First comparison: seeds 0–15, 1,200 actions each, 96 runs per version (115,200 actions).
+Historical first comparison, at commit `d66a93a`, before sheltered home rest:
+seeds 0–15, 1,200 actions each, 96 runs per version (115,200 actions).
+That baseline cleared nearby creatures before resting; current home recovery no longer requires that.
 The provisional target was to bring first-rank stealth into the same rough range as early weapon
 experimentation, without moving all skill thresholds to compensate for an artificial trial.
 

@@ -11,6 +11,10 @@ this fix. The permutation and loadout surveys deliberately retain technique-only
 their costs; their exhaustion outcomes do not mean the player lacks an affordable attack.
 See [current controls and regression coverage](composition-poc.md).
 
+**Recovery update:** home rest is now sheltered even with nearby creatures. The return-to-home
+recovery failures below describe the older rule, not the current slice. See
+[retreat and recovery](retreat-recovery.md) for current matched-seed measurements.
+
 ## Reproduce
 
 ```sh

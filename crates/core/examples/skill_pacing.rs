@@ -1,5 +1,6 @@
 //! Fresh-character pacing probes, not a model of human play or a balanced progression target.
-//! Run with `just skill-pacing [seeds] [actions]`. No injected practice, monsters, or resources.
+//! Run with `just skill-pacing [seeds] [actions] [baseline|cautious|compare]`.
+//! No injected practice, monsters, or resources.
 
 use std::collections::{HashSet, VecDeque};
 
@@ -7,6 +8,10 @@ use blah_core::{
     Aim, Burst, Delivery, Dir, Element, Game, LogKind, Maneuver, MonsterId, Rank, Shape, Step, Technique, Temperament,
     Trigger, Weapon,
 };
+
+#[path = "skill_pacing/retreat.rs"]
+mod retreat;
+use retreat::{Policy, Recovery};
 
 #[derive(Clone, Copy, Debug)]
 enum Style {
@@ -77,6 +82,7 @@ struct Report {
     waits: u64,
     ranks: [Rank; 3],
     milestones: [[Option<Milestone>; 4]; 3],
+    recovery: Recovery,
 }
 
 fn distance(a: (i64, i64), b: (i64, i64)) -> i64 {
@@ -145,7 +151,7 @@ impl Action {
 }
 
 impl Pilot {
-    fn choose(&mut self, game: &Game, style: Style) -> Action {
+    fn choose_baseline(&mut self, game: &Game, style: Style) -> Action {
         let w = game.wanderer();
         let specialist = !matches!(style, Style::Fighter(_));
         self.returning |= w.hp <= 10 || (specialist && w.focus < 8);
@@ -156,7 +162,7 @@ impl Pilot {
             if w.hp == w.max_hp() && w.focus == w.max_focus() {
                 self.returning = false;
                 self.waypoint += 1;
-            } else if game.can_prepare() {
+            } else if game.can_rest() {
                 return Action::Rest;
             } else {
                 self.clearing_home = true;
@@ -206,7 +212,12 @@ fn ranks(game: &Game) -> [Rank; 3] {
     [w.weapons.get(game.maneuver().weapon).rank(), w.focus_skill.rank(), w.stealth.rank()]
 }
 
+#[cfg(test)]
 fn run(seed: u64, actions: u64, style: Style) -> Report {
+    run_policy(seed, actions, style, Policy::Baseline)
+}
+
+fn run_policy(seed: u64, actions: u64, style: Style, policy: Policy) -> Report {
     let mut game = Game::new(seed);
     game.prepare(style.maneuver()).expect("initial creatures are outside view");
     let mut pilot = Pilot::default();
@@ -223,6 +234,7 @@ fn run(seed: u64, actions: u64, style: Style) -> Report {
         waits: 0,
         ranks: ranks(&game),
         milestones: [[None; 4]; 3],
+        recovery: Recovery::default(),
     };
     for action in 1..=actions {
         let before_log = game.log().total();
@@ -237,7 +249,12 @@ fn run(seed: u64, actions: u64, style: Style) -> Report {
                 })
                 .map(|m| m.id),
         );
-        let chosen = pilot.choose(&game, style);
+        let chosen = match policy {
+            Policy::Baseline => pilot.choose_baseline(&game, style),
+            Policy::Cautious => pilot.choose_cautious(&game, style),
+        };
+        let deaths_before = game.deaths();
+        report.recovery.before(&game, action, pilot.returning, chosen);
         if let Action::Strike(dir) | Action::Technique(dir) = chosen {
             let (dx, dy) = dir.delta();
             let at = game.position();
@@ -248,6 +265,7 @@ fn run(seed: u64, actions: u64, style: Style) -> Report {
             }
         }
         let result = chosen.apply(&mut game);
+        report.recovery.after(&game, action, deaths_before);
         assert_ne!(result, Step::Blocked, "the pilot must spend an action");
         assert!(game.turn() > before_turn);
         report.kills +=
@@ -292,62 +310,79 @@ fn main() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let seeds = positive_arg(args.next(), 8)?;
     let actions = positive_arg(args.next(), 600)?;
+    let policies: &[Policy] = match args.next().as_deref() {
+        None | Some("baseline") => &[Policy::Baseline],
+        Some("cautious") => &[Policy::Cautious],
+        Some("compare") => &[Policy::Baseline, Policy::Cautious],
+        Some(_) => return Err("Policy must be baseline, cautious, or compare".into()),
+    };
     if args.next().is_some() {
-        return Err("Usage: skill-pacing [seeds] [actions]".into());
+        return Err("Usage: skill-pacing [seeds] [actions] [baseline|cautious|compare]".into());
     }
     println!(
-        "style,seed,actions,turns,encounters,kills,deaths,rests,techniques,sneak_moves,waits,weapon,focus,stealth"
+        "policy,style,seed,actions,turns,encounters,kills,deaths,rests,techniques,sneak_moves,waits,weapon,focus,stealth"
     );
     let mut reports = Vec::new();
-    for style in Style::ALL {
-        for seed in 0..seeds {
-            let r = run(seed, actions, style);
-            println!(
-                "{},{seed},{},{},{},{},{},{},{},{},{},{},{},{}",
-                style.name(),
-                r.actions,
-                r.turns,
-                r.encounters,
-                r.kills,
-                r.deaths,
-                r.rests,
-                r.techniques,
-                r.sneak_moves,
-                r.waits,
-                r.ranks[0].name(),
-                r.ranks[1].name(),
-                r.ranks[2].name()
-            );
-            reports.push((style, r));
-        }
-    }
-    println!("\nstyle,skill,rank,reached,runs,actions_min,actions_median,actions_max,encounters_median");
-    for style in Style::ALL {
-        for (skill, name) in ["weapon", "focus", "stealth"].into_iter().enumerate() {
-            for (band, rank) in ["practiced", "skilled", "adept", "expert"].into_iter().enumerate() {
-                let milestones: Vec<_> = reports
-                    .iter()
-                    .filter(|(s, _)| s.name() == style.name())
-                    .filter_map(|(_, r)| r.milestones[skill][band])
-                    .collect();
-                let mut times: Vec<_> = milestones.iter().map(|m| m.actions).collect();
-                let mut encounters: Vec<_> = milestones.iter().map(|m| m.encounters).collect();
-                times.sort_unstable();
-                encounters.sort_unstable();
-                let stats = if times.is_empty() {
-                    "-,-,-,-".into()
-                } else {
-                    format!(
-                        "{},{},{},{}",
-                        times[0],
-                        times[times.len() / 2],
-                        times[times.len() - 1],
-                        encounters[encounters.len() / 2]
-                    )
-                };
-                println!("{},{name},{rank},{},{seeds},{stats}", style.name(), times.len());
+    for &policy in policies {
+        for style in Style::ALL {
+            for seed in 0..seeds {
+                let r = run_policy(seed, actions, style, policy);
+                println!(
+                    "{},{},{seed},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    policy.name(),
+                    style.name(),
+                    r.actions,
+                    r.turns,
+                    r.encounters,
+                    r.kills,
+                    r.deaths,
+                    r.rests,
+                    r.techniques,
+                    r.sneak_moves,
+                    r.waits,
+                    r.ranks[0].name(),
+                    r.ranks[1].name(),
+                    r.ranks[2].name()
+                );
+                reports.push((policy, style, seed, r));
             }
         }
+    }
+    println!("\npolicy,style,skill,rank,reached,runs,actions_min,actions_median,actions_max,encounters_median");
+    for &policy in policies {
+        for style in Style::ALL {
+            for (skill, name) in ["weapon", "focus", "stealth"].into_iter().enumerate() {
+                for (band, rank) in ["practiced", "skilled", "adept", "expert"].into_iter().enumerate() {
+                    let milestones: Vec<_> = reports
+                        .iter()
+                        .filter(|(p, s, _, _)| *p == policy && s.name() == style.name())
+                        .filter_map(|(_, _, _, r)| r.milestones[skill][band])
+                        .collect();
+                    let mut times: Vec<_> = milestones.iter().map(|m| m.actions).collect();
+                    let mut encounters: Vec<_> = milestones.iter().map(|m| m.encounters).collect();
+                    times.sort_unstable();
+                    encounters.sort_unstable();
+                    let stats = if times.is_empty() {
+                        "-,-,-,-".into()
+                    } else {
+                        format!(
+                            "{},{},{},{}",
+                            times[0],
+                            times[times.len() / 2],
+                            times[times.len() - 1],
+                            encounters[encounters.len() / 2]
+                        )
+                    };
+                    println!("{},{},{name},{rank},{},{seeds},{stats}", policy.name(), style.name(), times.len());
+                }
+            }
+        }
+    }
+    println!(
+        "\npolicy,style,seed,retreats,escapes,recovered,retreat_deaths,unfinished,wake_recoveries,wake_recovered,wake_deaths,wake_unfinished,home_blocked,arrival_median,recovery_median,rest_actions_median,wake_recovery_median,wake_rest_actions_median"
+    );
+    for (policy, style, seed, r) in reports {
+        println!("{},{},{seed},{}", policy.name(), style.name(), r.recovery.csv());
     }
     Ok(())
 }
@@ -355,16 +390,32 @@ fn main() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(16))]
+        #[test]
+        fn cautious_runs_spend_real_actions_and_conserve_recovery_episodes(
+            seed in any::<u64>(), style in 0usize..6, actions in 1u64..64
+        ) {
+            let r = run_policy(seed, actions, Style::ALL[style], Policy::Cautious);
+            prop_assert_eq!(r.turns, actions + u64::from(r.deaths) * blah_core::DEATH_TURNS);
+            r.recovery.csv();
+        }
+    }
 
     #[test]
     fn fresh_runs_are_deterministic_and_count_death_time_separately() {
-        for style in Style::ALL {
-            let a = run(42, 120, style);
-            assert_eq!(a, run(42, 120, style));
-            assert_eq!(a.turns, a.actions + u64::from(a.deaths) * blah_core::DEATH_TURNS);
-            for skill in a.milestones {
-                let reached: Vec<_> = skill.into_iter().flatten().collect();
-                assert!(reached.windows(2).all(|pair| pair[0].actions <= pair[1].actions));
+        for policy in [Policy::Baseline, Policy::Cautious] {
+            for style in Style::ALL {
+                let a = run_policy(42, 120, style, policy);
+                assert_eq!(a, run_policy(42, 120, style, policy));
+                a.recovery.csv();
+                assert_eq!(a.turns, a.actions + u64::from(a.deaths) * blah_core::DEATH_TURNS);
+                for skill in a.milestones {
+                    let reached: Vec<_> = skill.into_iter().flatten().collect();
+                    assert!(reached.windows(2).all(|pair| pair[0].actions <= pair[1].actions));
+                }
             }
         }
     }

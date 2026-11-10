@@ -689,12 +689,20 @@ impl Game {
         Step::Waited
     }
 
-    /// Rest for a turn at home, with no creatures nearby: recover [`REST_HEALTH`] Health and
-    /// [`REST_FOCUS`] Focus. Recovery is gradual, so the world keeps moving while you rest.
+    /// Whether sheltered rest at home can restore Health or Focus.
+    #[must_use]
+    pub fn can_rest(&self) -> bool {
+        self.position == self.home
+            && (self.wanderer.hp < self.wanderer.max_hp() || self.wanderer.focus < self.wanderer.max_focus())
+    }
+
+    /// Rest sheltered at home for [`REST_HEALTH`] Health and [`REST_FOCUS`] Focus.
+    /// Creatures still move, but cannot hurt the wanderer during this rest action.
+    /// Other actions at home are exposed. A full character cannot take a protected rest turn.
     /// Ordinary waiting never restores Focus.
     pub fn recover_focus(&mut self) -> Step {
-        if self.position != self.home || !self.can_prepare() {
-            self.log.push(LogKind::Blocked, "Rest at home, away from nearby creatures.");
+        if self.position != self.home {
+            self.log.push(LogKind::Blocked, "Rest in the shelter at home.");
             return Step::Blocked;
         }
         let w = &mut self.wanderer;
@@ -708,12 +716,12 @@ impl Game {
         w.focus = (w.focus + REST_FOCUS).min(most);
         w.hp = (w.hp + REST_HEALTH).min(w.max_hp());
         let line = if w.focus == most && w.hp == w.max_hp() {
-            "You rest at home. You are fully recovered.".to_owned()
+            "You rest sheltered at home. You are fully recovered.".to_owned()
         } else {
-            format!("You rest at home. Health {}/{}, Focus {}/{most}.", w.hp, w.max_hp(), w.focus)
+            format!("You rest sheltered at home. Health {}/{}, Focus {}/{most}.", w.hp, w.max_hp(), w.focus)
         };
         self.log.push(LogKind::Attack, line);
-        self.end_turn();
+        self.finish_turn(true);
         Step::Waited
     }
     /// Times the wanderer has died.
@@ -892,9 +900,13 @@ impl Game {
 
     /// Everything after the wanderer's action: monsters act, the wanderer heals, monsters come and go.
     fn end_turn(&mut self) {
+        self.finish_turn(false);
+    }
+
+    fn finish_turn(&mut self, sheltered: bool) {
         let deaths = self.deaths;
         let crept = std::mem::take(&mut self.crept);
-        self.monsters_act(crept);
+        self.monsters_act(crept, sheltered);
         if self.deaths != deaths {
             return;
         }
@@ -1072,7 +1084,7 @@ impl Game {
 
     /// Every monster acts, in order of appearance, as often as its speed allows, each drawing from its own
     /// stream for the turn. Stops if the wanderer dies.
-    fn monsters_act(&mut self, crept: bool) {
+    fn monsters_act(&mut self, crept: bool, sheltered: bool) {
         let deaths = self.deaths;
         let concealment = self.concealment();
         for i in 0..self.monsters.len() {
@@ -1100,7 +1112,7 @@ impl Game {
             while self.monsters[i].energy >= ACTION_COST && actions < MAX_ACTIONS {
                 self.monsters[i].energy -= ACTION_COST;
                 actions += 1;
-                self.monster_acts(i, &mut rng);
+                self.monster_acts(i, &mut rng, sheltered);
                 if self.deaths != deaths {
                     return;
                 }
@@ -1110,7 +1122,7 @@ impl Game {
 
     /// One action of monster `i`, by temperament: aggressive ones close in and attack, territorial ones
     /// attack near home, skittish ones flee, and all of them wander when nothing has their attention.
-    fn monster_acts(&mut self, i: usize, rng: &mut Rng) {
+    fn monster_acts(&mut self, i: usize, rng: &mut Rng, sheltered: bool) {
         self.monsters[i].alerted = self.monsters[i].detects(self.position, self.concealment());
         let m = &self.monsters[i];
         let (me, you, home) = (m.position, self.position, m.home);
@@ -1119,7 +1131,9 @@ impl Game {
         match m.phenotype.temperament {
             Temperament::Aggressive => {
                 if adjacent && senses {
-                    self.monster_attacks(i, rng);
+                    if !sheltered {
+                        self.monster_attacks(i, rng);
+                    }
                 } else if senses {
                     self.approach(i, you);
                 } else {
@@ -1129,7 +1143,9 @@ impl Game {
             Temperament::Territorial => {
                 let trespassing = senses && chebyshev(you, home) <= TERRITORY;
                 if adjacent && trespassing {
-                    self.monster_attacks(i, rng);
+                    if !sheltered {
+                        self.monster_attacks(i, rng);
+                    }
                 } else if trespassing {
                     self.approach(i, you);
                 } else if chebyshev(me, home) > TERRITORY {
@@ -1140,7 +1156,7 @@ impl Game {
             }
             Temperament::Skittish => {
                 if senses {
-                    if !self.flee(i) && adjacent {
+                    if !self.flee(i) && adjacent && !sheltered {
                         self.monster_attacks(i, rng);
                     }
                 } else {
@@ -1783,11 +1799,11 @@ mod tests {
         let id = put_monster(&mut game, (x + 3, y), 1.0);
         let mut rng = Rng::new(1);
         let (i, d) = where_is(&game, id);
-        game.monster_acts(i, &mut rng);
+        game.monster_acts(i, &mut rng, false);
         assert_eq!(where_is(&game, id).1, d - 1, "it steps toward the wanderer it senses");
         game.monsters[i].position = (x + 1, y);
         let before = game.log().total();
-        game.monster_acts(i, &mut rng);
+        game.monster_acts(i, &mut rng, false);
         assert_eq!(game.monsters[i].position, (x + 1, y), "adjacent, it attacks rather than moves");
         let lines = new_lines(&game, before);
         assert!(lines.len() == 1 && lines[0].text.contains(&game.monsters[i].name), "{lines:?}");
@@ -1801,7 +1817,7 @@ mod tests {
         let mut rng = Rng::new(2);
         let (i, d) = where_is(&game, id);
         let before = game.log().total();
-        game.monster_acts(i, &mut rng);
+        game.monster_acts(i, &mut rng, false);
         assert_eq!(where_is(&game, id).1, d + 1, "it steps away from the wanderer it senses");
         assert_eq!(game.log().total(), before, "fleeing says nothing");
         // Hemmed in by three others and the wanderer, it fights.
@@ -1809,7 +1825,7 @@ mod tests {
         for at in [(x + 2, y), (x + 1, y - 1), (x + 1, y + 1)] {
             put_monster(&mut game, at, 0.5);
         }
-        game.monster_acts(i, &mut rng);
+        game.monster_acts(i, &mut rng, false);
         assert_eq!(game.monsters[i].position, (x + 1, y));
         assert_eq!(game.log().total(), before + 1, "cornered, it attacks");
     }
@@ -1822,18 +1838,18 @@ mod tests {
         let mut rng = Rng::new(3);
         let (i, d) = where_is(&game, id);
         assert!(chebyshev(game.monsters[i].home, (x, y)) <= TERRITORY);
-        game.monster_acts(i, &mut rng);
+        game.monster_acts(i, &mut rng, false);
         assert_eq!(where_is(&game, id).1, d - 1, "a trespasser near home is approached");
         // Far from home, with the wanderer outside its territory, it heads home instead.
         game.monsters[i].position = (x + 2, y);
         game.monsters[i].home = (x + 2 + TERRITORY + 3, y);
-        game.monster_acts(i, &mut rng);
+        game.monster_acts(i, &mut rng, false);
         assert_eq!(game.monsters[i].position, (x + 3, y), "it goes back toward home");
         // Adjacent and on its ground, it attacks.
         game.monsters[i].position = (x + 1, y);
         game.monsters[i].home = (x + 1, y);
         let before = game.log().total();
-        game.monster_acts(i, &mut rng);
+        game.monster_acts(i, &mut rng, false);
         assert_eq!(game.monsters[i].position, (x + 1, y));
         assert_eq!(game.log().total(), before + 1, "it attacks a trespasser beside it");
     }
@@ -1850,7 +1866,7 @@ mod tests {
             let before = game.log().total();
             for _ in 0..turns {
                 game.wanderer.hp = game.wanderer.max_hp();
-                game.monsters_act(false);
+                game.monsters_act(false, false);
                 game.turn += 1;
             }
             (game.log().total() - before, game.monsters[i].energy)
@@ -2117,6 +2133,84 @@ mod tests {
         game.die();
         assert_eq!(game.wanderer.focus, 0, "death does not restore Focus");
         assert!(!game.sneaking);
+    }
+
+    #[test]
+    fn home_rest_recovers_through_nearby_threats_without_protecting_other_actions() {
+        for after_death in [false, true] {
+            let mut game = on_open_land(0, 4);
+            game.home = game.position;
+            if after_death {
+                game.die();
+            } else {
+                game.wanderer.hp = 1;
+                game.wanderer.focus = 0;
+            }
+            let deaths = game.deaths;
+            let (x, y) = game.home;
+            let attacker = put_monster(&mut game, (x + 1, y), 1.0);
+            game.monsters.last_mut().unwrap().phenotype.stats =
+                crate::Stats { hp: 40, attack: 100, defense: 0, speed: 2 * ACTION_COST };
+            game.monsters.last_mut().unwrap().hp = 40;
+            let approach = put_monster(&mut game, (x + 3, y), 1.0);
+            game.monsters.last_mut().unwrap().phenotype.stats.speed = ACTION_COST;
+            let learned = game.wanderer;
+            let mut rests = 0;
+            while game.wanderer.hp < game.wanderer.max_hp() || game.wanderer.focus < game.wanderer.max_focus() {
+                assert_eq!(game.recover_focus(), Step::Waited, "home remains usable with creatures in view");
+                assert_eq!(game.deaths, deaths, "rest must not chain into another death");
+                rests += 1;
+                assert!(rests <= 15, "recovery remains gradual but must complete");
+            }
+            assert!(rests >= 8);
+            assert!(
+                game.monsters.iter().find(|m| m.id == approach).unwrap().position.0 < x + 3,
+                "creatures still move during sheltered rest"
+            );
+            assert_eq!(game.wanderer.weapons, learned.weapons);
+            assert_eq!(game.wanderer.focus_skill, learned.focus_skill);
+            assert_eq!(game.wanderer.stealth, learned.stealth);
+            assert!(game.monsters.iter().any(|m| m.id == attacker), "rest does not clear encounters");
+            assert_eq!(game.recover_focus(), Step::Blocked, "a full character cannot buy protected wait turns");
+            let mut attack = game.clone();
+            assert_eq!(attack.step(Dir::East), Step::Attacked);
+            assert_eq!(attack.deaths, deaths + 1, "attacking from home is exposed");
+            game.wait();
+            assert_eq!(game.deaths, deaths + 1, "ordinary waiting is exposed too");
+        }
+    }
+
+    #[test]
+    fn home_shelter_also_blocks_territorial_and_cornered_skittish_attacks() {
+        for temperament in [Temperament::Territorial, Temperament::Skittish] {
+            let mut game = on_open_land(0, 4);
+            game.home = game.position;
+            game.wanderer.hp = 1;
+            game.wanderer.focus = 0;
+            let (x, y) = game.home;
+            put_monster(&mut game, (x + 1, y), 1.0);
+            let m = game.monsters.last_mut().unwrap();
+            m.phenotype.temperament = temperament;
+            m.phenotype.sense = 8;
+            m.phenotype.stats.attack = 100;
+            m.phenotype.stats.speed = 2 * ACTION_COST;
+            for at in [(x + 2, y), (x + 1, y - 1), (x + 1, y + 1)] {
+                put_monster(&mut game, at, 0.0);
+                game.monsters.last_mut().unwrap().phenotype.stats.speed = 0;
+            }
+            for _ in 0..15 {
+                if !game.can_rest() {
+                    break;
+                }
+                assert_eq!(game.recover_focus(), Step::Waited);
+                assert_eq!(game.deaths, 0);
+            }
+            assert!(!game.can_rest());
+            assert_eq!(game.wanderer.hp, game.wanderer.max_hp());
+            assert_eq!(game.wanderer.focus, game.wanderer.max_focus());
+            game.wait();
+            assert_eq!(game.deaths, 1, "the same cornered creature attacks an exposed action");
+        }
     }
 
     #[test]

@@ -32,6 +32,6 @@ jev-review *args:
 composition-demo:
     {{cargo}} run --quiet -p blah-core --example composition_demo
 
-# Measure fresh-character wild-encounter skill pacing: just skill-pacing [seeds] [actions]
+# Measure skill pacing and retreat: just skill-pacing [seeds] [actions] [baseline|cautious|compare]
 skill-pacing *args:
     {{cargo}} run --quiet --release -p blah-core --example skill_pacing -- {{args}}

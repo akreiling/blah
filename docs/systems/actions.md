@@ -146,6 +146,12 @@ This prevents harmless repeated chip damage from replacing a confrontation witho
 everything as soon as the player steps out of view.
 
 **Implemented so far:** death wakes you at home with 1 Health and no Focus, and **R** rests one turn at
-home (no creatures in view) for 2 Health and 3 Focus. Creatures survive and fully recover; those within
-view of home are driven off. **Not yet:** carried gear stays with you, because there is no inventory.
-Home is clear when you wake, but creatures can still wander in while you rest, so a second death is possible.
+home for 2 Health and 3 Focus. A rest action shelters you from creature attacks even if creatures are
+nearby. They still move and observe, and the world still spawns creatures. Rest does not clear or heal
+them. A fully recovered character cannot use rest as a protected wait. Ordinary waiting, attacking,
+casting, toggling sneak, and moving are exposed, including at home. This gives living retreat and
+post-death recovery the same floor without granting a combat shield.
+
+Creatures survive death and fully recover; those within view of home are driven off.
+**Not yet:** carried gear stays with you, because there is no inventory.
+See [measured retreat and recovery](retreat-recovery.md) for the cautious-policy comparison and limits.

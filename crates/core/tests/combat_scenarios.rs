@@ -58,7 +58,8 @@ fn exhausted_dagger_can_strike_without_replacing_its_prepared_technique() {
         blocked(&mut game, "fourth technique", |g| g.use_technique(Dir::East));
         blocked(&mut game, "repeat blocked technique", |g| g.use_technique(Dir::East));
         assert_eq!(game.position(), game.home(), "the demo already starts at the recovery location");
-        blocked(&mut game, "recover at home with sentinel alive", Game::recover_focus);
+        // Home now provides sheltered rest even with the sentinel alive. This regression
+        // deliberately keeps the exhausted state to exercise the free strike below.
 
         let before = game.clone();
         let reason = game.prepare(Maneuver::default()).unwrap_err();
@@ -107,7 +108,7 @@ fn staff_demo_survivor_can_be_finished_with_free_weapon_strikes() {
     assert_eq!(game.monsters().iter().find(|m| m.id == survivor).unwrap().hp, 3);
     assert_eq!(game.log().entries().filter(|e| e.kind == LogKind::Kill).count(), 2);
     blocked(&mut game, "repeat staff strike", Game::unleash);
-    blocked(&mut game, "try recovering", Game::recover_focus);
+    // Do not rest here: preserve the exhausted state when checking the free strike.
     let before = game.clone();
     assert!(game.prepare(Maneuver::default()).is_err());
     assert_eq!(game, before);

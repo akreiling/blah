@@ -120,8 +120,9 @@ or delayed telegraphs.** Terrain does not block the wave. Do not treat this as a
 - The Focus pool starts at 24 and grows by 2 per Focus rank, up to 32.
 - Already located actors remain tracked within normal sensing range. Leaving that range loses tracking.
 - Observation updates even when a slow creature has no action that turn.
-- Waiting does not restore Focus. **R** rests one turn at home, only when no creatures are nearby,
-  restoring 2 Health and 3 Focus.
+- Waiting does not restore Focus. **R** rests sheltered at home, restoring 2 Health and 3 Focus.
+  Creatures still move but cannot hurt you during that rest action. Other actions remain exposed;
+  a fully recovered character cannot use rest as a protected wait.
 - Existing Health regeneration remains. Death returns you home with 1 Health and no Focus, after 1,000
   turns. Creatures survive and recover; those within view of home are driven off.
 - Preparation is free but requires no creatures in the visible neighborhood. Editing and canceling spend
@@ -152,11 +153,13 @@ injecting resources, enemy stats, positions, or random outcomes:
 
 - Dagger, seeds 0, 7, and 42: three techniques leave a living sentinel and only 3 Focus. Further techniques
   are blocked, but bumping still strikes without spending Focus or replacing the prepared maneuver.
-  Recovery even at home and changing the preparation remain blocked by the nearby sentinel.
+  Changing the preparation remains blocked by the nearby sentinel. Home rest is now sheltered;
+  these scenarios deliberately preserve exhaustion when checking the free strike.
 - Dagger, seed 42: sneaking again spends Focus and a turn but does not restore surprise against the
   tracking sentinel.
 - Staff, seed 42: the fire leaves a 3-Health survivor and 6 Focus. Another discharge is blocked, but
-  free staff strikes finish the survivor. Recovery and preparation are still blocked while it is nearby.
+  free staff strikes finish the survivor. Preparation remains blocked while it is nearby, but home
+  rest is available.
 
 The dagger and staff scenarios now guard the free-strike fix. The other characterization tests still
 reproduce limitations, not certify an acceptable play loop. They do not establish that retreat is
