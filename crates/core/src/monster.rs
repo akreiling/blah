@@ -2,13 +2,13 @@
 //!
 //! The game loop that moves them lives in [`Game`](crate::Game); this module holds the pieces it uses.
 
-use crate::combat::{MAX_FOCUS, SNEAK_REDUCTION};
+use crate::combat::MAX_FOCUS;
 use crate::genome::Genome;
 use crate::hash::Rng;
 use crate::life::SpeciesId;
 use crate::phenotype::{Phenotype, Stats};
 use crate::sprite::Sprite;
-use crate::{Temperament, Weapon, WeaponSkills};
+use crate::{Skill, Temperament, Training, Weapon, WeaponSkills};
 
 /// A monster's stable id within one game, in order of appearance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -41,6 +41,10 @@ pub struct Monster {
     pub(crate) energy: i32,
     /// Finite damage evidence left for this individual. Healing after death never refills it.
     pub(crate) practice_left: i32,
+    /// Finite stealth lessons left for this individual, shared by every way of evading it.
+    pub(crate) stealth_left: i32,
+    /// Whether it located the wanderer at the last turn's observation. Losing that is an escape.
+    pub(crate) tracking: bool,
 }
 
 impl Monster {
@@ -67,20 +71,28 @@ impl Monster {
         spent as u32
     }
 
+    /// Consume up to `units` of this individual's stealth lessons, returning how many were left to take.
+    pub(crate) fn spend_stealth(&mut self, units: i32) -> u32 {
+        let spent = units.max(0).min(self.stealth_left.max(0));
+        self.stealth_left -= spent;
+        spent as u32
+    }
+
     /// Heat tolerance becomes up to 75 percent fire resistance in the combat prototype.
     #[must_use]
     pub fn fire_resistance(&self) -> u8 {
         (self.phenotype.heat.clamp(0.0, 1.0) * 75.0).round() as u8
     }
 
-    /// Whether its senses locate the actor now. Break normal sensing range to lose tracking.
+    /// Whether its senses locate the actor now. Concealment shortens only an unalerted individual's
+    /// initial sensing range, by `concealment` tiles (0 when not sneaking). Break normal range to lose tracking.
     #[must_use]
-    pub fn detects(&self, position: (i64, i64), sneaking: bool) -> bool {
+    pub fn detects(&self, position: (i64, i64), concealment: i64) -> bool {
         let distance = (self.position.0 - position.0).abs().max((self.position.1 - position.1).abs());
-        let range = if sneaking && !self.alerted {
-            self.phenotype.sense.saturating_sub(SNEAK_REDUCTION).max(0)
-        } else {
+        let range = if self.alerted {
             self.phenotype.sense
+        } else {
+            self.phenotype.sense.saturating_sub(concealment.max(0)).max(0)
         };
         distance <= range
     }
@@ -103,13 +115,36 @@ pub struct Wanderer {
     pub focus: i32,
     /// Earned weapon competence belongs to the character, not to the equipped item.
     pub weapons: WeaponSkills,
+    /// Practice paying for techniques that work, which enlarges the Focus pool.
+    pub focus_skill: Skill,
+    /// Practice evading real threats, which conceals better, sneaks cheaper, and strikes openings harder.
+    pub stealth: Skill,
 }
 
 impl Wanderer {
     /// A fresh wanderer.
     #[must_use]
     pub fn new() -> Wanderer {
-        Wanderer { hp: WANDERER_STATS.hp, stats: WANDERER_STATS, focus: MAX_FOCUS, weapons: WeaponSkills::default() }
+        Wanderer {
+            hp: WANDERER_STATS.hp,
+            stats: WANDERER_STATS,
+            focus: MAX_FOCUS,
+            weapons: WeaponSkills::default(),
+            focus_skill: Skill::default(),
+            stealth: Skill::default(),
+        }
+    }
+
+    /// Most Focus the wanderer can hold: [`MAX_FOCUS`] plus earned Focus practice.
+    #[must_use]
+    pub const fn max_focus(&self) -> i32 {
+        self.focus_skill.focus_capacity()
+    }
+
+    /// Weapon and stealth practice for an attack with `weapon`.
+    #[must_use]
+    pub const fn training(&self, weapon: Weapon) -> Training {
+        Training { weapon: self.weapons.get(weapon), stealth: self.stealth }
     }
 
     /// Hit points when unhurt.
@@ -125,7 +160,7 @@ impl Default for Wanderer {
     }
 }
 
-/// The wanderer's base numbers, before weapon practice.
+/// The wanderer's base numbers, before practice.
 pub const WANDERER_STATS: Stats = Stats { hp: 30, attack: 4, defense: 1, speed: ACTION_COST };
 
 /// Energy one action costs. A creature banks its speed each turn and acts once per this much.

@@ -6,8 +6,8 @@ Proposed design. See the decisions document for committed direction versus proto
 
 ## Implemented prototype: weapon practice
 
-Stage 1 of skill growth is in [`skills.rs`](../../crates/core/src/skills.rs). Focus capacity and stealth
-growth come next and will reuse the same engine. Move unlocks, saving, and tuning come later.
+Stage 1 of skill growth is in [`skills.rs`](../../crates/core/src/skills.rs). Stage 2, Focus and
+stealth, is described below. Tuning, move unlocks, and saving come later.
 
 - **What trains:** physical damage from weapon delivery (a free strike or a weapon technique) that actually
   lands. Misses, waiting, moving, resting, sneaking, dying, refitting, and elapsed turns teach nothing.
@@ -33,6 +33,39 @@ Practice thresholds are 1,000, 4,000, 12,000, and 30,000; one landed damage poin
 practice. These are untuned prototype numbers. The 40-Health trial sentinel has a dagger threat of 133, so
 one full dagger fight against it goes from novice to skilled. Ordinary wild creatures teach far less.
 Skills are not saved; there is no save system yet.
+## Implemented prototype: Focus and stealth practice
+
+Stage 2 reuses the same engine: ranks, teaching ceilings set by threat, and finite lessons per creature.
+Threat is the same number as for weapons, measured with the equipped weapon.
+
+**Focus** learns from Focus actually paid for a technique that did real damage to a creature. Evidence is
+the Focus cost times the creature's threat. A miss, a free strike, sneaking, and an empty area cast teach
+nothing. An area cast counts its most threatening creature, and only if the cast used up some of that
+creature's damage allowance. Since every credited technique uses up some of that allowance, a creature
+can teach Focus only a limited number of times. Each rank adds 2 to the Focus pool, from 24 up to 32.
+Growth raises the cap, not current Focus; resting at home fills the larger pool.
+
+**Stealth** learns three ways. Each creature has 12 lessons to give, shared across all three:
+
+| Source | Lessons | What qualifies |
+| --- | --- | --- |
+| Unseen sneaking move | 1 | A paid or free sneaking move ends inside a creature's normal sensing range, and it still has not found you |
+| Landed opening strike | 3 | A hit that actually exploited an unguarded opening |
+| Escape | 3 | A creature that was tracking you at the last turn's observation loses you |
+
+Each lesson is worth 5 times the creature's threat. Entering sneak, standing still, sneaking with no
+threat near, and creatures below threat 10 teach nothing and use up no lessons. Being revealed by your own
+attack and then leaving range is not an escape, and death clears tracking without paying for it.
+
+Stealth effects, by rank (novice, practiced, skilled, adept, expert):
+
+- Sneaking takes 6, 7, 7, 8, 8 tiles off an unalerted creature's initial sensing range.
+- Sneaking moves: novices pay for every move; one move in every 4, 3, 2, 2 is free.
+- Landed opening strikes gain 0, +1, +1, +2, +2 physical damage, on top of weapon practice.
+
+The panel shows the Focus and stealth ranks beside the weapon rank, and the log announces each rank
+gained. These numbers are untuned. In the dagger trial, one opening strike on the threat-133 sentinel
+takes stealth to *practiced*. Two paid technique hits take Focus to *practiced*.
 ## Award learning from outcomes
 
 The core emits a resolved activity record after an action or encounter outcome. Learning reads that record;

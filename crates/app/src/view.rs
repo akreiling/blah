@@ -10,8 +10,8 @@ use gpui::{
 };
 
 use blah_core::{
-    Aim, Comparison, Delivery, Dir, Element, Game, Gene, LogKind, MAX_AREA_RADIUS, MAX_BURST_POWER, MAX_FOCUS, Monster,
-    Shape, SpeciesId, Tile, Trigger, VIEW_RADIUS, hash_point,
+    Aim, Comparison, Delivery, Dir, Element, Game, Gene, LogKind, MAX_AREA_RADIUS, MAX_BURST_POWER, Monster, Shape,
+    SpeciesId, Tile, Trigger, VIEW_RADIUS, hash_point,
 };
 
 use crate::sprites::{Key, SPRITE_PX, SpriteCache};
@@ -397,7 +397,7 @@ fn combat_status(game: &Game) -> Div {
     div()
         .flex()
         .flex_col()
-        .child(bar("FP", game.wanderer().focus, MAX_FOCUS, HEADING))
+        .child(bar("FP", game.wanderer().focus, game.wanderer().max_focus(), HEADING))
         .child(pair("Maneuver", format!("{} · {}F", maneuver.name, maneuver.technique.focus_cost())))
         .child(pair("Sneaking", if game.sneaking() { "on".into() } else { "off".into() }))
         .child(pair(
@@ -551,8 +551,19 @@ fn wanderer(game: &Game) -> Div {
         .flex()
         .flex_col()
         .child(heading("WANDERER"))
-        .child(pair(game.maneuver().weapon.name(), w.weapons.get(game.maneuver().weapon).rank().name().into()))
         .child(bar("HP", w.hp, w.max_hp(), HP))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap(px(24.0))
+                .child(
+                    pair(game.maneuver().weapon.name(), w.weapons.get(game.maneuver().weapon).rank().name().into())
+                        .flex_1(),
+                )
+                .child(pair("Focus", w.focus_skill.rank().name().into()).flex_1())
+                .child(pair("Stealth", w.stealth.rank().name().into()).flex_1()),
+        )
         .child(
             div()
                 .flex()
@@ -791,6 +802,7 @@ fn glyph_shade(c @ [r, g, b]: [u8; 3]) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use blah_core::MAX_FOCUS;
 
     #[test]
     fn workshop_blocks_all_play_actions_until_closed() {

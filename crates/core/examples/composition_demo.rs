@@ -10,10 +10,12 @@ fn main() {
     println!("Before opening strike: {:?}", game.preview_attack(Dir::East).unwrap());
     assert_eq!(game.use_technique(Dir::East), Step::Attacked);
     println!("Opening result: {:?}", game.last_attack().unwrap());
+    let w = game.wanderer();
+    println!("Ranks after the opening: stealth {}, Focus {}", w.stealth.rank().name(), w.focus_skill.rank().name());
     println!("After detection: {:?}", game.preview_attack(Dir::East).unwrap());
     assert_eq!(game.use_technique(Dir::East), Step::Attacked);
     println!("Detected result: {:?}", game.last_attack().unwrap());
-    println!("Focus left: {}", game.wanderer().focus);
+    println!("Focus left: {} of {}", game.wanderer().focus, game.wanderer().max_focus());
 
     let mut game = Game::inferno_trial(42).expect("trial ground");
     println!("\nSTAFF: {:?}", game.maneuver());

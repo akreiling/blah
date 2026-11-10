@@ -3,8 +3,7 @@
 //! These are rule invariants. Techniques can run out of Focus, but ordinary weapon strikes remain free.
 
 use blah_core::{
-    Aim, Burst, Delivery, Dir, Element, Game, MAX_FOCUS, Maneuver, Monster, Shape, Step, Technique, Trigger, Wanderer,
-    Weapon,
+    Aim, Burst, Delivery, Dir, Element, Game, Maneuver, Monster, Shape, Step, Technique, Trigger, Wanderer, Weapon,
 };
 use proptest::prelude::*;
 
@@ -171,7 +170,7 @@ fn check(
     area: Option<blah_core::AreaPreview>,
 ) -> Result<(), TestCaseError> {
     let f = g.wanderer().focus;
-    prop_assert!((0..=MAX_FOCUS).contains(&f), "Focus {f} out of range");
+    prop_assert!((0..=g.wanderer().max_focus()).contains(&f), "Focus {f} out of range");
     if result == Step::Blocked {
         prop_assert_eq!(&state(g).0, &before.0, "blocked action passed time");
         let (t, p, w, ms, _, s, d) = before;

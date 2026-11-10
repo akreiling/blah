@@ -4,8 +4,9 @@
 
 This is a narrow executable proof, not the full advancement system. It deliberately gives the player
 developer equipment and known components. Foundations, earned adaptations, saved techniques, remote
-naming, and Jev calls are **not implemented**. Weapon practice is implemented; see
-[weapon practice](learning.md#implemented-prototype-weapon-practice).
+naming, and Jev calls are **not implemented**. Weapon, Focus, and stealth practice are implemented; see
+[weapon practice](learning.md#implemented-prototype-weapon-practice) and
+[Focus and stealth practice](learning.md#implemented-prototype-focus-and-stealth-practice).
 
 ## Try it
 
@@ -112,8 +113,11 @@ or delayed telegraphs.** Terrain does not block the wave. Do not treat this as a
 ## Turn and resource rules
 
 - All attacks and discharges pass one turn. Failed affordability checks pass no time or resources.
-- Entering sneak costs one Focus and one turn. Each successful sneaking move costs one more Focus.
-- Initial detection range while sneaking is `max(normal sense − 6, 0)`. Acute observers can still detect it.
+- Entering sneak costs one Focus and one turn. Each successful sneaking move costs one more Focus,
+  except the periodic free moves that practiced stealth earns.
+- Initial detection range while sneaking is `max(normal sense − 6, 0)`, or up to 8 less with stealth
+  practice. Acute observers can still detect it.
+- The Focus pool starts at 24 and grows by 2 per Focus rank, up to 32.
 - Already located actors remain tracked within normal sensing range. Leaving that range loses tracking.
 - Observation updates even when a slow creature has no action that turn.
 - Waiting does not restore Focus. **R** rests one turn at home, only when no creatures are nearby,

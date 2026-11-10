@@ -80,13 +80,36 @@ impl Skill {
         self.rank() > before
     }
 
-    /// Small physical improvement, applied only to weapon delivery.
+    /// The small step bonus shared by weapon damage, opening strikes, and concealment range.
     #[must_use]
-    pub const fn damage_bonus(self) -> i32 {
+    pub const fn bonus(self) -> i32 {
         match self.rank() {
             Rank::Novice => 0,
             Rank::Practiced | Rank::Skilled => 1,
             Rank::Adept | Rank::Expert => 2,
+        }
+    }
+
+    /// Focus capacity with this Focus practice: two more per rank, from 24 to 32.
+    #[must_use]
+    pub const fn focus_capacity(self) -> i32 {
+        crate::MAX_FOCUS + 2 * self.rank() as i32
+    }
+
+    /// How much sneaking shortens an unalerted observer's initial sensing range, from 6 to 8 tiles.
+    #[must_use]
+    pub const fn sneak_reduction(self) -> i64 {
+        crate::SNEAK_REDUCTION + self.bonus() as i64
+    }
+
+    /// Every this-many sneaking moves, one costs no Focus. Novices pay for every move.
+    #[must_use]
+    pub const fn free_sneak_every(self) -> Option<u32> {
+        match self.rank() {
+            Rank::Novice => None,
+            Rank::Practiced => Some(4),
+            Rank::Skilled => Some(3),
+            Rank::Adept | Rank::Expert => Some(2),
         }
     }
 
@@ -101,6 +124,15 @@ impl Skill {
             Rank::Expert => 0.06,
         }
     }
+}
+
+/// The practice that shapes one attack: the weapon used and, at an actual opening, stealth.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Training {
+    /// Practice with the weapon being used.
+    pub weapon: Skill,
+    /// Stealth practice, which strengthens a strike only at a real unguarded opening.
+    pub stealth: Skill,
 }
 
 /// Character-owned practice for the four current weapon families.
@@ -151,7 +183,7 @@ mod tests {
                 assert!(skill.learn(1, Rank::Expert));
             }
             assert_eq!(skill.rank(), rank);
-            assert_eq!(skill.damage_bonus(), damage);
+            assert_eq!(skill.bonus(), damage);
             assert_eq!(skill.miss_chance(), miss);
         }
     }

@@ -16,13 +16,14 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::biome::Biome;
 use crate::clade::{Clade, CladeId, clades};
-use crate::combat::{AreaPreview, AttackContext, AttackPreview, AttackResult, Delivery, MAX_FOCUS, Maneuver};
+use crate::combat::{AreaPreview, AttackContext, AttackPreview, AttackResult, Delivery, Maneuver};
 use crate::genome::Genome;
 use crate::hash::Rng;
 use crate::life::{RegionLife, Species, SpeciesId, TraitDelta, compare};
 use crate::monster::{ACTION_COST, MAX_ACTIONS, Monster, MonsterId, Wanderer, damage};
 use crate::phenotype::{Phenotype, Temperament};
 use crate::region::{Region, RegionCache, RegionId};
+use crate::skills::Rank;
 use crate::sprite::Sprite;
 use crate::world::{Tile, World};
 
@@ -219,6 +220,14 @@ pub const DEATH_TURNS: u64 = 1_000;
 pub const REST_HEALTH: i32 = 2;
 /// Focus one turn of rest at home restores.
 pub const REST_FOCUS: i32 = 3;
+/// Stealth lessons each creature can teach, however it is evaded.
+const STEALTH_LESSONS: i32 = 12;
+/// Lessons a landed opening strike takes from its target.
+const OPENING_LESSON: i32 = 3;
+/// Lessons breaking a creature's tracking takes from it.
+const ESCAPE_LESSON: i32 = 3;
+/// Stealth practice per lesson per point of threat.
+const STEALTH_PRACTICE: u32 = 5;
 /// How far from home a territorial monster will go after the wanderer, in tiles.
 pub const TERRITORY: i64 = 4;
 /// Chance an idle monster takes a step.
@@ -300,6 +309,10 @@ pub struct Game {
     sneaking: bool,
     /// Last resolved attempt, for the prototype's explanation panel. Not advancement credit.
     last_attack: Option<AttackResult>,
+    /// Sneaking moves made so far, which sets the rhythm of free moves for practiced stealth.
+    sneak_moves: u32,
+    /// Whether this turn's action was a sneaking move. Cleared when the turn ends.
+    crept: bool,
 }
 
 /// Games are equal when their state is; what the caches happen to hold doesn't count.
@@ -309,7 +322,8 @@ impl PartialEq for Game {
             == (other.world, other.position, other.home, other.turn, other.wanderer, other.next_monster, other.deaths)
             && (&self.region, &self.visited, &self.log, &self.monsters)
                 == (&other.region, &other.visited, &other.log, &other.monsters)
-            && (&self.maneuver, self.sneaking, self.last_attack) == (&other.maneuver, other.sneaking, other.last_attack)
+            && (&self.maneuver, self.sneaking, self.last_attack, self.sneak_moves)
+                == (&other.maneuver, other.sneaking, other.last_attack, other.sneak_moves)
     }
 }
 
@@ -346,6 +360,8 @@ impl Game {
             maneuver: Maneuver::default(),
             sneaking: false,
             last_attack: None,
+            sneak_moves: 0,
+            crept: false,
         };
         game.populate(&mut Rng::keyed(seed, b"populate", &[]));
         game
@@ -389,6 +405,8 @@ impl Game {
             position: at,
             hp: 40,
             practice_left: 40,
+            stealth_left: STEALTH_LESSONS,
+            tracking: false,
             home: at,
             alerted: false,
             energy: 0,
@@ -530,7 +548,7 @@ impl Game {
     pub fn preview_attack(&self, dir: Dir) -> Result<AttackPreview, &'static str> {
         let (x, y) = self.ahead(dir);
         let target = self.monster_at(x, y).ok_or("No adjacent target in that direction.")?;
-        self.maneuver.preview_with_skill(self.attack_context(target), self.wanderer.weapons.get(self.maneuver.weapon))
+        self.maneuver.preview_trained(self.attack_context(target), self.wanderer.training(self.maneuver.weapon))
     }
 
     /// Preview the free weapon strike used by a bump, regardless of the prepared delivery.
@@ -539,7 +557,7 @@ impl Game {
         let target = self.monster_at(x, y).ok_or("No adjacent target in that direction.")?;
         self.maneuver
             .basic_strike()
-            .preview_with_skill(self.attack_context(target), self.wanderer.weapons.get(self.maneuver.weapon))
+            .preview_trained(self.attack_context(target), self.wanderer.training(self.maneuver.weapon))
     }
 
     /// Deliberately use the prepared technique on an adjacent creature. A ground technique discharges
@@ -564,7 +582,7 @@ impl Game {
         AttackContext {
             attack: self.wanderer.stats.attack,
             defense: target.phenotype.stats.defense,
-            unguarded: self.sneaking && !target.detects(self.position, true),
+            unguarded: self.sneaking && !target.detects(self.position, self.concealment()),
             fire_resistance: target.fire_resistance(),
         }
     }
@@ -620,9 +638,12 @@ impl Game {
                 self.maneuver.name, preview.targets, preview.damage, preview.focus
             ),
         );
+        let mut threat = 0;
         for (i, damage) in hits {
+            if self.monsters[i].spend_practice(damage) > 0 {
+                threat = threat.max(self.monsters[i].weapon_threat(&self.wanderer, self.maneuver.weapon));
+            }
             let monster = &mut self.monsters[i];
-            monster.spend_practice(damage);
             monster.hp = monster.hp.saturating_sub(damage);
             monster.alerted = true;
             self.log.push(LogKind::Attack, format!("The {} takes {damage}.", monster.name));
@@ -631,6 +652,7 @@ impl Game {
             }
         }
         self.monsters.retain(|monster| monster.hp > 0);
+        self.learn_focus(preview.focus, threat);
         self.wanderer.hp -= preview.self_damage;
         if preview.self_damage > 0 {
             self.log
@@ -676,18 +698,19 @@ impl Game {
             return Step::Blocked;
         }
         let w = &mut self.wanderer;
-        if w.focus >= MAX_FOCUS && w.hp >= w.max_hp() {
+        let most = w.max_focus();
+        if w.focus >= most && w.hp >= w.max_hp() {
             self.log.push(LogKind::Blocked, "You are already fully rested.");
             return Step::Blocked;
         }
         self.turn += 1;
         self.sneaking = false;
-        w.focus = (w.focus + REST_FOCUS).min(MAX_FOCUS);
+        w.focus = (w.focus + REST_FOCUS).min(most);
         w.hp = (w.hp + REST_HEALTH).min(w.max_hp());
-        let line = if w.focus == MAX_FOCUS && w.hp == w.max_hp() {
+        let line = if w.focus == most && w.hp == w.max_hp() {
             "You rest at home. You are fully recovered.".to_owned()
         } else {
-            format!("You rest at home. Health {}/{}, Focus {}/{MAX_FOCUS}.", w.hp, w.max_hp(), w.focus)
+            format!("You rest at home. Health {}/{}, Focus {}/{most}.", w.hp, w.max_hp(), w.focus)
         };
         self.log.push(LogKind::Attack, line);
         self.end_turn();
@@ -781,7 +804,7 @@ impl Game {
         let (x, y) = self.ahead(dir);
         if !self.can_step(dir) {
             // Biome names are sentence case ("Deep water"); mid-sentence they are common nouns.
-            let line = if self.sneaking && self.wanderer.focus < 1 {
+            let line = if self.sneaking && self.wanderer.focus < self.sneak_cost() {
                 "Not enough Focus. Change your approach or recover at home.".to_owned()
             } else {
                 format!("The way is blocked by {}.", self.world.tile(x, y).biome.biome().name.to_lowercase())
@@ -797,7 +820,9 @@ impl Game {
         self.turn += 1;
         self.position = (x, y);
         if self.sneaking {
-            self.wanderer.focus -= 1;
+            self.wanderer.focus -= self.sneak_cost();
+            self.sneak_moves = self.sneak_moves.wrapping_add(1);
+            self.crept = true;
         }
         self.update_region(true);
         self.end_turn();
@@ -812,8 +837,44 @@ impl Game {
         if self.monster_at(x, y).is_some() {
             true
         } else {
-            self.world.tile(x, y).biome.biome().passable && (!self.sneaking || self.wanderer.focus >= 1)
+            self.world.tile(x, y).biome.biome().passable && (!self.sneaking || self.wanderer.focus >= self.sneak_cost())
         }
+    }
+
+    /// Focus the next sneaking move costs: one, except for practiced stealth's periodic free move.
+    fn sneak_cost(&self) -> i32 {
+        let free = self.wanderer.stealth.free_sneak_every().is_some_and(|n| (self.sneak_moves + 1).is_multiple_of(n));
+        i32::from(!free)
+    }
+
+    /// How many tiles sneaking currently takes off an unalerted observer's initial sensing range.
+    fn concealment(&self) -> i64 {
+        if self.sneaking { self.wanderer.stealth.sneak_reduction() } else { 0 }
+    }
+
+    /// Log a newly reached rank.
+    fn announce(&mut self, skill: &str, rank: Rank) {
+        self.log.push(LogKind::Learning, format!("Your {skill} is now {}.", rank.name()));
+    }
+
+    /// Credit Focus spent on a technique that did real damage to a creature of this threat.
+    fn learn_focus(&mut self, spent: i32, threat: u32) {
+        let evidence = u32::try_from(spent.max(0)).unwrap_or(0).saturating_mul(threat);
+        if self.wanderer.focus_skill.learn(evidence, Rank::ceiling(threat)) {
+            self.announce("Focus", self.wanderer.focus_skill.rank());
+        }
+    }
+
+    /// Spend up to `units` of monster `i`'s stealth lessons, scaled by its threat. Returns whether the
+    /// stealth rank rose; the caller logs it, so the line lands after the action's own messages.
+    fn stealth_lesson(&mut self, i: usize, units: i32) -> bool {
+        let threat = self.monsters[i].weapon_threat(&self.wanderer, self.maneuver.weapon);
+        let ceiling = Rank::ceiling(threat);
+        if ceiling == Rank::Novice {
+            return false;
+        }
+        let spent = self.monsters[i].spend_stealth(units);
+        self.wanderer.stealth.learn(spent.saturating_mul(threat).saturating_mul(STEALTH_PRACTICE), ceiling)
     }
 
     /// The tile one step from the wanderer in `dir`.
@@ -832,7 +893,8 @@ impl Game {
     /// Everything after the wanderer's action: monsters act, the wanderer heals, monsters come and go.
     fn end_turn(&mut self) {
         let deaths = self.deaths;
-        self.monsters_act();
+        let crept = std::mem::take(&mut self.crept);
+        self.monsters_act(crept);
         if self.deaths != deaths {
             return;
         }
@@ -937,6 +999,8 @@ impl Game {
                 position: (x, y),
                 hp: phenotype.stats.hp,
                 practice_left: phenotype.stats.hp,
+                stealth_left: STEALTH_LESSONS,
+                tracking: false,
                 home: (x, y),
                 alerted: false,
                 energy: rng.below(ACTION_COST as usize) as i32,
@@ -958,13 +1022,15 @@ impl Game {
     /// The wanderer attacks monster `index` using the selected action, not necessarily the preparation.
     fn wanderer_attacks(&mut self, index: usize, maneuver: &Maneuver, rng: &mut Rng) {
         let context = self.attack_context(&self.monsters[index]);
-        let skill = self.wanderer.weapons.get(maneuver.weapon);
-        let result = maneuver.resolve_with_skill(context, skill, rng).expect("attack maneuvers are validated");
+        let training = self.wanderer.training(maneuver.weapon);
+        let result = maneuver.resolve_trained(context, training, rng).expect("attack maneuvers are validated");
         let threat = self.monsters[index].weapon_threat(&self.wanderer, maneuver.weapon);
         let opportunity = self.monsters[index].spend_practice(result.total());
         let physical = opportunity.min(result.physical.max(0) as u32);
         let improved = maneuver.technique.delivery == Delivery::Weapon
             && self.wanderer.weapons.learn(maneuver.weapon, physical, threat);
+        let stealthier = result.opening && self.stealth_lesson(index, OPENING_LESSON);
+        let focus_cost = if opportunity > 0 { maneuver.technique.focus_cost() } else { 0 };
         self.wanderer.focus -= maneuver.technique.focus_cost();
         self.last_attack = Some(result);
         // Even a miss reveals the attempt. No repeated surprise by toggling sneak.
@@ -995,24 +1061,39 @@ impl Game {
             }
         }
         if improved {
-            self.log.push(
-                LogKind::Learning,
-                format!(
-                    "Your {} skill is now {}.",
-                    maneuver.weapon.name().to_lowercase(),
-                    self.wanderer.weapons.get(maneuver.weapon).rank().name()
-                ),
-            );
+            let skill = format!("{} skill", maneuver.weapon.name().to_lowercase());
+            self.announce(&skill, self.wanderer.weapons.get(maneuver.weapon).rank());
+        }
+        self.learn_focus(focus_cost, threat);
+        if stealthier {
+            self.announce("stealth", self.wanderer.stealth.rank());
         }
     }
 
     /// Every monster acts, in order of appearance, as often as its speed allows, each drawing from its own
     /// stream for the turn. Stops if the wanderer dies.
-    fn monsters_act(&mut self) {
+    fn monsters_act(&mut self, crept: bool) {
         let deaths = self.deaths;
+        let concealment = self.concealment();
         for i in 0..self.monsters.len() {
             // Observation belongs to the turn, not to a speed-dependent opportunity to act.
-            self.monsters[i].alerted = self.monsters[i].detects(self.position, self.sneaking);
+            let now = self.monsters[i].detects(self.position, concealment);
+            // Escaping counts only from tracking seen at the last turn's observation, so being
+            // revealed by an attack and immediately out of range is not an escape.
+            let escaped = self.monsters[i].tracking && !now;
+            self.monsters[i].alerted = now;
+            self.monsters[i].tracking = now;
+            let lesson = if escaped {
+                ESCAPE_LESSON
+            } else if crept && !now && self.monsters[i].detects(self.position, 0) {
+                // Unseen inside the range that would have found an ordinary walker.
+                1
+            } else {
+                0
+            };
+            if lesson > 0 && self.stealth_lesson(i, lesson) {
+                self.announce("stealth", self.wanderer.stealth.rank());
+            }
             let mut rng = Rng::keyed(self.world.seed(), b"monsters", &[self.turn, self.monsters[i].id.0]);
             self.monsters[i].energy += self.monsters[i].phenotype.stats.speed;
             let mut actions = 0;
@@ -1030,7 +1111,7 @@ impl Game {
     /// One action of monster `i`, by temperament: aggressive ones close in and attack, territorial ones
     /// attack near home, skittish ones flee, and all of them wander when nothing has their attention.
     fn monster_acts(&mut self, i: usize, rng: &mut Rng) {
-        self.monsters[i].alerted = self.monsters[i].detects(self.position, self.sneaking);
+        self.monsters[i].alerted = self.monsters[i].detects(self.position, self.concealment());
         let m = &self.monsters[i];
         let (me, you, home) = (m.position, self.position, m.home);
         let adjacent = manhattan(me, you) == 1;
@@ -1102,6 +1183,7 @@ impl Game {
         for monster in &mut self.monsters {
             monster.hp = monster.max_hp();
             monster.alerted = false;
+            monster.tracking = false;
         }
         self.update_region(false);
         self.log.push(
@@ -1189,6 +1271,7 @@ fn manhattan(a: (i64, i64), b: (i64, i64)) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MAX_FOCUS;
 
     /// Seeds to check: 1, 2, 3, and 7 start in deep water and 5 in shallows; the rest start on land.
     const SEEDS: [u64; 10] = [0, 1, 2, 3, 4, 5, 7, 42, 1_234, u64::MAX];
@@ -1414,6 +1497,8 @@ mod tests {
             position: at,
             hp: phenotype.stats.hp,
             practice_left: phenotype.stats.hp,
+            stealth_left: STEALTH_LESSONS,
+            tracking: false,
             home: at,
             alerted: false,
             energy: 0,
@@ -1765,7 +1850,7 @@ mod tests {
             let before = game.log().total();
             for _ in 0..turns {
                 game.wanderer.hp = game.wanderer.max_hp();
-                game.monsters_act();
+                game.monsters_act(false);
                 game.turn += 1;
             }
             (game.log().total() - before, game.monsters[i].energy)
@@ -2340,6 +2425,172 @@ mod tests {
         }
         game.monsters[0].phenotype.temperament = Temperament::Skittish;
         assert_eq!(game.monsters[0].weapon_threat(&game.wanderer, crate::Weapon::Dagger), 0);
+    }
+
+    /// A dangerous creature with controlled numbers, at dagger threat 66. It never gets to act, so it
+    /// stays exactly where a test puts it.
+    fn still_threat(game: &mut Game, at: (i64, i64), sense: i64) {
+        put_monster(game, at, 1.0);
+        let m = game.monsters.last_mut().unwrap();
+        m.phenotype.stats = crate::Stats { hp: 30, attack: 3, defense: 1, speed: ACTION_COST };
+        m.phenotype.temperament = Temperament::Aggressive;
+        m.hp = 30;
+        m.phenotype.sense = sense;
+        m.energy = -100_000;
+        assert_eq!(game.monsters.last().unwrap().weapon_threat(&game.wanderer, crate::Weapon::Dagger), 66);
+    }
+
+    fn practiced(evidence: u32) -> crate::Skill {
+        let mut skill = crate::Skill::default();
+        skill.learn(evidence, Rank::Expert);
+        skill
+    }
+
+    #[test]
+    fn unseen_sneaking_moves_near_real_threats_teach_stealth() {
+        let mut game = on_open_land(0, 3);
+        let (x, y) = game.position;
+        still_threat(&mut game, (x + 5, y), 8);
+        game.toggle_sneak();
+        game.wait();
+        assert_eq!(game.wanderer.stealth, crate::Skill::default(), "entering sneak and standing still teach nothing");
+        game.step(Dir::East);
+        assert!(!game.monsters[0].alerted, "inside normal range 8, outside sneaking range 2");
+        assert_eq!(game.wanderer.stealth, practiced(66 * STEALTH_PRACTICE));
+        assert_eq!(game.monsters[0].stealth_left, STEALTH_LESSONS - 1);
+
+        game.monsters[0].stealth_left = 0;
+        let learned = game.wanderer.stealth;
+        game.step(Dir::West);
+        assert_eq!(game.wanderer.stealth, learned, "an exhausted creature teaches no more");
+
+        game.monsters[0].stealth_left = STEALTH_LESSONS;
+        game.monsters[0].phenotype.temperament = Temperament::Skittish;
+        game.step(Dir::East);
+        assert_eq!(game.wanderer.stealth, learned, "harmless creatures teach nothing");
+        assert_eq!(game.monsters[0].stealth_left, STEALTH_LESSONS, "and keep their lessons");
+
+        game.monsters[0].phenotype.temperament = Temperament::Aggressive;
+        game.toggle_sneak();
+        game.step(Dir::West);
+        assert!(game.monsters[0].alerted, "an ordinary walker in range is simply found");
+        assert_eq!(game.wanderer.stealth, learned);
+    }
+
+    #[test]
+    fn breaking_observed_tracking_teaches_stealth_but_reveals_and_death_do_not() {
+        let mut game = on_open_land(0, 3);
+        let (x, y) = game.position;
+        game.home = (x, y);
+        still_threat(&mut game, (x + 3, y), 4);
+        game.wait();
+        assert!(game.monsters[0].tracking);
+        game.monsters[0].position = (x + 6, y);
+        game.wait();
+        assert!(!game.monsters[0].alerted);
+        let learned = practiced(ESCAPE_LESSON as u32 * 66 * STEALTH_PRACTICE);
+        assert_eq!(game.wanderer.stealth, learned);
+
+        // Alerted by an attack and never observed in range: losing it is not an escape.
+        game.monsters[0].alerted = true;
+        game.wait();
+        assert_eq!(game.wanderer.stealth, learned);
+
+        // Death forgets tracking without paying for it.
+        game.monsters[0].position = (x + 3, y);
+        game.wait();
+        assert!(game.monsters[0].tracking);
+        game.monsters[0].position = (x + VIEW_RADIUS + 2, y);
+        game.die();
+        game.wait();
+        assert_eq!(game.wanderer.stealth, learned);
+    }
+
+    #[test]
+    fn landed_openings_teach_stealth_and_paid_techniques_teach_focus() {
+        let mut openings = 0;
+        for seed in 0..16 {
+            let mut game = Game::composition_trial(seed, Maneuver::backstab_burst()).unwrap();
+            game.use_technique(Dir::East);
+            let result = game.last_attack.unwrap();
+            if result.hit {
+                openings += 1;
+                assert!(result.opening);
+                // Sentinel threat 133: three stealth lessons at 5 each, and 7 Focus paid.
+                assert_eq!(game.wanderer.stealth, practiced(3 * 133 * 5));
+                assert_eq!(game.wanderer.focus_skill, practiced(7 * 133));
+                assert!(game.log.lines().any(|line| line == "Your stealth is now practiced."));
+            } else {
+                assert_eq!(game.wanderer.stealth, crate::Skill::default());
+                assert_eq!(game.wanderer.focus_skill, crate::Skill::default(), "a miss teaches no Focus");
+            }
+            let mut free = Game::composition_trial(seed, Maneuver::backstab_burst()).unwrap();
+            free.sneaking = false;
+            free.step(Dir::East);
+            assert_eq!(free.wanderer.focus_skill, crate::Skill::default(), "free strikes spend no Focus");
+            assert_eq!(free.wanderer.stealth, crate::Skill::default(), "no opening without concealment");
+        }
+        assert!(openings > 0);
+
+        let mut game = Game::inferno_trial(42).unwrap();
+        assert_eq!(game.monsters[0].weapon_threat(&game.wanderer, crate::Weapon::Staff), 10);
+        game.unleash();
+        assert_eq!(game.wanderer.focus_skill, practiced(18 * 10));
+        let mut empty = Game::inferno_trial(42).unwrap();
+        empty.monsters.clear();
+        empty.unleash();
+        assert_eq!(empty.wanderer.focus_skill, crate::Skill::default(), "an empty cast teaches nothing");
+    }
+
+    #[test]
+    fn focus_practice_enlarges_the_pool_that_rest_refills() {
+        let mut game = on_open_land(0, 3);
+        game.home = game.position;
+        game.wanderer.focus_skill.learn(u32::MAX, Rank::Practiced);
+        assert_eq!(game.wanderer.max_focus(), MAX_FOCUS + 2);
+        assert_eq!(game.wanderer.focus, MAX_FOCUS, "growth raises capacity, not current Focus");
+        game.monsters.clear();
+        assert_eq!(game.recover_focus(), Step::Waited);
+        assert_eq!(game.wanderer.focus, MAX_FOCUS + 2);
+        game.monsters.clear();
+        assert_eq!(game.recover_focus(), Step::Blocked);
+        let mut expert = crate::Skill::default();
+        expert.learn(u32::MAX, Rank::Expert);
+        assert_eq!(expert.focus_capacity(), MAX_FOCUS + 8);
+    }
+
+    #[test]
+    fn stealth_practice_conceals_further_and_frees_some_sneaking_moves() {
+        let mut game = on_open_land(0, 3);
+        let (x, y) = game.position;
+        still_threat(&mut game, (x + 2, y), 9);
+        game.sneaking = true;
+        assert_eq!(game.concealment(), 6);
+        assert!(game.monsters[0].detects(game.position, game.concealment()));
+        game.wanderer.stealth.learn(u32::MAX, Rank::Expert);
+        assert_eq!(game.concealment(), 8);
+        assert!(!game.monsters[0].detects(game.position, game.concealment()));
+        game.sneaking = false;
+        assert_eq!(game.concealment(), 0);
+
+        let mut game = on_open_land(0, 3);
+        game.wanderer.stealth.learn(1_000, Rank::Expert);
+        assert_eq!(game.wanderer.stealth.rank(), Rank::Practiced);
+        game.toggle_sneak();
+        let start = game.wanderer.focus;
+        for i in 0..8 {
+            game.monsters.clear();
+            assert_eq!(game.step(if i % 2 == 0 { Dir::East } else { Dir::West }), Step::Moved);
+        }
+        assert_eq!(game.wanderer.focus, start - 6, "every fourth sneaking move is free");
+        game.monsters.clear();
+        game.wanderer.focus = 0;
+        game.sneak_moves = 3;
+        assert!(game.can_step(Dir::East), "a free move needs no Focus");
+        assert_eq!(game.step(Dir::East), Step::Moved);
+        assert_eq!(game.wanderer.focus, 0);
+        game.monsters.clear();
+        assert!(!game.can_step(Dir::West), "the next one does");
     }
 
     /// A scripted game's exact course, pinned: the same seed and moves must give the same monsters in the

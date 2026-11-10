@@ -4,13 +4,15 @@
 //! fire bursts on contact or penetration. Names and advisory reviews never enter resolution. All coefficients
 //! below are prototype rules; no anatomical simulation or remote evaluator is implied.
 
-use crate::{MISS_CHANCE, Rng, Skill};
+#[cfg(test)]
+use crate::Skill;
+use crate::{MISS_CHANCE, Rng, Training};
 
 /// Largest supported burst investment in this prototype.
 pub const MAX_BURST_POWER: u8 = 6;
 /// Largest square area radius admitted by the prototype.
 pub const MAX_AREA_RADIUS: u8 = 3;
-/// Focus available on a fresh expedition.
+/// Focus capacity before any Focus practice.
 pub const MAX_FOCUS: i32 = 24;
 /// Reduction in initial sensing range while sneaking. Tracking an already located actor is unaffected.
 pub const SNEAK_REDUCTION: i64 = 6;
@@ -313,39 +315,41 @@ impl Maneuver {
 
     /// Resolve one paid attempt. The caller owns turn advancement, resources, and applying this result.
     pub fn resolve(&self, context: AttackContext, rng: &mut Rng) -> Result<AttackResult, &'static str> {
-        self.resolve_with_skill(context, Skill::default(), rng)
+        self.resolve_trained(context, Training::default(), rng)
     }
 
-    /// Resolve with character-owned weapon practice. Touch and ground delivery gain no weapon bonus.
-    pub fn resolve_with_skill(
+    /// Resolve with character-owned practice. Touch and ground delivery gain no weapon bonus; stealth
+    /// adds force only at an actual unguarded opening.
+    pub fn resolve_trained(
         &self,
         context: AttackContext,
-        skill: Skill,
+        training: Training,
         rng: &mut Rng,
     ) -> Result<AttackResult, &'static str> {
         self.validate()?;
         if self.technique.delivery == Delivery::Ground {
             return Err("Ground areas use area resolution, not a single-target attack.");
         }
-        let miss = if self.technique.delivery == Delivery::Weapon { skill.miss_chance() } else { MISS_CHANCE };
+        let miss =
+            if self.technique.delivery == Delivery::Weapon { training.weapon.miss_chance() } else { MISS_CHANCE };
         if rng.chance(miss) {
             return Ok(AttackResult::default());
         }
-        Ok(self.on_hit(self.skilled_context(context, skill), rng.below(3) as i32 - 1))
+        Ok(self.on_hit(self.trained_context(context, training), rng.below(3) as i32 - 1))
     }
 
     /// Exact range across successful-hit rolls; a miss can still do zero damage.
     pub fn preview(&self, context: AttackContext) -> Result<AttackPreview, &'static str> {
-        self.preview_with_skill(context, Skill::default())
+        self.preview_trained(context, Training::default())
     }
 
-    /// Successful-hit range with the same weapon bonuses used by resolution.
-    pub fn preview_with_skill(&self, context: AttackContext, skill: Skill) -> Result<AttackPreview, &'static str> {
+    /// Successful-hit range with the same practice bonuses used by resolution.
+    pub fn preview_trained(&self, context: AttackContext, training: Training) -> Result<AttackPreview, &'static str> {
         self.validate()?;
         if self.technique.delivery == Delivery::Ground {
             return Err("Use the area preview for a ground delivery.");
         }
-        let context = self.skilled_context(context, skill);
+        let context = self.trained_context(context, training);
         let low = self.on_hit(context, -1);
         let high = self.on_hit(context, 1);
         Ok(AttackPreview {
@@ -357,17 +361,28 @@ impl Maneuver {
         })
     }
 
-    fn skilled_context(&self, mut context: AttackContext, skill: Skill) -> AttackContext {
+    fn trained_context(&self, mut context: AttackContext, training: Training) -> AttackContext {
         if self.technique.delivery == Delivery::Weapon {
-            context.attack = context.attack.saturating_add(skill.damage_bonus());
+            context.attack = context.attack.saturating_add(training.weapon.bonus());
+            if self.opens(context) {
+                context.attack = context.attack.saturating_add(training.stealth.bonus());
+            }
         }
         context
+    }
+
+    /// Whether precise weapon placement exploits an actual unguarded opening.
+    fn opens(&self, context: AttackContext) -> bool {
+        self.technique.delivery == Delivery::Weapon
+            && self.technique.aim == Aim::Opening
+            && context.unguarded
+            && self.weapon.precision() > 0
     }
 
     fn on_hit(&self, context: AttackContext, roll: i32) -> AttackResult {
         let weapon_contact = self.technique.delivery == Delivery::Weapon;
         let precision = if weapon_contact { self.weapon.precision() } else { 0 };
-        let opening = self.technique.aim == Aim::Opening && context.unguarded && precision > 0;
+        let opening = self.opens(context);
         let defense = context.defense.max(0).saturating_sub(if opening { precision } else { 0 }).max(0);
         let impact = context.attack.saturating_add(self.weapon.force()).saturating_sub(defense).saturating_add(roll);
         let penetrated = weapon_contact && self.weapon.pierces() && impact > 0;
@@ -612,20 +627,21 @@ mod tests {
     #[test]
     fn weapon_practice_improves_hits_and_previews_but_not_touch_or_burst_power() {
         let context = AttackContext { defense: 1, ..GUARDED };
-        let mut expert = Skill::default();
-        expert.learn(u32::MAX, crate::Rank::Expert);
+        let mut skill = Skill::default();
+        skill.learn(u32::MAX, crate::Rank::Expert);
+        let expert = Training { weapon: skill, ..Training::default() };
         let mut rescued_misses = 0;
         for weapon in [Weapon::Dagger, Weapon::Spear, Weapon::Club, Weapon::Staff] {
             let mut m = Maneuver::backstab_burst();
             m.weapon = weapon;
             m.technique.burst.as_mut().unwrap().trigger = Trigger::Contact;
             let novice_preview = m.preview(context).unwrap();
-            let trained_preview = m.preview_with_skill(context, expert).unwrap();
+            let trained_preview = m.preview_trained(context, expert).unwrap();
             assert_eq!(trained_preview.min_hit, novice_preview.min_hit + 2);
             assert_eq!(trained_preview.max_hit, novice_preview.max_hit + 2);
             for seed in 0..1_000 {
                 let novice = m.resolve(context, &mut Rng::new(seed)).unwrap();
-                let trained = m.resolve_with_skill(context, expert, &mut Rng::new(seed)).unwrap();
+                let trained = m.resolve_trained(context, expert, &mut Rng::new(seed)).unwrap();
                 if novice.hit {
                     assert!(trained.hit);
                     assert_eq!(trained.physical, novice.physical + 2);
@@ -638,18 +654,46 @@ mod tests {
                 }
             }
             m.technique.delivery = Delivery::Touch;
-            assert_eq!(m.preview(context), m.preview_with_skill(context, expert));
+            assert_eq!(m.preview(context), m.preview_trained(context, expert));
             for seed in 0..100 {
                 assert_eq!(
                     m.resolve(context, &mut Rng::new(seed)),
-                    m.resolve_with_skill(context, expert, &mut Rng::new(seed))
+                    m.resolve_trained(context, expert, &mut Rng::new(seed))
                 );
             }
         }
         assert!(rescued_misses > 0);
         let ground = Maneuver::staff_inferno();
-        assert!(ground.resolve_with_skill(GUARDED, expert, &mut Rng::new(0)).is_err());
+        assert!(ground.resolve_trained(GUARDED, expert, &mut Rng::new(0)).is_err());
         assert_eq!(ground.backlash(), Ok(12));
+    }
+
+    #[test]
+    fn stealth_strengthens_only_real_weapon_openings() {
+        let mut skill = Skill::default();
+        skill.learn(u32::MAX, crate::Rank::Expert);
+        let stealthy = Training { stealth: skill, ..Training::default() };
+        let open = AttackContext { unguarded: true, ..GUARDED };
+        let m = Maneuver::backstab_burst();
+        let base = m.preview(open).unwrap();
+        let trained = m.preview_trained(open, stealthy).unwrap();
+        assert_eq!((trained.min_hit, trained.max_hit), (base.min_hit + 2, base.max_hit + 2));
+        for seed in 0..200 {
+            let novice = m.resolve(open, &mut Rng::new(seed)).unwrap();
+            let sneak = m.resolve_trained(open, stealthy, &mut Rng::new(seed)).unwrap();
+            assert_eq!(novice.hit, sneak.hit, "stealth does not change accuracy");
+            if novice.hit {
+                assert_eq!((sneak.physical, sneak.burst), (novice.physical + 2, novice.burst));
+            }
+        }
+        let mut club = m.clone();
+        club.weapon = Weapon::Club;
+        club.technique.burst.as_mut().unwrap().trigger = Trigger::Contact;
+        let mut touch = club.clone();
+        touch.technique.delivery = Delivery::Touch;
+        for (maneuver, context) in [(&m, GUARDED), (&Maneuver::default(), open), (&club, open), (&touch, open)] {
+            assert_eq!(maneuver.preview(context), maneuver.preview_trained(context, stealthy));
+        }
     }
 
     #[test]

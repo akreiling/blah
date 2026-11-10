@@ -79,6 +79,6 @@ pub use phenotype::{
 pub use region::{
     Bounds, CELL_SPACING, CORE_TILES, MAX_REGION_TILES, Means, Region, RegionCache, RegionId, SLIVER_TILES, STRAY_TILES,
 };
-pub use skills::{Rank, Skill, WeaponSkills};
+pub use skills::{Rank, Skill, Training, WeaponSkills};
 pub use sprite::{SPRITE_SIZE, Sprite};
 pub use world::{Tile, World};
