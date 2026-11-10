@@ -61,8 +61,8 @@ pub use combat::{
 };
 pub use game::{
     Comparison, DEATH_TURNS, DESPAWN_RADIUS, Dir, Game, LAND_SEARCH_RADIUS, LOG_LIMIT, Log, LogEntry, LogKind,
-    REGEN_TURNS, SPAWN_MAX, SPAWN_MIN, Step, TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity, find_land, individual,
-    ring, spawn_chance,
+    REGEN_TURNS, REST_FOCUS, REST_HEALTH, SPAWN_MAX, SPAWN_MIN, Step, TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity,
+    find_land, individual, ring, spawn_chance,
 };
 pub use genome::{GENES, Gene, Genome, gene_delta};
 pub use hash::{Rng, hash_point};

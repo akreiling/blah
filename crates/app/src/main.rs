@@ -76,7 +76,7 @@ actions!(
         WorkshopStaffExample,
         /// Toggle careful movement.
         ToggleSneak,
-        /// Recover Focus at home.
+        /// Rest a turn at home to recover Health and Focus.
         RecoverFocus,
         /// Unleash the prepared ground payload.
         Unleash,

@@ -213,6 +213,10 @@ pub const DESPAWN_RADIUS: i64 = 2 * VIEW_RADIUS;
 pub const REGEN_TURNS: u64 = 6;
 /// Turns lost to dying.
 pub const DEATH_TURNS: u64 = 1_000;
+/// Health one turn of rest at home restores.
+pub const REST_HEALTH: i32 = 2;
+/// Focus one turn of rest at home restores.
+pub const REST_FOCUS: i32 = 3;
 /// How far from home a territorial monster will go after the wanderer, in tiles.
 pub const TERRITORY: i64 = 4;
 /// Chance an idle monster takes a step.
@@ -656,20 +660,32 @@ impl Game {
         Step::Waited
     }
 
-    /// Recover Focus at home, with no creatures nearby. Ordinary waiting never restores it.
+    /// Rest for a turn at home, with no creatures nearby: recover [`REST_HEALTH`] Health and
+    /// [`REST_FOCUS`] Focus. Recovery is gradual, so the world keeps moving while you rest.
+    /// Ordinary waiting never restores Focus.
     pub fn recover_focus(&mut self) -> Step {
         if self.position != self.home || !self.can_prepare() {
-            self.log.push(LogKind::Blocked, "Recover Focus at home, away from nearby creatures.");
+            self.log.push(LogKind::Blocked, "Rest at home, away from nearby creatures.");
+            return Step::Blocked;
+        }
+        let w = &mut self.wanderer;
+        if w.focus >= MAX_FOCUS && w.hp >= w.max_hp() {
+            self.log.push(LogKind::Blocked, "You are already fully rested.");
             return Step::Blocked;
         }
         self.turn += 1;
         self.sneaking = false;
-        self.wanderer.focus = MAX_FOCUS;
-        self.log.push(LogKind::Attack, "You recover your Focus at home.");
+        w.focus = (w.focus + REST_FOCUS).min(MAX_FOCUS);
+        w.hp = (w.hp + REST_HEALTH).min(w.max_hp());
+        let line = if w.focus == MAX_FOCUS && w.hp == w.max_hp() {
+            "You rest at home. You are fully recovered.".to_owned()
+        } else {
+            format!("You rest at home. Health {}/{}, Focus {}/{MAX_FOCUS}.", w.hp, w.max_hp(), w.focus)
+        };
+        self.log.push(LogKind::Attack, line);
         self.end_turn();
         Step::Waited
     }
-
     /// Times the wanderer has died.
     #[must_use]
     pub const fn deaths(&self) -> u32 {
@@ -1044,21 +1060,31 @@ impl Game {
         }
     }
 
-    /// The wanderer dies: time jumps, and they wake at home, whole, with the monsters gone.
+    /// The wanderer dies: time jumps, and they wake at home with 1 Health and no Focus.
+    ///
+    /// Dying refills nothing, so it never beats retreating. Creatures survive and recover while the
+    /// wanderer is away. Those within view of home are driven off, so waking weak is not a second fight.
     fn die(&mut self) {
         self.log.push(LogKind::Death, "You fall.");
         self.deaths += 1;
         self.turn += DEATH_TURNS;
         self.position = self.home;
-        self.wanderer.hp = self.wanderer.max_hp();
-        self.wanderer.focus = MAX_FOCUS;
+        self.wanderer.hp = 1;
+        self.wanderer.focus = 0;
         self.sneaking = false;
         self.last_attack = None;
-        self.monsters.clear();
+        let home = self.home;
+        self.monsters.retain(|m| (VIEW_RADIUS + 1..=DESPAWN_RADIUS).contains(&chebyshev(m.position, home)));
+        for monster in &mut self.monsters {
+            monster.hp = monster.max_hp();
+            monster.alerted = false;
+        }
         self.update_region(false);
-        self.log.push(LogKind::Death, format!("You wake, much later, in {}.", self.region.name));
+        self.log.push(
+            LogKind::Death,
+            format!("You wake, much later, in {}. Weak and drained, rest (R).", self.region.name),
+        );
     }
-
     /// Whether monster `i` may stand on `(x, y)`: not the wanderer's tile, not another monster's, and terrain
     /// its body allows.
     fn open_to(&self, i: usize, (x, y): (i64, i64)) -> bool {
@@ -1441,11 +1467,11 @@ mod tests {
         assert_eq!(game.deaths(), deaths + 1, "the wanderer never died");
         assert!(game.turn() >= turn + DEATH_TURNS);
         assert_eq!(game.position(), game.home());
-        assert_eq!(game.wanderer().hp, game.wanderer().max_hp());
-        assert!(game.monsters().is_empty());
+        assert_eq!((game.wanderer().hp, game.wanderer().focus), (1, 0));
+        assert!(game.monsters_in_view().next().is_none(), "the killer near home is driven off");
         assert_eq!(game.region().id, home_region);
         let last = game.log().lines().last().unwrap();
-        assert_eq!(last, format!("You wake, much later, in {}.", game.region().name));
+        assert_eq!(last, format!("You wake, much later, in {}. Weak and drained, rest (R).", game.region().name));
     }
 
     #[test]
@@ -1959,7 +1985,7 @@ mod tests {
     }
 
     #[test]
-    fn focus_recovers_only_at_a_safe_home_or_after_death() {
+    fn focus_recovers_only_by_resting_at_a_safe_home() {
         let mut game = on_open_land(0, 3);
         game.home = game.position;
         game.toggle_sneak();
@@ -1974,13 +2000,54 @@ mod tests {
         game.step(Dir::West);
         game.monsters.clear();
         assert_eq!(game.recover_focus(), Step::Waited);
-        assert_eq!(game.wanderer.focus, MAX_FOCUS);
+        assert_eq!(game.wanderer.focus, (MAX_FOCUS - 2 + REST_FOCUS).min(MAX_FOCUS));
         assert!(!game.sneaking);
         game.wanderer.focus = 0;
         assert_eq!(game.toggle_sneak(), Step::Blocked);
         game.die();
-        assert_eq!(game.wanderer.focus, MAX_FOCUS);
+        assert_eq!(game.wanderer.focus, 0, "death does not restore Focus");
         assert!(!game.sneaking);
+    }
+
+    #[test]
+    fn death_wakes_weak_keeps_distant_creatures_and_rest_recovers_gradually() {
+        let mut game = on_open_land(0, 3);
+        game.home = game.position;
+        let (x, y) = game.home;
+        let near = put_monster(&mut game, (x + 3, y), 1.0);
+        let far = put_monster(&mut game, (x + VIEW_RADIUS + 2, y), 1.0);
+        let gone = put_monster(&mut game, (x + DESPAWN_RADIUS + 1, y), 1.0);
+        for m in &mut game.monsters {
+            m.hp = 1;
+            m.alerted = true;
+        }
+        game.position = (x - 5, y);
+        game.die();
+        assert_eq!(game.position, game.home);
+        assert_eq!((game.wanderer.hp, game.wanderer.focus), (1, 0), "death refills nothing");
+        let ids: Vec<_> = game.monsters.iter().map(|m| m.id).collect();
+        assert_eq!(ids, [far], "creatures in view of home are driven off; distant ones stay");
+        assert!(!ids.contains(&near) && !ids.contains(&gone));
+        let kept = &game.monsters[0];
+        assert_eq!(kept.hp, kept.max_hp(), "creatures recover while you are away");
+        assert!(!kept.alerted);
+
+        game.monsters.clear();
+        let mut rests = 0;
+        while game.wanderer.focus < MAX_FOCUS || game.wanderer.hp < game.wanderer.max_hp() {
+            let (hp, focus, turn) = (game.wanderer.hp, game.wanderer.focus, game.turn);
+            assert_eq!(game.recover_focus(), Step::Waited);
+            assert_eq!(game.turn, turn + 1);
+            assert!(game.wanderer.focus <= (focus + REST_FOCUS).min(MAX_FOCUS));
+            assert!(game.wanderer.hp >= hp && game.wanderer.hp <= game.wanderer.max_hp());
+            assert!(game.wanderer.focus > focus || focus == MAX_FOCUS);
+            rests += 1;
+            game.monsters.clear();
+        }
+        assert!(rests >= (MAX_FOCUS / REST_FOCUS) as usize, "recovery takes turns, not one keypress");
+        let before = game.clone();
+        assert_eq!(game.recover_focus(), Step::Blocked, "nothing left to recover");
+        assert_eq!(game.turn, before.turn);
     }
 
     #[test]
@@ -2083,8 +2150,8 @@ mod tests {
         assert_eq!(game.unleash(), Step::Attacked);
         assert_eq!(game.deaths, 1);
         assert_eq!(game.turn, 1 + DEATH_TURNS);
-        assert_eq!(game.wanderer.hp, game.wanderer.max_hp());
-        assert!(!game.sneaking && game.monsters.is_empty());
+        assert_eq!((game.wanderer.hp, game.wanderer.focus), (1, 0));
+        assert!(!game.sneaking && game.monsters.is_empty(), "the survivor beside home is driven off");
 
         let mut game = Game::inferno_trial(42).unwrap();
         game.monsters.clear();
@@ -2125,7 +2192,7 @@ mod tests {
             }
         }
         assert_eq!(
-            h, 0x26ce_47cb_fd68_5d92,
+            h, 0x2a04_a38f_e24d_9338,
             "the sim's arithmetic changed; see this test's doc before touching the constant"
         );
     }

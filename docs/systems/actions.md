@@ -145,5 +145,7 @@ phase transition can use different recovery rules only if they are explicit.
 This prevents harmless repeated chip damage from replacing a confrontation without silently restoring
 everything as soon as the player steps out of view.
 
-**Current code differs.** The composition proof still restores full Health and Focus on death and keeps
-carried gear. That is the behavior this rule replaces; do not describe it as the intended design.
+**Implemented so far:** death wakes you at home with 1 Health and no Focus, and **R** rests one turn at
+home (no creatures in view) for 2 Health and 3 Focus. Creatures survive and fully recover; those within
+view of home are driven off. **Not yet:** carried gear stays with you, because there is no inventory.
+Home is clear when you wake, but creatures can still wander in while you rest, so a second death is possible.

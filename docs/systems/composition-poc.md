@@ -114,9 +114,10 @@ or delayed telegraphs.** Terrain does not block the wave. Do not treat this as a
 - Initial detection range while sneaking is `max(normal sense − 6, 0)`. Acute observers can still detect it.
 - Already located actors remain tracked within normal sensing range. Leaving that range loses tracking.
 - Observation updates even when a slow creature has no action that turn.
-- Waiting does not restore Focus. **R** restores it at home only when no creatures are nearby.
-- Existing Health regeneration and death's home return remain. Death also restores Focus, without granting
-  learning, equipment, or other rewards.
+- Waiting does not restore Focus. **R** rests one turn at home, only when no creatures are nearby,
+  restoring 2 Health and 3 Focus.
+- Existing Health regeneration remains. Death returns you home with 1 Health and no Focus, after 1,000
+  turns. Creatures survive and recover; those within view of home are driven off.
 - Preparation is free but requires no creatures in the visible neighborhood. Editing and canceling spend
   no time. The workshop is paused and cannot be used to move or cast behind the editor.
 

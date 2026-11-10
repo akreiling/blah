@@ -83,8 +83,8 @@ discharge, attempted re-preparation). These must always hold, and do:
 
 Running out of Focus blocks costly techniques, not weapon strikes. For example, the cheapest area spell
 (5 Focus) leaves 4 Focus after four discharges beside a living sentinel; the player can still strike,
-retreat, or die. Current code returns the player home with full Health and Focus after 1,000 turns;
-the [approved death rule](actions.md#death-and-retreat) is not implemented yet.
+retreat, or die. Death now returns the player home after 1,000 turns with 1 Health and no Focus
+([death rule](actions.md#death-and-retreat)).
 
 ## What longer journeys already show
 
@@ -120,8 +120,8 @@ The first safe points were 11–25 tiles from home. Being safe to prepare did no
 At seed 42, ordinary westward retreat after dagger exhaustion preserves Focus and avoids immediate
 attacks, but the equal-speed sentinel follows one tile behind. It still blocks preparation.
 Waiting in place eventually dies instead: from the exhausted turn 3, 25 waits cause death at turn 1028,
-including the 1,000-turn death penalty. Death restores full Health and Focus and removes nearby monsters.
-That creates an available reset where ordinary waiting does not, though it is not a reward or progression.
+including the 1,000-turn death penalty. This survey predates the death rule, when death restored full
+Health and Focus. Now death refills nothing, and recovering at home takes about 14 turns of rest.
 
 ## Questions exposed by the mechanics
 

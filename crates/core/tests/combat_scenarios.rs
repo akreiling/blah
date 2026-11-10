@@ -1,7 +1,7 @@
 //! Player-action regressions for the demo dead ends, plus bounded encounter surveys.
 //! Only public Game entry points are used: no injected Focus, enemy stats, positions, or RNG results.
 
-use blah_core::{Aim, Dir, Element, Game, LogKind, MAX_FOCUS, Maneuver, Step, Technique, Trigger, Weapon};
+use blah_core::{Aim, Dir, Element, Game, LogKind, MAX_FOCUS, Maneuver, REST_FOCUS, Step, Technique, Trigger, Weapon};
 
 /// Print actions, resources, enemies, and only the messages produced by this action.
 fn act(game: &mut Game, label: &str, action: impl FnOnce(&mut Game) -> Step) -> Step {
@@ -312,10 +312,11 @@ fn survey_retreat_after_exhaustion_in_both_demos() {
                         return_deaths += 1;
                     } else if escape.position() == escape.home() {
                         returned += 1;
+                        let focus = escape.wanderer().focus;
                         let success = escape.recover_focus() == Step::Waited;
                         recovered += usize::from(success && escape.deaths() == 0);
                         if success {
-                            assert_eq!(escape.wanderer().focus, MAX_FOCUS);
+                            assert_eq!(escape.wanderer().focus, (focus + REST_FOCUS).min(MAX_FOCUS));
                         }
                         println!(
                             "  return seed={seed}, first safe={distance} tiles from home, home turn={}, recovery={success}",
@@ -365,12 +366,13 @@ fn exhausted_dagger_can_walk_but_a_same_speed_pursuer_stays_close() {
 }
 
 #[test]
-fn waiting_for_death_restores_the_resources_that_waiting_alive_does_not() {
+fn dying_leaves_you_worse_off_than_surviving_exhausted() {
     let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
     for _ in 0..3 {
         game.use_technique(Dir::East);
     }
     let exhausted_turn = game.turn();
+    let exhausted_focus = game.wanderer().focus;
     for _ in 0..64 {
         if game.deaths() > 0 {
             break;
@@ -383,10 +385,15 @@ fn waiting_for_death_restores_the_resources_that_waiting_alive_does_not() {
     }
     assert_eq!(game.deaths(), 1);
     assert_eq!(game.position(), game.home());
-    assert_eq!(game.wanderer().focus, MAX_FOCUS);
-    assert_eq!(game.wanderer().hp, game.wanderer().max_hp());
-    assert!(game.monsters().is_empty());
-    assert!(game.can_prepare());
+    assert_eq!((game.wanderer().hp, game.wanderer().focus), (1, 0), "death refills nothing");
+    assert!(game.wanderer().focus < exhausted_focus, "dying cost Focus that surviving kept");
+    assert!(game.can_prepare(), "home is clear of the creature that killed you");
+    let mut rests = 0;
+    while game.recover_focus() == Step::Waited {
+        rests += 1;
+    }
+    println!("Rests to recover fully after death (or until interrupted): {rests}");
+    assert!(rests > 1, "recovery takes many turns");
     assert_eq!(game.maneuver(), &Maneuver::backstab_burst());
     println!(
         "Death recovery: {} turns elapsed since exhaustion, including the death penalty",

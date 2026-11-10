@@ -300,7 +300,7 @@ fn home_hint((x, y): (i64, i64), (hx, hy): (i64, i64)) -> String {
     if dx != 0 {
         parts.push(format!("{} {}", dx.unsigned_abs(), if dx < 0 { "W" } else { "E" }));
     }
-    if parts.is_empty() { "here (R recovers)".into() } else { parts.join(", ") }
+    if parts.is_empty() { "here (R rests)".into() } else { parts.join(", ") }
 }
 
 /// The wanderer's tile: an `@` on darkened ground, or on red the turn it was hurt.
@@ -386,7 +386,7 @@ fn panel(game: &Game, sprites: &mut SpriteCache, workshop: Option<&Workshop>) ->
                 .line_height(px(SMALL_LINE))
                 .child("Arrows / hjkl / wasd · bump = free strike")
                 .child("Shift + direction = prepared technique")
-                .child("M edit · C sneak · R recover · F unleash")
+                .child("M edit · C sneak · R rest · F unleash")
                 .child("Space / . wait · Q quit"),
         )
 }
@@ -855,7 +855,7 @@ mod tests {
 
     #[test]
     fn home_hint_names_direction_and_steps() {
-        assert_eq!(home_hint((0, 0), (0, 0)), "here (R recovers)");
+        assert_eq!(home_hint((0, 0), (0, 0)), "here (R rests)");
         assert_eq!(home_hint((5, 5), (2, -7)), "12 N, 3 W");
         assert_eq!(home_hint((0, 0), (4, 1)), "1 S, 4 E");
         assert_eq!(home_hint((0, 0), (0, 9)), "9 S");
