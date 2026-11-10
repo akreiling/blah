@@ -72,7 +72,7 @@ impl Gene {
 }
 
 /// A creature's genes, each in `[0, 1]`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct Genome([f32; GENES]);
 
 impl Genome {

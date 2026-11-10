@@ -207,7 +207,7 @@ fn region_rng(seed: u64, label: &[u8; 8], region: RegionId, clade: CladeId) -> R
 }
 
 /// A species: for now, one clade in one region.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SpeciesId {
     /// Where it lives.
     pub region: RegionId,

@@ -395,7 +395,8 @@ ecology or remote generation.
   GPUI's actions and keybindings carry the one-key commands. GPUI comes from crates.io at an exact version
   (`=0.2.2`) because its API changes often. It uses the `runtime_shaders` feature, which compiles the Metal
   shaders at launch, so building needs only Xcode and not its separately downloaded Metal Toolchain.
-- **Save**, planned, is one versioned SQLite file per character/world. It records character development,
+- **Save** is one versioned SQLite file per character/world; the first slice saves the game state after
+  every turn. It will grow to record
   item ownership, encounter definitions and progress, learning and reward claims, and later regional
   history. Base terrain is regenerated from a saved seed and compatible generator version; persistent
   terrain changes are overlays. Incompatible rules cannot silently reinterpret old saves. See

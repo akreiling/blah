@@ -6,6 +6,9 @@ version.workspace = true
 publish.workspace = true
 
 [dependencies]
+dirs = "5"
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde_json = "1"
 blah-core = { path = "../core" }
 gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
 # Only for the frame type GPUI images are built from; the version GPUI itself uses.

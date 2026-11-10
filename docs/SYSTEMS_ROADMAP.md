@@ -79,6 +79,11 @@ Implement CP0, CP1, and CP2 first, not the entire design:
 - [ ] Test a legal combination that is not in the authored example list.
 - [ ] Prove tactical synergy before implementing a long progression curve.
 
+**Status, revision after `4c67b0b`:** the composition proof, practiced weapon, Focus, and stealth skills, six
+practiced-rank moves, and the pacing and paired-branch probes exist. The first CP4 save slice now resumes a
+character from SQLite after every turn ([details](systems/architecture.md#implemented-first-slice)). The
+checklists stay unchecked by convention.
+
 Then grow those identities through practice and commitment, preserve them in saves, and give them a
 worthwhile journey with treasure, recovery, and an authored apex encounter.
 
@@ -92,7 +97,7 @@ and the earlier art pipeline. This document set supersedes its older progression
 assumptions.
 
 The original slice remains accurately documented as independent regional evolution with fixed wanderer
-stats, bump combat, no save system, and no implemented remote clients. Proposed features are not claimed
+stats, bump combat, no save system at that time, and no implemented remote clients. Proposed features are not claimed
 as shipped.
 
 The original roadmap was documentation-only. The separate composition proof now implements a small

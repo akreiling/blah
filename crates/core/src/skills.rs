@@ -54,7 +54,7 @@ impl Rank {
 }
 
 /// Accumulated evidence for one proficiency, independent of equipment ownership.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Skill {
     practice: u32,
 }
@@ -136,7 +136,7 @@ pub struct Training {
 }
 
 /// Character-owned practice for the four current weapon families.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WeaponSkills {
     skills: [Skill; 4],
 }

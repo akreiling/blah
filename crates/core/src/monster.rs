@@ -11,7 +11,7 @@ use crate::sprite::Sprite;
 use crate::{Skill, Temperament, Training, Weapon, WeaponSkills};
 
 /// A monster's stable id within one game, in order of appearance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MonsterId(pub u64);
 
 /// One creature near the wanderer: an individual drawn from its species' pool.
@@ -105,7 +105,7 @@ impl Monster {
 }
 
 /// The wanderer's state in a fight.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Wanderer {
     /// Hit points left.
     pub hp: i32,

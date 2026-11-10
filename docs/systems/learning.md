@@ -33,7 +33,7 @@ Moves are implemented; saving is not.
 Practice thresholds are 1,000, 4,000, 12,000, and 30,000; one landed damage point earns its threat in
 practice. These remain prototype numbers. The 40-Health trial sentinel has a dagger threat of 133, so
 one full dagger fight against it goes from novice to skilled. Ordinary wild creatures teach far less.
-Skills are not saved; there is no save system yet.
+Skills are saved with the character after every turn and survive restarts.
 
 ## Implemented prototype: Focus and stealth practice
 
@@ -74,7 +74,7 @@ below *practiced*. Two paid technique hits still take Focus to *practiced*.
 The first move for a skill unlocks automatically when its character-owned rank reaches *practiced*.
 There is no separate unlock ledger. Weapon moves also require that weapon family to be equipped, but
 earning a move survives refitting and death. The prepared technique is never replaced, and ordinary
-bump strikes remain free. Moves and skills are not saved across application restarts.
+bump strikes remain free. Moves follow from saved skills, so they survive application restarts.
 
 | Skill | Move | Focus | Effect |
 | --- | --- | ---: | --- |

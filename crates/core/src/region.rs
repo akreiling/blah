@@ -70,7 +70,7 @@ const OUTSIDE: u16 = u16::MAX;
 /// Identifies one region of one world: the first tile of the region's core in row-major order.
 ///
 /// Ordered by that tile's `y`, then `x`. An id only means something in the world it came from.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RegionId {
     // Field order is the sort order.
     y: i64,

@@ -8,6 +8,9 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
 [dev-dependencies]
 # Only the bestiary_sheet example writes images; the library itself never does I/O.
 png = "0.18"

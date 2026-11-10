@@ -18,7 +18,7 @@ pub const MAX_FOCUS: i32 = 24;
 pub const SNEAK_REDUCTION: i64 = 6;
 
 /// Prototype equipment catalog. Compositions use capabilities, not these names.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Weapon {
     /// A precise, piercing weapon with no added base force.
     #[default]
@@ -85,7 +85,7 @@ impl Weapon {
 }
 
 /// How an effect reaches an adjacent target.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Delivery {
     /// Strike using the equipped weapon.
     Weapon,
@@ -96,7 +96,7 @@ pub enum Delivery {
 }
 
 /// How the actor directs the delivery.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Aim {
     /// An ordinary attack.
     Direct,
@@ -105,7 +105,7 @@ pub enum Aim {
 }
 
 /// The resolved event that releases an attached payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Trigger {
     /// Release on a successful contact, including a glancing strike.
     Contact,
@@ -114,7 +114,7 @@ pub enum Trigger {
 }
 
 /// What an attached burst does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Element {
     /// Mechanical force; surface delivery contends with armor.
     Force,
@@ -123,7 +123,7 @@ pub enum Element {
 }
 
 /// The spatial extent of a payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
     /// One contacted target.
     Point,
@@ -132,7 +132,7 @@ pub enum Shape {
 }
 
 /// A bounded magical payload. This is the example's thaumaturgy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Burst {
     /// Investment from one through [`MAX_BURST_POWER`].
     pub power: u8,
@@ -161,7 +161,7 @@ impl Burst {
 }
 
 /// Executable structure. It deliberately has no name or model-supplied damage number.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Technique {
     /// The delivery mechanism.
     pub delivery: Delivery,
@@ -229,7 +229,7 @@ impl Technique {
 /// A player's named technique and the equipment prepared to execute it.
 ///
 /// An AI can propose a name and a reviewer can discuss this structure, but neither owns its behavior.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Maneuver {
     /// Cosmetic name, at most 48 characters and without control characters.
     pub name: String,
@@ -435,7 +435,7 @@ pub struct AreaPreview {
 }
 
 /// A resolved attempt and the provenance of its effects. The game credits only effective weapon damage.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AttackResult {
     /// Whether the delivery contacted the target.
     pub hit: bool,

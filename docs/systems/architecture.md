@@ -96,6 +96,24 @@ stored tile-by-tile. Never silently load an old save under incompatible generati
 Until a migration exists, reject an unsupported save with a clear explanation and leave the original intact.
 An overall package version alone is not a sufficient compatibility contract.
 
+## Implemented first slice
+
+`blah-core` exposes `Game::snapshot` and `Game::from_snapshot`. A `GameSnapshot` carries snapshot, terrain,
+and rules versions (all 1), the seed, turn, position, home, visited regions, log, the wanderer's Health,
+Focus, and practice, each nearby creature's genome, phenotype, Health, remaining lessons, and awareness,
+and the prepared composition. Region lives, region labels, clades, and sprites are not saved; loading
+regrows them from the seed. Loading checks versions and value ranges and rejects anything else.
+
+The app stores the snapshot as JSON in a single-row SQLite table (`PRAGMA user_version = 1`) and rewrites it
+in one transaction after every action, under `synchronous = FULL`. A row revision makes a second running
+session's write fail rather than overwrite. If a write fails, the in-memory action is undone and the title
+bar shows the error. A turn's snapshot is under 9 KB and the file stays near 20 KB; a test bounds both.
+
+`blah` resumes the newest `character-NNNNNN.sqlite3` in the platform data directory
+(`~/Library/Application Support/blah/saves` on macOS). `--new` creates the next numbered file and never
+replaces one; `--save PATH` names a file. An explicit seed that differs from the save's is an error.
+Developer demos are never saved. Missing, corrupt, and unsupported files are reported and left untouched.
+
 ## Atomicity and replay
 
 An action boundary must not save half a reward claim or half an adaptation commitment.

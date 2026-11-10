@@ -1,12 +1,16 @@
 //! The GPUI frontend: one window onto the world, with the wanderer at its center.
 //!
-//! Usage: `blah [seed] [--steps N] [--combat-demo | --inferno-demo]`.
+//! Usage: `blah [seed] [--new] [--save PATH] [--steps N] [--combat-demo | --inferno-demo]`.
 //! The seed is a `u64` and defaults to [`DEFAULT_SEED`].
+//!
+//! A normal launch resumes the newest saved character and autosaves after every turn; `--new` starts
+//! another in its own file. The demos are never saved.
 //!
 //! `--steps N` is a development aid, in every build: it plays N turns by a fixed rule before the window
 //! opens (see [`autoplay`]), so a seed and a count always put the same scene on screen, monsters and a
 //! fight included, for checking a change or taking a screenshot.
 
+mod save;
 mod sprites;
 mod view;
 mod workshop;
@@ -23,7 +27,7 @@ use crate::view::GameView;
 /// The world a bare `blah` opens.
 const DEFAULT_SEED: u64 = 42;
 /// What to print when the command line can't be read.
-const USAGE: &str = "usage: blah [seed] [--steps N] [--combat-demo | --inferno-demo]";
+const USAGE: &str = "usage: blah [seed] [--new] [--save PATH] [--steps N] [--combat-demo | --inferno-demo]";
 
 actions!(
     blah,
@@ -156,9 +160,12 @@ enum Demo {
 }
 
 /// What the command line asked for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Args {
     seed: u64,
+    seed_explicit: bool,
+    fresh: bool,
+    save_path: Option<std::path::PathBuf>,
     /// Turns to [`autoplay`] before the window opens, a development aid.
     steps: u32,
     demo: Demo,
@@ -170,9 +177,18 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut seed = None;
     let mut steps = 0;
     let mut demo = Demo::None;
+    let mut fresh = false;
+    let mut save_path = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
-        if arg == "--steps" {
+        if arg == "--new" {
+            fresh = true;
+        } else if arg == "--save" {
+            if save_path.is_some() {
+                return Err("--save may be supplied only once".into());
+            }
+            save_path = Some(std::path::PathBuf::from(args.next().ok_or("--save needs a path")?));
+        } else if arg == "--steps" {
             let n = args.next().ok_or("--steps needs a number")?;
             steps = n.parse().map_err(|_| format!("--steps takes a whole number, not {n:?}"))?;
         } else if arg == "--combat-demo" || arg == "--inferno-demo" {
@@ -180,6 +196,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 return Err("--combat-demo and --inferno-demo are mutually exclusive".into());
             }
             demo = if arg == "--combat-demo" { Demo::Combat } else { Demo::Inferno };
+        } else if arg.starts_with('-') {
+            return Err(format!("unknown option {arg:?}"));
         } else if seed.is_none() {
             seed = Some(
                 arg.parse().map_err(|_| format!("seed must be a whole number from 0 to {}, not {arg:?}", u64::MAX))?,
@@ -188,14 +206,22 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             return Err("too many arguments".into());
         }
     }
-    Ok(Args { seed: seed.unwrap_or(DEFAULT_SEED), steps, demo })
+    if demo != Demo::None && (fresh || save_path.is_some()) {
+        return Err("Developer demos are unsaved; do not combine them with --new or --save.".into());
+    }
+    Ok(Args { seed: seed.unwrap_or(DEFAULT_SEED), seed_explicit: seed.is_some(), steps, demo, fresh, save_path })
 }
 
 /// Plays `turns` turns by a fixed rule, so a seed and a count always give the same scene: a development
 /// aid behind `--steps`. Each turn it heads for the nearest monster in view, longer axis first (attacking on
 /// contact), and failing that tries east, south, north, and west in turn, waiting if every way is blocked.
 /// Returns the log total before the last turn, so that turn's lines show as new.
+#[cfg(test)]
 fn autoplay(game: &mut Game, turns: u32) -> u64 {
+    autoplay_saved(game, turns, &mut None).expect("unsaved autoplay cannot fail")
+}
+
+fn autoplay_saved(game: &mut Game, turns: u32, save: &mut Option<save::Save>) -> Result<u64, String> {
     // With no turns played, everything logged so far is news.
     let mut mark = 0;
     for _ in 0..turns {
@@ -217,12 +243,13 @@ fn autoplay(game: &mut Game, turns: u32) -> u64 {
             None => Vec::new(),
         };
         wanted.extend([Dir::East, Dir::South, Dir::North, Dir::West]);
-        match wanted.into_iter().find(|&d| game.can_step(d)) {
+        let direction = wanted.into_iter().find(|&d| game.can_step(d));
+        save::commit_action(game, save, |game| match direction {
             Some(d) => _ = game.step(d),
             None => _ = game.wait(),
-        }
+        })?;
     }
-    mark
+    Ok(mark)
 }
 
 fn initial_game(seed: u64, demo: Demo) -> Result<Game, &'static str> {
@@ -233,19 +260,52 @@ fn initial_game(seed: u64, demo: Demo) -> Result<Game, &'static str> {
     }
 }
 
+/// The same startup path is used by the window and headless lifecycle tests.
+fn start_game(args: &Args, directory: &std::path::Path) -> Result<(Game, Option<save::Save>, u64), String> {
+    let (mut game, mut save) = if args.demo != Demo::None {
+        (initial_game(args.seed, args.demo).map_err(str::to_owned)?, None)
+    } else {
+        let (save, game) = match &args.save_path {
+            Some(path) if args.fresh => {
+                let game = Game::new(args.seed);
+                (save::Save::create(path, &game)?, game)
+            }
+            Some(path) => save::Save::load(path)?,
+            None => save::automatic(directory, args.fresh, args.seed)?,
+        };
+        if args.seed_explicit && game.world().seed() != args.seed {
+            return Err("The saved world's seed differs. Use --new to start another character.".into());
+        }
+        (game, Some(save))
+    };
+    let mark = autoplay_saved(&mut game, args.steps, &mut save)?;
+    Ok((game, save, mark))
+}
+
 fn main() {
-    let Args { seed, steps, demo } = match parse_args(std::env::args().skip(1)) {
+    let args = match parse_args(std::env::args().skip(1)) {
         Ok(args) => args,
         Err(e) => {
             eprintln!("blah: {e}\n{USAGE}");
             std::process::exit(2);
         }
     };
-    let mut game = initial_game(seed, demo).unwrap_or_else(|error| {
-        eprintln!("blah: could not start the requested demo: {error}");
+    let directory = if args.demo != Demo::None || args.save_path.is_some() {
+        std::path::PathBuf::new()
+    } else {
+        save::directory().unwrap_or_else(|error| {
+            eprintln!("blah: {error}");
+            std::process::exit(2);
+        })
+    };
+    let (game, save, mark) = start_game(&args, &directory).unwrap_or_else(|error| {
+        eprintln!("blah: {error}");
         std::process::exit(2);
     });
-    let mark = autoplay(&mut game, steps);
+    let seed = game.world().seed();
+    if let Some(save) = &save {
+        eprintln!("Save: {}", save.path.display());
+    }
 
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys(keymap());
@@ -271,7 +331,7 @@ fn main() {
             is_resizable: false,
             ..Default::default()
         };
-        cx.open_window(options, |window, cx| cx.new(|cx| GameView::new(game, mark, window, cx)))
+        cx.open_window(options, |window, cx| cx.new(|cx| GameView::new(game, save, mark, window, cx)))
             .expect("failed to open the game window");
         cx.activate(true);
     });
@@ -302,6 +362,23 @@ mod tests {
         assert!(args(&["--steps"]).is_err());
         assert!(args(&["--combat-demo", "--inferno-demo"]).is_err());
         assert!(args(&["--combat-demo", "--combat-demo"]).is_err());
+    }
+
+    #[test]
+    fn startup_resumes_the_latest_character_and_new_starts_another() {
+        let dir = std::env::temp_dir().join(format!("blah-start-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (played, _, _) = start_game(&args(&["7", "--steps", "12"]).unwrap(), &dir).unwrap();
+        let (resumed, _, _) = start_game(&args(&[]).unwrap(), &dir).unwrap();
+        assert_eq!(resumed, played, "a bare launch resumes without replaying any turn");
+        assert!(start_game(&args(&["9"]).unwrap(), &dir).is_err(), "a different seed never loads silently");
+        let (fresh, save, _) = start_game(&args(&["9", "--new"]).unwrap(), &dir).unwrap();
+        assert_eq!((fresh.world().seed(), fresh.turn()), (9, 0));
+        assert!(save.unwrap().path.ends_with("character-000002.sqlite3"));
+        let (demo, save, _) = start_game(&args(&["--combat-demo"]).unwrap(), &dir).unwrap();
+        assert!(save.is_none() && demo.maneuver() == &Maneuver::backstab_burst());
+        assert!(args(&["--combat-demo", "--new"]).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

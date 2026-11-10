@@ -66,6 +66,7 @@ pub use game::{
     REGEN_TURNS, REST_FOCUS, REST_HEALTH, SPAWN_MAX, SPAWN_MIN, Step, TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity,
     find_land, individual, ring, spawn_chance,
 };
+pub use game::{GameSnapshot, RULES_VERSION, SNAPSHOT_VERSION, TERRAIN_VERSION};
 pub use genome::{GENES, Gene, Genome, gene_delta};
 pub use hash::{Rng, hash_point};
 pub use life::{

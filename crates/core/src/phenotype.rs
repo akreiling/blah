@@ -7,7 +7,7 @@ use crate::biome::Biome;
 use crate::genome::{Gene, Genome};
 
 /// What a creature is covered in. The variants are in gene order, from insulated and dry to bare and wet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Covering {
     /// Fur: the warmest covering.
     Fur,
@@ -55,7 +55,7 @@ impl Covering {
 }
 
 /// How a creature reacts to the wanderer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Temperament {
     /// Approaches whatever it senses and attacks.
     Aggressive,
@@ -78,7 +78,7 @@ impl Temperament {
 }
 
 /// Which kinds of terrain a creature can enter. Impassable land (snow peaks) is closed to everything.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Access {
     /// Passable dry land.
     pub land: bool,
@@ -102,7 +102,7 @@ impl Access {
 }
 
 /// Combat numbers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Stats {
     /// Hit points when unhurt.
     pub hp: i32,
@@ -129,7 +129,7 @@ pub const AGGRESSIVE_AT: f32 = 0.62;
 pub const SKITTISH_BELOW: f32 = 0.38;
 
 /// What a genome amounts to.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct Phenotype {
     /// The genome this was read from.
     pub genome: Genome,

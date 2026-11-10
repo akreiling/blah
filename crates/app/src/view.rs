@@ -157,6 +157,8 @@ const fn tint(kind: LogKind, new: bool) -> u32 {
 /// The one window's root view.
 pub struct GameView {
     game: Game,
+    save: Option<crate::save::Save>,
+    save_error: Option<String>,
     focus: FocusHandle,
     /// [`Log::total`](blah_core::Log::total) before the latest action: lines past it are that action's.
     mark: u64,
@@ -168,11 +170,19 @@ pub struct GameView {
 impl GameView {
     /// A view of `game`, taking keyboard focus so the movement keys reach it. Log lines past `mark` (a
     /// [`Log::total`](blah_core::Log::total)) show as new.
-    pub fn new(game: Game, mark: u64, window: &mut Window, cx: &mut Context<GameView>) -> GameView {
+    pub fn new(
+        game: Game,
+        save: Option<crate::save::Save>,
+        mark: u64,
+        window: &mut Window,
+        cx: &mut Context<GameView>,
+    ) -> GameView {
         let focus = cx.focus_handle();
         window.focus(&focus);
         GameView {
             game,
+            save,
+            save_error: None,
             focus,
             mark,
             sprites: SpriteCache::default(),
@@ -182,7 +192,11 @@ impl GameView {
     }
 
     fn act(&mut self, action: impl FnOnce(&mut Game), cx: &mut Context<GameView>) {
-        if apply_play_action(&mut self.game, &mut self.mark, self.workshop.as_ref(), action) {
+        let mut result = Ok(());
+        if apply_play_action(&mut self.game, &mut self.mark, self.workshop.as_ref(), |game| {
+            result = crate::save::commit_action(game, &mut self.save, action);
+        }) {
+            self.save_error = result.err();
             cx.notify();
         }
     }
@@ -209,8 +223,12 @@ impl GameView {
             return;
         };
         self.mark = self.game.log().total();
-        let result = workshop.prepare(&mut self.game);
-        if result.is_ok() {
+        let mut prepared = false;
+        let result = crate::save::commit_action(&mut self.game, &mut self.save, |game| {
+            prepared = workshop.prepare(game).is_ok();
+        });
+        self.save_error = result.as_ref().err().cloned();
+        if result.is_ok() && prepared {
             self.workshop = None;
         }
         cx.notify();
@@ -252,7 +270,15 @@ impl Render for GameView {
         let map = map(&self.game, &mut self.sprites, hurt);
         let panel = panel(&self.game, &mut self.sprites, self.workshop.as_ref(), self.move_slot);
         self.sprites.end(window);
-        let title = format!("blah · seed {}", self.game.world().seed());
+        let title = self.save_error.clone().unwrap_or_else(|| {
+            let slot = self
+                .save
+                .as_ref()
+                .and_then(|s| s.path.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "unsaved demo".into());
+            format!("blah · seed {} · {slot}", self.game.world().seed())
+        });
 
         div()
             .track_focus(&self.focus)
@@ -319,7 +345,7 @@ impl Render for GameView {
                     .items_center()
                     .justify_center()
                     .text_size(px(SMALL_SIZE))
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(if self.save_error.is_some() { 0xff_70_70 } else { FAINT }))
                     .child(title),
             )
             .child(div().flex().flex_row().gap(px(GAP)).child(map).child(panel))

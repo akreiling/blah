@@ -132,7 +132,7 @@ pub struct BodyPlan {
 }
 
 /// Index of a clade in [`clades`]' list, which is also its [`Family`]'s index in [`Family::ALL`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CladeId(pub u8);
 
 /// One ancestral lineage.

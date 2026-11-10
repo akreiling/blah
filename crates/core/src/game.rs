@@ -28,6 +28,9 @@ use crate::sprite::Sprite;
 use crate::world::{Tile, World};
 
 mod learned;
+mod snapshot;
+
+pub use snapshot::{GameSnapshot, RULES_VERSION, SNAPSHOT_VERSION, TERRAIN_VERSION};
 
 /// Provenance for shared damage and practice accounting.
 enum AttackSource<'a> {
@@ -157,7 +160,7 @@ pub fn ring(r: i64) -> impl Iterator<Item = (i64, i64)> {
 
 /// What a log line reports. Set where the line is written, so a frontend can style lines by what happened
 /// rather than by their wording.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LogKind {
     /// The wanderer is in a new region: waking at the start of a game, or walking into one.
     Region,
@@ -178,7 +181,7 @@ pub enum LogKind {
 }
 
 /// One line of the log and what it reports.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct LogEntry {
     /// What the line reports.
     pub kind: LogKind,
@@ -187,7 +190,7 @@ pub struct LogEntry {
 }
 
 /// A bounded log of messages, oldest first, holding the last [`LOG_LIMIT`] lines.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Log {
     entries: VecDeque<LogEntry>,
     total: u64,
@@ -473,6 +476,14 @@ impl Game {
             creature.phenotype.heat = heat;
             creature.name = name.into();
             game.monsters.push(creature);
+        }
+        // The fixture edits phenotypes after construction; keep the derived pictures in sync.
+        for monster in &mut game.monsters {
+            monster.sprite = Sprite::draw(
+                &monster.phenotype,
+                &game.clades[usize::from(monster.species.clade.0)].plan,
+                game.lives[&monster.species.region].biome,
+            );
         }
         game.log
             .push(LogKind::Region, "INFERNO TRIAL: F strikes the staff. The fire costs 18 Focus and also burns you.");
