@@ -1,11 +1,23 @@
 # Design
 
+For the current detailed systems plan, start with [Growing Into Power](SYSTEMS_ROADMAP.md). Its focused
+documents cover committed character growth, physical and magical disciplines, emergent skill weaving,
+treasure, apex encounters, generated arcs, and implementation checkpoints. They supersede earlier progression
+and difficulty assumptions in this overview.
+
+This is a design document, not a claim that every feature below exists. See [First playable](#first-playable)
+for the implemented slice and the [code-inspected baseline](systems/baseline.md) for its present limits.
+
 A top-down, tile-based, turn-based wanderer in the spirit of early-80s overworld RPGs, set in an endless
 procedural world. The twist is that the monsters aren't authored. They are populations with genomes that are
 shaped by the biomes they live in, change slowly across space and time, and branch into new species. Nobody,
 including us, knows what lives past the next ridge.
 
 Working name: `blah`, until the game has a real one.
+
+The wanderer is also shaped by history: what you practice becomes what you are. Early potential becomes a
+committed identity, then real power, then refinement. Physical and magical disciplines can weave into
+combinations we never anticipated. The replayability goal is: **"I want to try this next."**
 
 ## Ground rules
 
@@ -14,12 +26,16 @@ Working name: `blah`, until the game has a real one.
   history. Every step of the sim is a pure function of `(seed, region, neighbor populations, elapsed time)`, with
   RNG streams keyed by hashing those inputs. Given the same history, the result is the same, so tests can
   replay it.
-- **Time is an input.** Regions don't tick while nobody is looking. They catch up from elapsed time when they
-  are next needed.
+- **Time is an input.** Regions don't tick while nobody is looking. They catch up from elapsed game time when
+  next needed. Offline real-world time never trains the character or advances the world.
 - **The network never blocks play.** Names and sprites from remote models replace procedural placeholders once
   they arrive, or never. Offline is a fully supported way to play.
-- **Remote generation is scarce.** PixelLab is on a free tier and OpenRouter costs money. We call them only for
-  things the player is actually looking at, and only once per thing, ever.
+- **Remote generation is scarce.** Names and sprites are requested on sight, with bounded retries and one
+  accepted result per record. Future encounter arcs may be drafted a bounded distance ahead of discovery.
+  Revealing a site commits an available valid draft or an offline fallback; late results cannot rewrite it.
+  Every service has explicit spending limits.
+- **Power is independent.** Neither ordinary creatures nor apex foes scale to the player's build. A veteran
+  can wipe out lesser foes, while exceptional encounters demand refined power and understanding.
 
 ## World
 
@@ -56,7 +72,8 @@ cells around it are labeled, about a millisecond per cell. The game keeps a cach
 
 ### Genome and phenotype
 
-A genome is a fixed-length vector of genes in `[0, 1]`, roughly 32 of them, grouped as:
+A possible expanded genome is a fixed-length vector of genes in `[0, 1]`, grouped as below. The current slice
+has eight genes; expansion requires a gameplay purpose rather than reaching a predetermined count.
 
 - **Body:** size, limb count, segmentation, symmetry, covering (fur, scale, chitin, slime, feather)
 - **Movement:** walk, swim, burrow, climb, fly (weights, not exclusive)
@@ -102,9 +119,10 @@ neighboring regions that already exist, plus founder genomes drawn from `(seed, 
 neighbors yet, then run history forward. That makes the world path-dependent: the route you explore shapes
 what arises. Once grown, a region is recorded and only changes by drift.
 
-**Distance from home is evolutionary depth.** Life far from the start has had more steps of divergence behind
-it and is stranger and more dangerous. That gives an endless map a difficulty curve that comes from the
-system itself.
+**Distance creates unfamiliarity, not an automatic power multiplier.** Life's history can make distant
+regions strange, but evolution is adaptation, not a ladder toward stronger combatants. Exceptional individuals
+realize inherited capabilities through their own development and ecological support. See
+[Ecology and independent enemy power](systems/ecology.md).
 
 ### Succession
 
@@ -123,18 +141,30 @@ name. The species gets a name when the player first sees it.
 
 ## The wanderer
 
-Solo. One character, levels, and an ability tree with these branches:
+Solo, classless, but committed. Meaningful practice grows foundations, proficiencies, and integrations.
+Earned structural adaptations make some futures natural and others difficult. A mature character cannot
+become a different identity simply by changing equipment; a new character explores a different life.
 
-- **Blade, Bow:** weapons
-- **Arcana:** fire, frost, poison
-- **Survival:** tolerance for harsh biomes. **This gates movement.** You can see the deep desert but not cross
-  it until you can stand the heat, so Survival decides which lineages you can reach.
-- **Lore:** gates the genome inspector. Low Lore: *"a scaly thing; seems angry."* Mid Lore: traits and
-  resistances. High Lore: raw genes, lineage, and which way the local population is drifting.
-- **Beastcraft:** taming, pen size, and breeding control
+There are multiple physical and magical disciplines, not one martial track and a menu of damage colors.
+Their interactions can produce a close-range magical blaster, long-range shuriken specialist, battlemage
+thief, poison-stealth mage, warded raging juggernaut, area frost mage, or something nobody designed in advance.
+These examples are not classes or a whitelist of legal builds.
 
-**Death costs time.** You wake at the pen after a long stretch of game time, and the world has drifted while
-you were out. No other penalty is needed.
+The long arc leads to extraordinary specialized power. It does not end in every character mastering every
+discipline. Equipment, treasure, skills, healing, gathering, stealth, and magic all support this growth.
+
+- **Survival and access:** bodily adaptation, equipment, supplies, and supported magic can make different
+  habitats reachable. Do not reduce every route to one mandatory skill-tree gate.
+- **Lore:** adds precision, historical comparisons, and eventually deeper genome information. Basic danger
+  and actionable warning must be readable without advanced Lore.
+- **Beastcraft:** later development around companions and the pen, not a prerequisite for the next slice.
+
+Details: [Character development](systems/character.md), [Disciplines](systems/disciplines.md),
+[Weaving](systems/weaving.md), and [Learning](systems/learning.md).
+
+**Death costs time.** You wake at home after a long stretch of game time. Once drift exists, the world
+changes during that interval. Skills and owned equipment remain; elapsed time grants no mastery. The current
+slice advances its turn counter but does not simulate drift.
 
 ## Taming and the pen
 
@@ -156,7 +186,25 @@ and the wanderer all act on the same map. Behavior comes from phenotype: pack an
 timid ones flee when hurt, nocturnal ones are slow by day. Terrain access comes from movement genes, so a
 swimmer retreats into water and a burrower goes underground.
 
+## Power and encounter arcs
+
+Ordinary encounters demonstrate earned strength. Major sites build through attraction, warning, escalating
+evidence, and a formidable apex to a durable aftermath and worthwhile treasure. The lead-up teaches aspects
+of the foe's actual capabilities rather than taxing potions through repetitive mandatory fights.
+
+The engine owns creatures, terrain, capabilities, placement, rewards, and encounter state. OpenRouter may
+draft the arrangement and dramatic buildup from a bounded factual snapshot. It cannot invent executable
+mechanics, tailor hidden counters to the current character, or rewrite a revealed site.
+
+Start with authored encounter fixtures and offline fallbacks. Add generated drafts only after the format,
+validation, and actual gameplay work. See [Encounter arcs](systems/encounters.md),
+[OpenRouter drafting](systems/arc-generation.md), and the [reservoir example](systems/reservoir-example.md).
+
 ## Generated names and sprites
+
+The provider/model details below are earlier planning notes, not a live integration. Verify current APIs,
+model availability, pricing, and quotas when implementing the clients. No remote clients exist in the
+baseline slice.
 
 Both are generated **when the player first sees a species**, not at speciation. Most species are born in places
 nobody looks, and generating on first sight keeps spending tied to what actually gets seen.
@@ -199,9 +247,10 @@ different names and portraits.
 
 Jev reviews everything Luna and PixelLab produce before it is cached. The pipeline is generate, then review,
 then either accept and cache, or reject and keep the placeholder. Review works unattended because the questions
-are fixed in code, the criteria are concrete, and each verdict is about one artifact. Using Jev to judge design
-choices does not work that way: whoever writes the options steers the answer, so that stays a by-hand second
-opinion.
+are fixed in code, the criteria are concrete, and each verdict is about one artifact. Jev can also interrogate
+the systems design extensively through a [structured question bank](review/README.md). Those development-time
+judgments are advisory: question framing matters, repeated votes are not independent evidence, and actual
+validators and playtests decide whether the system works.
 
 - **Names and bestiary lines.** Luna returns about five candidates in one call. Jev picks the one that best
   fits the traits and biome. It rejects any candidate that contradicts the trait list, reads as silly or
@@ -263,6 +312,10 @@ How we spend it:
 
 ## UI
 
+This earlier conceptual layout includes future features and older labels. The detailed
+[interface plan](systems/interface.md) and [resource model](systems/actions.md) define the current prototype
+direction.
+
 ```
 ┌──────────────────────────────────┬───────────────────┐
 │                                  │ WANDERER    Lv 7  │
@@ -289,8 +342,8 @@ How we spend it:
   it, so you feel the gradient as you walk. How much it shows depends on Lore.
 - **The message log** is both combat narration and world news.
 - **Overlays**, one key each: bestiary (species list with lineage tree, each branch tagged with where it
-  diverged), genome inspector (on a target, gated by Lore), ability tree, world map (with a life overlay that
-  colors regions by dominant lineage), pen.
+  diverged), genome inspector (on a target, gated by Lore), development and technique weaving, world map
+  (with a life overlay that colors regions by dominant lineage), pen.
 - **Controls** are keyboard-first, one key per verb: attack, tame, look, inspect, camp, and so on.
 
 ## First playable
@@ -324,21 +377,27 @@ waiting on the other. Taming, the pen, drift, and remote art come only once that
 risk is evolution that players can't see. The slice has to make differences between regions visible from the
 first day.
 
+The next work follows the [checkpoint plan](systems/checkpoints.md): prove useful skill interactions, make
+characters grow into them, preserve the result, and build a complete rewarding journey before expanding
+ecology or remote generation.
+
 ## Architecture
 
 - **`core`** is a pure library holding world generation, biomes, genetics, the population sim, combat rules,
   and abilities. It does no I/O, uses no wall clock, and makes no network calls. Nearly all tests live here,
   and sim tests are property-style ("500 generations in desert raise mean water retention").
-- **`gen`** has the remote clients (OpenRouter, PixelLab REST v2) behind traits, plus the job queue (submit,
-  poll, collect), spending caps, the balance check, and fixtures.
+- **`gen`**, planned, will hold remote clients behind fixture-capable interfaces, plus request queues,
+  validation handoff, spending caps, and durable request accounting. It is not an existing crate.
 - **`app`** is the GPUI frontend. The map is a grid of tile elements, which is plenty at viewport size; it
   becomes one `canvas` element if that stops being fast enough. Panels and overlays are ordinary views.
   GPUI's actions and keybindings carry the one-key commands. GPUI comes from crates.io at an exact version
   (`=0.2.2`) because its API changes often. It uses the `runtime_shaders` feature, which compiles the Metal
   shaders at launch, so building needs only Xcode and not its separately downloaded Metal Toolchain.
-- **Save** is one SQLite file per world. It holds the seed, revealed regions with their populations and
-  last-simulated time, the species graph, the name and sprite cache, the pen, and the wanderer. Terrain is
-  never saved, because it can always be regenerated.
+- **Save**, planned, is one versioned SQLite file per character/world. It records character development,
+  item ownership, encounter definitions and progress, learning and reward claims, and later regional
+  history. Base terrain is regenerated from a saved seed and compatible generator version; persistent
+  terrain changes are overlays. Incompatible rules cannot silently reinterpret old saves. See
+  [Architecture and persistence](systems/architecture.md).
 
 ## Toolchain and secrets
 
@@ -348,8 +407,9 @@ first day.
 
 ## Open questions
 
-- Food and rest: survival pressure on the wanderer, or just flavor?
+- Recovery and supplies: tune the selected camp/Focus prototype without turning travel into bookkeeping.
 - Towns, people, quests: do they exist, and what do they offer (trade, rumors of strange species, pen
   upgrades)?
 - How a region's size cap and the chunk size interact with sim cost at the frontier.
-- What, if anything, the end game is.
+- Whether there is an ultimate ending beyond the current endgame of specialized refinement and exceptional
+  site-scale foes.

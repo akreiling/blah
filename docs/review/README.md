@@ -1,0 +1,111 @@
+# Jev design review bank
+
+This bank contains 120 stable, evidence-oriented questions for adversarial design critique. It is a
+review aid for the proposed game systems, not a list of answers, feature requirements beyond the
+committed decisions, or a claim that any proposed system has shipped.
+
+The topic files are:
+
+1. [Character and commitment](character-commitment.md) — J001–J020
+2. [Disciplines, weaving, and emergence](disciplines-weaving.md) — J021–J040
+3. [Concrete build diversity](build-diversity.md) — J041–J060
+4. [Resources, equipment, learning, and exploits](resources-learning.md) — J061–J080
+5. [Ecology, encounter arcs, and power contrast](ecology-arcs.md) — J081–J100
+6. [Replayability, remote drafting, persistence, and delivery](replayability-delivery.md) — J101–J120
+
+The design baseline is [the systems index](../SYSTEMS_ROADMAP.md), especially its linked decisions,
+disciplines, weaving, build, arc-generation, validation, and checkpoint documents. Those documents
+describe proposed systems unless explicitly marked as committed direction. A Jev criticism should cite
+the exact document passage, current rule, fixture, or observed behavior it addresses; it should not
+silently promote a prototype choice into a settled requirement.
+
+## Purpose and limits
+
+Use Jev for **typed critique**: finding a contradiction, unsupported assumption, exploitable loop,
+missing edge case, unclear player-facing rule, or concrete test that would distinguish competing
+design claims. The bank is not a request for creative authoring. Jev should not invent lore, techniques,
+classes, mechanics, or replacement designs unless a reviewer separately requests that work.
+
+Jev is advisory. Its answer is not a validator result, a playtest, a balance measurement, or evidence
+that the game is fun. Core rules and deterministic validators decide mechanical legality. Human review
+and observed play decide whether a system is understandable and compelling. Do not convert a model
+score, vote, or confidence value into a threshold claim about actual fun or balance.
+
+No Jev or provider calls were executed in preparing this bank. Before any future use, check the
+currently available model, interface, and provider documentation. This document intentionally
+specifies a **model-independent logical review packet**, not an invented endpoint, request schema,
+parameter name, or API capability.
+
+## Preparing a review packet
+
+For each review batch, assemble only what is needed to assess its selected questions:
+
+- The relevant question IDs and the exact current design excerpts, each with a durable file/heading
+  or fixture pointer and revision identifier.
+- The concrete proposition under examination, its status (committed direction, prototype rule, or
+  tuning question), and the intended evidence boundary.
+- Applicable authored rules, acceptance criteria, test fixtures, observed results, and known
+  counterexamples. Label absent evidence as absent; do not imply a test passed when it was not run.
+- A request for a structured critique: identify the proposition, supporting or conflicting evidence,
+  assumptions, a specific counterexample or failure condition, and a discriminating next check.
+- Clear constraints: critique the supplied design only, do not execute tools or invent provider/API
+  details, do not treat example builds as an exhaustive whitelist, and distinguish uncertainty from
+  contradiction.
+
+Keep the packet small enough that the evidence can be examined rather than merely summarized. Group
+questions by a coherent context—for example, commitment offers, interaction laws, one build fixture,
+learning-economy loops, encounter fairness, or persistence. Do not send all 120 questions as one
+undifferentiated prompt, and do not ask the model to cast the same yes/no vote 120 times. Related
+questions can share a packet when they rely on the same rules and evidence.
+
+## Review procedure
+
+1. **Choose a bounded batch.** Select the IDs whose evidence and decision owner are known. Record why
+   the batch matters now; defer questions that have no relevant artifact to inspect.
+2. **Set an explicit operating budget.** Before a run, set limits for rounds, retries, context and
+   output size, and total cost. Verify current model pricing and service limits rather than copying
+   old values. Stop on the limit; do not run an open-ended repair or rerun loop.
+3. **Use authorized access safely.** Use only approved credentials through the existing environment.
+   Do not print, paste into a packet, or persist keys, tokens, or other authentication material. Send
+   no raw saves, player notes, private action histories, or unnecessary personal data.
+4. **Ask for evidence-linked criticism.** Request reasons and pointers, not a verdict detached from
+   the supplied rules. A critique should name a concrete failure scenario or explain what evidence is
+   missing.
+5. **Check robustness selectively.** For high-impact findings, independently rephrase a small number
+   of questions or reserve holdout cases not shown in the first prompt. Keep those runs within the
+   same declared budget. Repetition is a robustness probe, not independent playtesting or a vote.
+6. **Triage with a person and the authoritative artifacts.** Verify every cited rule and repro. Reject
+   fabricated citations; separate a valid concern from the model's proposed fix.
+7. **Convert accepted criticism into action.** Amend a rule, add or change a focused fixture/test,
+   gather playtest evidence, or record a reasoned deferral. Assign an owner and a condition for
+   resolution.
+8. **Close the loop.** Record the disposition and the exact evidence that resolved or deferred the
+   finding. Re-run only the affected review questions when meaningful evidence changes.
+
+## Local verdict records
+
+Keep review records local to the project or approved development environment. A useful logical record
+links each reviewed ID to the design revision and excerpt pointer, packet/batch identifier, date,
+model identifier as reported by the then-current service, critique text or a controlled local
+reference, cited evidence, human disposition, follow-up action, and resulting test or playtest
+evidence. Store no credential material. Do not invent an exact provider response schema from this
+description.
+
+Classify findings in ordinary language, such as **supported by supplied evidence**, **contradicted by
+supplied evidence**, **evidence missing**, **ambiguous**, or **not applicable to this revision**.
+These labels organize follow-up; they are not a score and should not be aggregated into a pass
+threshold. A missing fixture is a useful result only when it leads to a concrete check.
+
+## Action checklist for criticisms
+
+- [ ] Can a reviewer locate the cited rule, fixture, or observed result at the recorded revision?
+- [ ] Is the criticism about a committed direction, a prototype choice, or a tuning question?
+- [ ] Does a reproducible scenario show the failure, or is the evidence gap stated precisely?
+- [ ] Does the proposed response preserve the broader committed design rather than patch one named
+  build with an unexplained exception?
+- [ ] Is there a small core-level invariant test, focused playtest, or explicit reason to defer?
+- [ ] Are saves, compatibility, costs, and player-facing explanation affected by the response?
+- [ ] Did a human owner record the disposition and the evidence needed to close it?
+
+The banks are prompts for investigation, not a substitute for the implementation checkpoints,
+mechanical validation, or the playtests described in [validation](../systems/validation.md).
