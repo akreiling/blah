@@ -112,6 +112,11 @@ const SMALL_LINE: f32 = 15.0;
 const MENLO_ADVANCE: f32 = 0.602;
 /// Small-text characters that fit across the panel inside its border and padding.
 const PANEL_CHARS: usize = ((PANEL - 2.0 * (INSET + BORDER)) / (SMALL_SIZE * MENLO_ADVANCE)) as usize;
+/// Gap between a NEARBY card and its text.
+const CARD_GAP: f32 = 10.0;
+/// Small-text characters that fit beside a NEARBY card.
+const NEARBY_CHARS: usize =
+    ((PANEL - 2.0 * (INSET + BORDER) - CARD - CARD_GAP) / (SMALL_SIZE * MENLO_ADVANCE)) as usize;
 
 /// The palette: a near-black screen, dim periwinkle window frames, amber headings.
 const SCREEN: u32 = 0x07_08_0b;
@@ -560,10 +565,10 @@ fn ready_move_lines(slot: &str, learned_move: LearnedMove, direction: Dir, previ
 
 /// Put the head on its own line, then pack details with " · " and word-wrap any that are too long.
 fn pack_line(head: String, details: &[String]) -> Vec<String> {
-    let mut lines = wrap(&head);
+    let mut lines = wrap(&head, PANEL_CHARS);
     let mut current = String::new();
     for detail in details {
-        for part in wrap(detail) {
+        for part in wrap(detail, PANEL_CHARS) {
             let joined = if current.is_empty() { part.clone() } else { format!("{current} · {part}") };
             if joined.chars().count() <= PANEL_CHARS {
                 current = joined;
@@ -578,21 +583,22 @@ fn pack_line(head: String, details: &[String]) -> Vec<String> {
     lines
 }
 
-fn wrap(text: &str) -> Vec<String> {
+/// Word-wrap to `width` characters, splitting only words that are longer than a whole line.
+fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
     for word in text.split_whitespace() {
         let mut word = word.to_owned();
-        while word.chars().count() > PANEL_CHARS {
+        while word.chars().count() > width {
             if !line.is_empty() {
                 lines.push(std::mem::take(&mut line));
             }
-            let rest = word.split_off(word.char_indices().nth(PANEL_CHARS).map_or(word.len(), |(i, _)| i));
+            let rest = word.split_off(word.char_indices().nth(width).map_or(word.len(), |(i, _)| i));
             lines.push(std::mem::replace(&mut word, rest));
         }
         if line.is_empty() {
             line = word;
-        } else if line.chars().count() + 1 + word.chars().count() <= PANEL_CHARS {
+        } else if line.chars().count() + 1 + word.chars().count() <= width {
             line.push(' ');
             line.push_str(&word);
         } else {
@@ -855,12 +861,9 @@ fn nearby_entry(game: &Game, id: SpeciesId, sprites: &mut SpriteCache) -> Option
         .when(id.region != game.region().id, |row| {
             row.child(div().flex_none().text_color(rgb(FAINT)).child("visiting"))
         });
-    let description = div()
-        .text_size(px(SMALL_SIZE))
-        .line_height(px(SMALL_LINE))
-        .text_color(rgb(DIM))
-        .line_clamp(1)
-        .child(species.description.clone());
+    let description = wrap(&species.description, NEARBY_CHARS)
+        .into_iter()
+        .fold(div().flex().flex_col(), |lines, line| lines.child(small_line(line)));
     let text = div()
         .flex_1()
         .min_w_0()
@@ -870,7 +873,7 @@ fn nearby_entry(game: &Game, id: SpeciesId, sprites: &mut SpriteCache) -> Option
         .child(name)
         .child(description)
         .child(deltas(game.compare(id)));
-    Some(div().flex().flex_row().gap(px(10.0)).child(card).child(text))
+    Some(div().flex().flex_row().gap(px(CARD_GAP)).child(card).child(text))
 }
 
 /// The strongest few trait changes against the clade elsewhere, as arrows: "heat ▲▲  water ▼".
@@ -961,10 +964,14 @@ fn pair(label: &'static str, value: String) -> Div {
 
 /// A segmented gauge: label, ten cells filled in proportion, and the value over its maximum.
 fn bar(label: &'static str, value: i32, max: i32, fill: u32) -> Div {
-    const CELLS: i32 = 10;
     let max = max.max(1);
-    let filled = (value.clamp(0, max) * CELLS + max - 1) / max;
-    let cells = (0..CELLS).map(|i| div().w(px(14.0)).h(px(12.0)).bg(rgb(if i < filled { fill } else { EMPTY_BAR })));
+    let cells = cell_fills(value, max).map(|filled| {
+        div()
+            .w(px(f32::from(CELL_W)))
+            .h(px(12.0))
+            .bg(rgb(EMPTY_BAR))
+            .child(div().h_full().w(px(f32::from(filled))).bg(rgb(fill)))
+    });
     let low = value * 3 <= max;
     div()
         .h(px(LINE))
@@ -976,6 +983,20 @@ fn bar(label: &'static str, value: i32, max: i32, fill: u32) -> Div {
         .child(div().flex().flex_row().gap(px(2.0)).children(cells.collect::<Vec<_>>()))
         .child(div().flex_grow())
         .child(div().text_color(rgb(if low { HP } else { TEXT })).child(format!("{value}/{max}")))
+}
+
+/// Cells in a gauge.
+const CELLS: u8 = 10;
+/// Width of one gauge cell, in pixels.
+const CELL_W: u8 = 14;
+
+/// Filled pixels per cell. The last filled cell is partial, so every point of change shows, and any
+/// value above zero fills at least one pixel.
+fn cell_fills(value: i32, max: i32) -> impl Iterator<Item = u8> {
+    let max = i64::from(max.max(1));
+    let width = i64::from(CELLS) * i64::from(CELL_W);
+    let filled = (i64::from(value).clamp(0, max) * width + max - 1) / max;
+    (0..CELLS).map(move |i| (filled - i64::from(i) * i64::from(CELL_W)).clamp(0, i64::from(CELL_W)) as u8)
 }
 
 /// A name as a heading: "the Glass Marsh" becomes "The Glass Marsh".
@@ -1185,6 +1206,40 @@ mod tests {
         fits(&lines);
         assert!(lines[0].starts_with("Focus · Ready"), "{lines:?}");
         assert!(lines.join(" ").contains("Focus on hit"), "{lines:?}");
+    }
+    #[test]
+    fn gauges_show_every_point_and_stay_in_bounds() {
+        let fills = |value, max| cell_fills(value, max).collect::<Vec<_>>();
+        assert_eq!(fills(0, 26), vec![0; 10]);
+        assert_eq!(fills(26, 26), vec![CELL_W; 10]);
+        assert_eq!(fills(99, 26), vec![CELL_W; 10]);
+        assert_eq!(fills(-5, 26), vec![0; 10]);
+        assert!(fills(1, 10_000).iter().map(|&p| u32::from(p)).sum::<u32>() >= 1);
+        for max in [1, 7, 24, 26, 30, 101] {
+            let mut previous = 0;
+            for value in 0..=max {
+                let total: u32 = fills(value, max).iter().map(|&p| u32::from(p)).sum();
+                assert!(value == 0 || total > previous, "{value}/{max} looks the same as {}", value - 1);
+                previous = total;
+            }
+        }
+    }
+
+    #[test]
+    fn longest_creature_description_wraps_within_three_lines() {
+        assert_eq!(NEARBY_CHARS, 38);
+        let worst = "mid-sized eight-legged feathered crawler, heat-hardy, cold-hardy, amphibious, territorial";
+        let lines = wrap(worst, NEARBY_CHARS);
+        assert!(lines.len() <= 3, "{lines:?}");
+        assert!(lines.iter().all(|line| line.chars().count() <= NEARBY_CHARS), "{lines:?}");
+        assert_eq!(lines.join(" "), worst);
+        for seed in 0..8 {
+            let game = Game::new(seed);
+            for id in game.nearby_species() {
+                let species = game.species(id).unwrap();
+                assert!(wrap(&species.description, NEARBY_CHARS).len() <= 3, "{}", species.description);
+            }
+        }
     }
     #[test]
     fn home_hint_names_direction_and_steps() {
