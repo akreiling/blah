@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1660" viewBox="0 0 1440 1660" role="img" aria-labelledby="title description">
+  <title id="title">An example skill web: the warded juggernaut</title>
+  <desc id="description">Broad potential develops through Prowess, Endurance, and Warding. Meaningful practice coordinates a protected surge. The player chooses lasting adaptations with finite structural costs and develops a warded onslaught, then refines breakthrough, endurance, or wider protection. This is one illustrative journey, not fixed class prerequisites or implemented gameplay. Other legal combinations remain open.</desc>
+  <defs>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .title { fill: #f1f5fc; font-size: 42px; font-weight: 700; }
+      .subtitle { fill: #b2c0d3; font-size: 23px; }
+      .stage { fill: #94a8c2; font-size: 17px; font-weight: 700; letter-spacing: 2px; }
+      .heading { fill: #f1f5fc; font-size: 25px; font-weight: 650; }
+      .body { fill: #c7d3e3; font-size: 20px; }
+      .small { fill: #b2c0d3; font-size: 18px; }
+      .physical { fill: #f6c18b; font-size: 17px; font-weight: 700; letter-spacing: 1px; }
+      .magical { fill: #aab9ff; font-size: 17px; font-weight: 700; letter-spacing: 1px; }
+      .weave { fill: #85e3cf; font-size: 17px; font-weight: 700; letter-spacing: 1px; }
+      .choice { fill: #f8cc76; font-size: 17px; font-weight: 700; letter-spacing: 1px; }
+      .edge { fill: none; stroke: #8294ab; stroke-width: 2.5; }
+    </style>
+  </defs>
+  <rect width="1440" height="1660" fill="#0c1525"/>
+  <text class="weave" x="60" y="53">CHARACTER DEVELOPMENT / ILLUSTRATIVE DESIGN</text>
+  <text class="title" x="60" y="109">A skill web, not a class tree</text>
+  <text class="subtitle" x="60" y="149">One possible life: the raging warded juggernaut.</text>
+  <text class="small" x="60" y="182">Not implemented. Arrows show this journey, not mandatory recipes or instant unlocks.</text>
+
+  <!-- Connectors sit behind cards. -->
+  <g>
+    <path class="edge" d="M720 326 V346 H280 V366"/>
+    <path class="edge" d="M720 326 V366"/>
+    <path class="edge" d="M720 326 V346 H1160 V366"/>
+    <path class="edge" d="M280 536 V558 H630 V600"/>
+    <path class="edge" d="M720 536 V600"/>
+    <path class="edge" d="M1160 536 V558 H810 V600"/>
+    <path class="edge" d="M720 737 V764 H400 V826"/>
+    <path class="edge" d="M720 737 V764 H1040 V826"/>
+    <path class="edge" d="M400 975 V995 H680 V1080"/>
+    <path class="edge" d="M1040 975 V995 H760 V1080"/>
+    <path class="edge" d="M720 1222 V1250 H280 V1300"/>
+    <path class="edge" d="M720 1222 V1300"/>
+    <path class="edge" d="M720 1222 V1250 H1160 V1300"/>
+  </g>
+  <!-- Explicit arrowheads also render in macOS's SVG-to-PNG converter. -->
+  <g fill="#8294ab">
+    <path d="M274 356 L286 356 L280 365 Z"/>
+    <path d="M714 356 L726 356 L720 365 Z"/>
+    <path d="M1154 356 L1166 356 L1160 365 Z"/>
+    <path d="M624 590 L636 590 L630 599 Z"/>
+    <path d="M714 590 L726 590 L720 599 Z"/>
+    <path d="M804 590 L816 590 L810 599 Z"/>
+    <path d="M394 816 L406 816 L400 825 Z"/>
+    <path d="M1034 816 L1046 816 L1040 825 Z"/>
+    <path d="M674 1070 L686 1070 L680 1079 Z"/>
+    <path d="M754 1070 L766 1070 L760 1079 Z"/>
+    <path d="M274 1290 L286 1290 L280 1299 Z"/>
+    <path d="M714 1290 L726 1290 L720 1299 Z"/>
+    <path d="M1154 1290 L1166 1290 L1160 1299 Z"/>
+  </g>
+
+  <text class="stage" x="60" y="226">01 / TRY</text>
+  <rect x="390" y="230" width="660" height="96" rx="16" fill="#18253b" stroke="#536b8b"/>
+  <text class="heading" text-anchor="middle" x="720" y="270">Broad potential</text>
+  <text class="body" text-anchor="middle" x="720" y="302">Try force, movement, magic, stealth, and careful work.</text>
+
+  <text class="stage" x="60" y="350">02 / PRACTICE</text>
+  <rect x="80" y="366" width="400" height="170" rx="16" fill="#282231" stroke="#ae815e"/>
+  <text class="physical" x="104" y="400">PROWESS</text>
+  <text class="heading" x="104" y="440">Heavy strike → surge</text>
+  <text class="body" x="104" y="477">Apply force at the right instant.</text>
+  <text class="small" x="104" y="510">Develop Force and committed delivery.</text>
+
+  <rect x="520" y="366" width="400" height="170" rx="16" fill="#282231" stroke="#ae815e"/>
+  <text class="physical" x="544" y="400">ENDURANCE</text>
+  <text class="heading" x="544" y="440">Brace → hold through impact</text>
+  <text class="body" x="544" y="477">Stay effective under real pressure.</text>
+  <text class="small" x="544" y="510">Develop Resilience and load handling.</text>
+
+  <rect x="960" y="366" width="400" height="170" rx="16" fill="#1e2545" stroke="#7d8ccd"/>
+  <text class="magical" x="984" y="400">WARDING</text>
+  <text class="heading" x="984" y="440">Impact ward → timed guard</text>
+  <text class="body" x="984" y="477">Protect a vulnerable commitment.</text>
+  <text class="small" x="984" y="510">Develop Channeling and ward control.</text>
+
+  <text class="stage" x="60" y="587">03 / WEAVE</text>
+  <rect x="330" y="600" width="780" height="137" rx="16" fill="#143339" stroke="#65bdaa"/>
+  <text class="weave" text-anchor="middle" x="720" y="634">PRACTICED INTEGRATION</text>
+  <text class="heading" text-anchor="middle" x="720" y="670">Protected surge</text>
+  <text class="body" text-anchor="middle" x="720" y="703">A ward prevents interruption while your committed attack completes.</text>
+  <text class="small" text-anchor="middle" x="720" y="726">Actual coordination earns practice. Merely having three skills does not.</text>
+
+  <text class="stage" x="60" y="795">04 / COMMIT</text>
+  <text class="small" text-anchor="middle" x="720" y="795">Both chosen explicitly. Example names; costs untuned.</text>
+  <rect x="110" y="826" width="580" height="149" rx="16" fill="#30291f" stroke="#c99b51"/>
+  <text class="choice" x="138" y="860">STRUCTURAL ADAPTATION</text>
+  <text class="heading" x="138" y="899">Load-bearing structure</text>
+  <text class="body" x="138" y="932">Support greater force, load, and recoil.</text>
+  <text class="small" x="138" y="957">Uses finite capacity; not just a change of equipment.</text>
+
+  <rect x="750" y="826" width="580" height="149" rx="16" fill="#30291f" stroke="#c99b51"/>
+  <text class="choice" x="778" y="860">STRUCTURAL ADAPTATION</text>
+  <text class="heading" x="778" y="899">Ward-bearing control</text>
+  <text class="body" x="778" y="932">Carry supported protection through forceful motion.</text>
+  <text class="small" x="778" y="957">Uses finite capacity; Focus and sustain limits remain.</text>
+  <rect x="180" y="1009" width="1080" height="44" rx="12" fill="#0c1525"/>
+  <text class="small" text-anchor="middle" x="720" y="1037">Less room for other major adaptations. Deep reinvention is normally a new character.</text>
+
+  <text class="stage" x="60" y="1072">05 / REAL POWER</text>
+  <rect x="330" y="1080" width="780" height="142" rx="16" fill="#143339" stroke="#65bdaa"/>
+  <text class="weave" text-anchor="middle" x="720" y="1115">MATURE EXPRESSION, NOT A CLASS UNLOCK</text>
+  <text class="heading" text-anchor="middle" x="720" y="1152">Warded onslaught</text>
+  <text class="body" text-anchor="middle" x="720" y="1184">Break ordinary formations. Carry protection through successive attacks.</text>
+  <text class="small" text-anchor="middle" x="720" y="1210">Earned through further practice. Protection can still fail; recovery still matters.</text>
+
+  <text class="stage" x="60" y="1280">06 / REFINE</text>
+  <rect x="80" y="1300" width="400" height="169" rx="16" fill="#18253b" stroke="#536b8b"/>
+  <text class="heading" x="104" y="1341">Breakthrough</text>
+  <text class="body" x="104" y="1379">Deliver extraordinary force.</text>
+  <text class="body" x="104" y="1407">Break larger threats and lines.</text>
+  <text class="small" x="104" y="1444">Still committed, still needs recovery.</text>
+
+  <rect x="520" y="1300" width="400" height="169" rx="16" fill="#18253b" stroke="#536b8b"/>
+  <text class="heading" x="544" y="1341">Bulwark</text>
+  <text class="body" x="544" y="1379">Endure tremendous impacts.</text>
+  <text class="body" x="544" y="1407">Hold where you once would fall.</text>
+  <text class="small" x="544" y="1444">Peak defense is not peak mobility.</text>
+
+  <rect x="960" y="1300" width="400" height="169" rx="16" fill="#18253b" stroke="#536b8b"/>
+  <text class="heading" x="984" y="1341">Wider cover</text>
+  <text class="body" x="984" y="1379">Protect a broader boundary.</text>
+  <text class="body" x="984" y="1407">Shape more of the battlefield.</text>
+  <text class="small" x="984" y="1444">Coverage competes with intensity.</text>
+  <text class="small" text-anchor="middle" x="720" y="1501">Refine more than one direction if your structure supports it. You cannot maximize every demand at once.</text>
+
+  <rect x="60" y="1530" width="1320" height="94" rx="16" fill="#18253b"/>
+  <text class="weave" x="86" y="1562">THIS IS ONE ROUTE. THE UNDRAWN BRANCHES MATTER.</text>
+  <text class="body" x="86" y="1594">Shared practices can feed other identities. Legal player-created combinations work without a named recipe.</text>
+  <text class="small" x="60" y="1647">Growth comes from adventuring and meaningful practice, never a real-world training clock.</text>
+</svg>

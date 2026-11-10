@@ -6,7 +6,9 @@ treasure, apex encounters, generated arcs, and implementation checkpoints. They 
 and difficulty assumptions in this overview.
 
 This is a design document, not a claim that every feature below exists. See [First playable](#first-playable)
-for the implemented slice and the [code-inspected baseline](systems/baseline.md) for its present limits.
+for the original implemented slice and the [code-inspected baseline](systems/baseline.md) for its historical
+limits. The later [composition proof](systems/composition-poc.md) adds playable technique mixing, stealth,
+Focus, and costly staff fire without claiming the full progression system is complete.
 
 A top-down, tile-based, turn-based wanderer in the spirit of early-80s overworld RPGs, set in an endless
 procedural world. The twist is that the monsters aren't authored. They are populations with genomes that are

@@ -17,6 +17,8 @@ Equipment should matter through physical and magical properties:
 
 Numerical upgrades are allowed. They cannot be the whole item system.
 
+[Loadout properties](loadout-properties.md) maps these into concrete properties and the actions that read them.
+
 ## Three item families
 
 | Family | Purpose | Example |

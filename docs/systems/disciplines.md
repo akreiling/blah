@@ -4,6 +4,9 @@
 
 Proposed design. See the decisions document for committed direction versus prototype rules.
 
+Want a picture? Start with the [visual skill-web example](skill-web-example.md), which follows one
+character's practiced disciplines into a committed identity and powerful refinements.
+
 ## Magical disciplines: different methods, not five damage colors
 
 This is a proposed long-term map. Five is a useful starting count, not a commitment to implement all five

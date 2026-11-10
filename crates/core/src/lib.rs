@@ -38,6 +38,7 @@
 mod biome;
 mod chunk;
 mod clade;
+mod combat;
 mod fields;
 mod game;
 mod genome;
@@ -54,6 +55,10 @@ mod world;
 pub use biome::{BIOMES, Band, Biome, BiomeId, Fitness, SEA_LEVEL, classify};
 pub use chunk::{CHUNK_AREA, CHUNK_SIZE, Chunk, chunk_of, chunk_origin, local_of};
 pub use clade::{BodyPlan, CLADES, Clade, CladeId, Family, Pattern, clades};
+pub use combat::{
+    Aim, AreaPreview, AttackContext, AttackPreview, AttackResult, Burst, Delivery, Element, MAX_AREA_RADIUS,
+    MAX_BURST_POWER, MAX_FOCUS, Maneuver, SNEAK_REDUCTION, Shape, Technique, Trigger, Weapon,
+};
 pub use game::{
     Comparison, DEATH_TURNS, DESPAWN_RADIUS, Dir, Game, LAND_SEARCH_RADIUS, LOG_LIMIT, Log, LogEntry, LogKind,
     REGEN_TURNS, SPAWN_MAX, SPAWN_MIN, Step, TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity, find_land, individual,

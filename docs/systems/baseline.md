@@ -6,6 +6,11 @@ Code-inspected baseline at `0b82077`; proposed features are listed separately.
 
 This inventory is a code-inspected baseline, not a completion checklist for the future system.
 
+**Later delta:** the [playable composition proof](composition-poc.md) adds a bounded technique grammar,
+prototype equipment, Focus, simple observer tracking and sneaking, a keyboard workshop, and costly area
+fire. The table below remains the historical `0b82077` baseline. Progression, saves, AI naming, and Jev
+integration still do not exist.
+
 | Area | Implemented at the baseline | Not implemented |
 | --- | --- | --- |
 | World | Seed-based terrain, biomes, regions, region cache | Persistent landmarks and mutable terrain overlays |

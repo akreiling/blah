@@ -21,6 +21,9 @@ silently promote a prototype choice into a settled requirement.
 
 ## Purpose and limits
 
+For the executable combat proof, see the separate [AI naming and Jev technique review contract](technique-review.md).
+It keeps cosmetic names, mechanical legality, and advisory critique independent.
+
 Use Jev for **typed critique**: finding a contradiction, unsupported assumption, exploitable loop,
 missing edge case, unclear player-facing rule, or concrete test that would distinguish competing
 design claims. The bank is not a request for creative authoring. Jev should not invent lore, techniques,

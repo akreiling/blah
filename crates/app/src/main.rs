@@ -1,6 +1,7 @@
 //! The GPUI frontend: one window onto the world, with the wanderer at its center.
 //!
-//! Usage: `blah [seed] [--steps N]`. The seed is a `u64` and defaults to [`DEFAULT_SEED`].
+//! Usage: `blah [seed] [--steps N] [--combat-demo | --inferno-demo]`.
+//! The seed is a `u64` and defaults to [`DEFAULT_SEED`].
 //!
 //! `--steps N` is a development aid, in every build: it plays N turns by a fixed rule before the window
 //! opens (see [`autoplay`]), so a seed and a count always put the same scene on screen, monsters and a
@@ -8,20 +9,21 @@
 
 mod sprites;
 mod view;
+mod workshop;
 
 use gpui::{
     App, Application, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBounds, WindowOptions, actions,
     prelude::*, size,
 };
 
-use blah_core::{Dir, Game};
+use blah_core::{Dir, Game, Maneuver};
 
 use crate::view::GameView;
 
 /// The world a bare `blah` opens.
 const DEFAULT_SEED: u64 = 42;
 /// What to print when the command line can't be read.
-const USAGE: &str = "usage: blah [seed] [--steps N]";
+const USAGE: &str = "usage: blah [seed] [--steps N] [--combat-demo | --inferno-demo]";
 
 actions!(
     blah,
@@ -36,6 +38,40 @@ actions!(
         MoveWest,
         /// Stay put for a turn.
         Wait,
+        /// Open the composition workshop.
+        OpenWorkshop,
+        /// Cancel the composition workshop.
+        CancelWorkshop,
+        /// Prepare the current workshop draft.
+        PrepareWorkshop,
+        /// Cycle the draft weapon.
+        WorkshopWeapon,
+        /// Cycle the draft delivery.
+        WorkshopDelivery,
+        /// Cycle the draft aim.
+        WorkshopAim,
+        /// Toggle the draft payload.
+        WorkshopPayload,
+        /// Cycle the payload element.
+        WorkshopElement,
+        /// Cycle the payload trigger.
+        WorkshopTrigger,
+        /// Cycle the payload shape.
+        WorkshopShape,
+        /// Increase payload power.
+        WorkshopPowerUp,
+        /// Decrease payload power.
+        WorkshopPowerDown,
+        /// Load the dagger example into the draft.
+        WorkshopDaggerExample,
+        /// Load the staff example into the draft.
+        WorkshopStaffExample,
+        /// Toggle careful movement.
+        ToggleSneak,
+        /// Recover Focus at home.
+        RecoverFocus,
+        /// Unleash the prepared ground payload.
+        Unleash,
         /// Leave the game.
         Quit,
     ]
@@ -62,26 +98,61 @@ fn keymap() -> Vec<KeyBinding> {
     for key in ["q", "cmd-q"] {
         bindings.push(KeyBinding::new(key, Quit, None));
     }
+    bindings.extend([
+        KeyBinding::new("m", OpenWorkshop, None),
+        KeyBinding::new("escape", CancelWorkshop, None),
+        KeyBinding::new("enter", PrepareWorkshop, None),
+        KeyBinding::new("c", ToggleSneak, None),
+        KeyBinding::new("r", RecoverFocus, None),
+        KeyBinding::new("f", Unleash, None),
+        KeyBinding::new("1", WorkshopWeapon, None),
+        KeyBinding::new("2", WorkshopDelivery, None),
+        KeyBinding::new("3", WorkshopAim, None),
+        KeyBinding::new("4", WorkshopPayload, None),
+        KeyBinding::new("5", WorkshopElement, None),
+        KeyBinding::new("6", WorkshopTrigger, None),
+        KeyBinding::new("7", WorkshopShape, None),
+        KeyBinding::new("shift-=", WorkshopPowerUp, None),
+        KeyBinding::new("=", WorkshopPowerUp, None),
+        KeyBinding::new("-", WorkshopPowerDown, None),
+        KeyBinding::new("0", WorkshopDaggerExample, None),
+        KeyBinding::new("9", WorkshopStaffExample, None),
+    ]);
     bindings
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Demo {
+    None,
+    Combat,
+    Inferno,
+}
+
 /// What the command line asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Args {
     seed: u64,
     /// Turns to [`autoplay`] before the window opens, a development aid.
     steps: u32,
+    demo: Demo,
 }
 
-/// Reads `[seed] [--steps N]`. The seed defaults to [`DEFAULT_SEED`]. Anything else is an error rather
-/// than a guess.
+/// Reads `[seed] [--steps N] [--combat-demo | --inferno-demo]`. The seed defaults to [`DEFAULT_SEED`].
+/// The named trials are mutually exclusive; anything else is an error rather than a guess.
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut seed = None;
     let mut steps = 0;
+    let mut demo = Demo::None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         if arg == "--steps" {
             let n = args.next().ok_or("--steps needs a number")?;
             steps = n.parse().map_err(|_| format!("--steps takes a whole number, not {n:?}"))?;
+        } else if arg == "--combat-demo" || arg == "--inferno-demo" {
+            if demo != Demo::None {
+                return Err("--combat-demo and --inferno-demo are mutually exclusive".into());
+            }
+            demo = if arg == "--combat-demo" { Demo::Combat } else { Demo::Inferno };
         } else if seed.is_none() {
             seed = Some(
                 arg.parse().map_err(|_| format!("seed must be a whole number from 0 to {}, not {arg:?}", u64::MAX))?,
@@ -90,7 +161,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             return Err("too many arguments".into());
         }
     }
-    Ok(Args { seed: seed.unwrap_or(DEFAULT_SEED), steps })
+    Ok(Args { seed: seed.unwrap_or(DEFAULT_SEED), steps, demo })
 }
 
 /// Plays `turns` turns by a fixed rule, so a seed and a count always give the same scene: a development
@@ -127,15 +198,26 @@ fn autoplay(game: &mut Game, turns: u32) -> u64 {
     mark
 }
 
+fn initial_game(seed: u64, demo: Demo) -> Result<Game, &'static str> {
+    match demo {
+        Demo::None => Ok(Game::new(seed)),
+        Demo::Combat => Game::composition_trial(seed, Maneuver::backstab_burst()),
+        Demo::Inferno => Game::inferno_trial(seed),
+    }
+}
+
 fn main() {
-    let Args { seed, steps } = match parse_args(std::env::args().skip(1)) {
+    let Args { seed, steps, demo } = match parse_args(std::env::args().skip(1)) {
         Ok(args) => args,
         Err(e) => {
             eprintln!("blah: {e}\n{USAGE}");
             std::process::exit(2);
         }
     };
-    let mut game = Game::new(seed);
+    let mut game = initial_game(seed, demo).unwrap_or_else(|error| {
+        eprintln!("blah: could not start the requested demo: {error}");
+        std::process::exit(2);
+    });
     let mark = autoplay(&mut game, steps);
 
     Application::new().run(move |cx: &mut App| {
@@ -177,16 +259,22 @@ mod tests {
     }
 
     #[test]
-    fn arguments_are_a_seed_and_an_optional_step_count() {
+    fn arguments_accept_seed_steps_and_one_optional_demo() {
         let a = args(&[]).unwrap();
-        assert_eq!((a.seed, a.steps), (DEFAULT_SEED, 0));
+        assert_eq!((a.seed, a.steps, a.demo), (DEFAULT_SEED, 0, Demo::None));
         let a = args(&["7", "--steps", "46"]).unwrap();
-        assert_eq!((a.seed, a.steps), (7, 46));
+        assert_eq!((a.seed, a.steps, a.demo), (7, 46, Demo::None));
         let a = args(&["--steps", "3", "9"]).unwrap();
-        assert_eq!((a.seed, a.steps), (9, 3));
+        assert_eq!((a.seed, a.steps, a.demo), (9, 3, Demo::None));
+        let a = args(&["42", "--combat-demo"]).unwrap();
+        assert_eq!(a.demo, Demo::Combat);
+        let a = args(&["--inferno-demo", "--steps", "2"]).unwrap();
+        assert_eq!((a.seed, a.steps, a.demo), (DEFAULT_SEED, 2, Demo::Inferno));
         assert!(args(&["x"]).is_err());
         assert!(args(&["1", "2"]).is_err());
         assert!(args(&["--steps"]).is_err());
+        assert!(args(&["--combat-demo", "--inferno-demo"]).is_err());
+        assert!(args(&["--combat-demo", "--combat-demo"]).is_err());
     }
 
     #[test]
@@ -196,5 +284,22 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a.turn(), 46);
         assert_eq!(autoplay(&mut Game::new(7), 0), 0);
+    }
+
+    #[test]
+    fn actual_cli_startup_selects_both_trials_and_keeps_default_play() {
+        for (arguments, expected) in [
+            (vec![], Maneuver::default()),
+            (vec!["--combat-demo"], Maneuver::backstab_burst()),
+            (vec!["--inferno-demo"], Maneuver::staff_inferno()),
+        ] {
+            let args = args(&arguments).unwrap();
+            let game = initial_game(args.seed, args.demo).unwrap();
+            assert_eq!(game.maneuver(), &expected);
+            if args.demo == Demo::Inferno {
+                assert_eq!(game.preview_area().unwrap().self_damage, 12);
+            }
+        }
+        assert!(!keymap().is_empty(), "all configured keystrokes must parse");
     }
 }

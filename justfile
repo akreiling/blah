@@ -22,3 +22,7 @@ map *args:
 # Write a contact sheet of every clade across biomes, and time region growth: just bestiary out.png [seed]
 bestiary *args:
     {{cargo}} run --quiet --release -p blah-core --example bestiary_sheet -- {{args}}
+
+# Print the actual dagger and staff composition trials without opening a window.
+composition-demo:
+    {{cargo}} run --quiet -p blah-core --example composition_demo

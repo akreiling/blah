@@ -1,19 +1,26 @@
 //! The game window: a title strip, the map viewport on the left, the status panel on the right, and the
 //! message log along the bottom.
 //!
-//! Everything is drawn from the [`Game`] on each render. Beyond focus, the view remembers only where the
-//! log stood before the latest action, so it can tell new lines from old, and the sprite images it has
-//! already built.
+//! Everything is drawn from the [`Game`] and optional workshop draft on each render. The view remembers
+//! the draft until prepared or cancelled, where the log stood before the latest action, and cached sprites.
 
 use gpui::{
     App, Context, Div, FocusHandle, Focusable, FontWeight, Pixels, Rgba, SharedString, Window, div, img, prelude::*,
     px, rgb,
 };
 
-use blah_core::{Comparison, Dir, Game, Gene, LogKind, Monster, SpeciesId, Tile, VIEW_RADIUS, hash_point};
+use blah_core::{
+    Aim, Comparison, Delivery, Dir, Element, Game, Gene, LogKind, MAX_AREA_RADIUS, MAX_BURST_POWER, MAX_FOCUS, Monster,
+    Shape, SpeciesId, Tile, Trigger, VIEW_RADIUS, hash_point,
+};
 
 use crate::sprites::{Key, SPRITE_PX, SpriteCache};
-use crate::{MoveEast, MoveNorth, MoveSouth, MoveWest, Wait};
+use crate::workshop::{Edit, Workshop};
+use crate::{
+    CancelWorkshop, MoveEast, MoveNorth, MoveSouth, MoveWest, OpenWorkshop, PrepareWorkshop, RecoverFocus, ToggleSneak,
+    Unleash, Wait, WorkshopAim, WorkshopDaggerExample, WorkshopDelivery, WorkshopElement, WorkshopPayload,
+    WorkshopPowerDown, WorkshopPowerUp, WorkshopShape, WorkshopStaffExample, WorkshopTrigger, WorkshopWeapon,
+};
 
 /// Tiles along each side of the viewport. Odd, so the wanderer sits on the center tile.
 const VIEW: i64 = 2 * VIEW_RADIUS + 1;
@@ -37,11 +44,11 @@ const LINE: f32 = 22.0;
 /// Padding inside the panel and log frames.
 const INSET: f32 = 12.0;
 /// Species listed under NEARBY.
-const NEARBY: usize = 4;
+const NEARBY: usize = 2;
 /// Trait changes listed per nearby species, strongest first.
 const DELTAS: usize = 3;
 /// Side of the colored card a NEARBY sprite sits on.
-const CARD: f32 = 40.0;
+const CARD: f32 = 34.0;
 
 const MAP: f32 = VIEW as f32 * TILE + 2.0 * BORDER;
 const LOG: f32 = LOG_LINES as f32 * LINE + 2.0 * (INSET + BORDER);
@@ -99,6 +106,7 @@ pub struct GameView {
     /// [`Log::total`](blah_core::Log::total) before the latest action: lines past it are that action's.
     mark: u64,
     sprites: SpriteCache,
+    workshop: Option<Workshop>,
 }
 
 impl GameView {
@@ -107,12 +115,31 @@ impl GameView {
     pub fn new(game: Game, mark: u64, window: &mut Window, cx: &mut Context<GameView>) -> GameView {
         let focus = cx.focus_handle();
         window.focus(&focus);
-        GameView { game, focus, mark, sprites: SpriteCache::default() }
+        GameView { game, focus, mark, sprites: SpriteCache::default(), workshop: None }
     }
 
     fn act(&mut self, action: impl FnOnce(&mut Game), cx: &mut Context<GameView>) {
+        if apply_play_action(&mut self.game, &mut self.mark, self.workshop.as_ref(), action) {
+            cx.notify();
+        }
+    }
+
+    fn edit_workshop(&mut self, edit: Edit, cx: &mut Context<GameView>) {
+        if let Some(workshop) = &mut self.workshop {
+            workshop.apply(edit);
+            cx.notify();
+        }
+    }
+
+    fn prepare_workshop(&mut self, cx: &mut Context<GameView>) {
+        let Some(workshop) = &mut self.workshop else {
+            return;
+        };
         self.mark = self.game.log().total();
-        action(&mut self.game);
+        let result = workshop.prepare(&mut self.game);
+        if result.is_ok() {
+            self.workshop = None;
+        }
         cx.notify();
     }
 
@@ -122,6 +149,21 @@ impl GameView {
         let added = usize::try_from(log.total() - self.mark).unwrap_or(usize::MAX);
         log.entries().rev().take(added).map(|e| e.kind)
     }
+}
+
+/// Shared by every gameplay key. Draft editing must not advance the world behind the workshop.
+fn apply_play_action(
+    game: &mut Game,
+    mark: &mut u64,
+    workshop: Option<&Workshop>,
+    action: impl FnOnce(&mut Game),
+) -> bool {
+    if workshop.is_some() {
+        return false;
+    }
+    *mark = game.log().total();
+    action(game);
+    true
 }
 
 impl Focusable for GameView {
@@ -135,7 +177,7 @@ impl Render for GameView {
         let hurt = self.news().any(|k| matches!(k, LogKind::Hurt | LogKind::Death));
         self.sprites.begin(window);
         let map = map(&self.game, &mut self.sprites, hurt);
-        let panel = panel(&self.game, &mut self.sprites);
+        let panel = panel(&self.game, &mut self.sprites, self.workshop.as_ref());
         self.sprites.end(window);
         let title = format!("blah · seed {}", self.game.world().seed());
 
@@ -146,6 +188,34 @@ impl Render for GameView {
             .on_action(cx.listener(|this, _: &MoveEast, _, cx| this.act(|g| _ = g.step(Dir::East), cx)))
             .on_action(cx.listener(|this, _: &MoveWest, _, cx| this.act(|g| _ = g.step(Dir::West), cx)))
             .on_action(cx.listener(|this, _: &Wait, _, cx| this.act(|g| _ = g.wait(), cx)))
+            .on_action(cx.listener(|this, _: &ToggleSneak, _, cx| this.act(|g| _ = g.toggle_sneak(), cx)))
+            .on_action(cx.listener(|this, _: &RecoverFocus, _, cx| this.act(|g| _ = g.recover_focus(), cx)))
+            .on_action(cx.listener(|this, _: &Unleash, _, cx| this.act(|g| _ = g.unleash(), cx)))
+            .on_action(cx.listener(|this, _: &OpenWorkshop, _, cx| {
+                if this.workshop.is_none() {
+                    this.workshop = Some(Workshop::new(this.game.maneuver().clone()));
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &CancelWorkshop, _, cx| {
+                if this.workshop.take().is_some() {
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PrepareWorkshop, _, cx| this.prepare_workshop(cx)))
+            .on_action(cx.listener(|this, _: &WorkshopWeapon, _, cx| this.edit_workshop(Edit::Weapon, cx)))
+            .on_action(cx.listener(|this, _: &WorkshopDelivery, _, cx| this.edit_workshop(Edit::Delivery, cx)))
+            .on_action(cx.listener(|this, _: &WorkshopAim, _, cx| this.edit_workshop(Edit::Aim, cx)))
+            .on_action(cx.listener(|this, _: &WorkshopPayload, _, cx| this.edit_workshop(Edit::Payload, cx)))
+            .on_action(cx.listener(|this, _: &WorkshopElement, _, cx| this.edit_workshop(Edit::Element, cx)))
+            .on_action(cx.listener(|this, _: &WorkshopTrigger, _, cx| this.edit_workshop(Edit::Trigger, cx)))
+            .on_action(cx.listener(|this, _: &WorkshopShape, _, cx| this.edit_workshop(Edit::Shape, cx)))
+            .on_action(cx.listener(|this, _: &WorkshopPowerUp, _, cx| this.edit_workshop(Edit::PowerUp, cx)))
+            .on_action(cx.listener(|this, _: &WorkshopPowerDown, _, cx| this.edit_workshop(Edit::PowerDown, cx)))
+            .on_action(
+                cx.listener(|this, _: &WorkshopDaggerExample, _, cx| this.edit_workshop(Edit::DaggerExample, cx)),
+            )
+            .on_action(cx.listener(|this, _: &WorkshopStaffExample, _, cx| this.edit_workshop(Edit::StaffExample, cx)))
             .size_full()
             .bg(rgb(SCREEN))
             .font_family(FONT)
@@ -263,16 +333,17 @@ fn jitter(x: i64, y: i64) -> f32 {
 }
 
 /// The status panel: the wanderer, where they are, and what lives nearby.
-fn panel(game: &Game, sprites: &mut SpriteCache) -> Div {
-    frame()
-        .w(px(PANEL))
-        .h(px(MAP))
-        .p(px(INSET))
-        .flex()
-        .flex_col()
+fn panel(game: &Game, sprites: &mut SpriteCache, workshop: Option<&Workshop>) -> Div {
+    let panel = frame().w(px(PANEL)).h(px(MAP)).p(px(INSET)).flex().flex_col();
+    if let Some(workshop) = workshop {
+        return panel.child(workshop_panel(workshop, game));
+    }
+    panel
         .child(wanderer(game))
         .child(rule())
         .child(place(game))
+        .child(rule())
+        .child(combat_status(game))
         .child(rule())
         .child(nearby(game, sprites))
         .child(div().flex_grow())
@@ -283,9 +354,156 @@ fn panel(game: &Game, sprites: &mut SpriteCache) -> Div {
                 .text_color(rgb(FAINT))
                 .text_size(px(SMALL_SIZE))
                 .line_height(px(SMALL_LINE))
-                .child("arrows, hjkl, wasd: move; bump to attack")
-                .child("space or .: wait    q: quit"),
+                .child("Arrows / hjkl / wasd move · bump attacks")
+                .child("M edit · C sneak · R recover · F unleash")
+                .child("Space / . wait · Q quit"),
         )
+}
+
+fn combat_status(game: &Game) -> Div {
+    let maneuver = game.maneuver();
+    let tracking = game.monsters_in_view().filter(|monster| monster.alerted).count();
+    div()
+        .flex()
+        .flex_col()
+        .child(bar("FP", game.wanderer().focus, MAX_FOCUS, HEADING))
+        .child(pair("Maneuver", format!("{} · {}F", maneuver.name, maneuver.technique.focus_cost())))
+        .child(pair("Sneaking", if game.sneaking() { "on".into() } else { "off".into() }))
+        .child(pair(
+            "Observers",
+            if tracking == 0 { "none tracking you".into() } else { format!("{tracking} tracking you") },
+        ))
+        .child(combat_preview(game))
+}
+
+fn combat_preview(game: &Game) -> Div {
+    if game.maneuver().technique.delivery == Delivery::Ground {
+        return match game.preview_area() {
+            Ok(preview) => div()
+                .flex()
+                .flex_col()
+                .child(small_line(format!(
+                    "Area r{}: {} targets, {} total damage",
+                    preview.radius, preview.targets, preview.damage
+                )))
+                .child(colored_small_line(
+                    format!("{} Focus; {} self damage (can kill)", preview.focus, preview.self_damage),
+                    HP,
+                )),
+            Err(reason) => small_line(format!("Area preview: {reason}")),
+        };
+    }
+
+    for direction in Dir::ALL {
+        if let Ok(preview) = game.preview_attack(direction) {
+            let direction = match direction {
+                Dir::North => "N",
+                Dir::South => "S",
+                Dir::East => "E",
+                Dir::West => "W",
+            };
+            let mut notes = Vec::new();
+            if preview.opening {
+                notes.push("opening");
+            }
+            if preview.penetration_possible {
+                notes.push("penetration");
+            }
+            let notes = if notes.is_empty() { String::new() } else { format!(" · {}", notes.join(", ")) };
+            return div()
+                .flex()
+                .flex_col()
+                .child(small_line(format!("{direction}: {}–{} on hit; misses do 0", preview.min_hit, preview.max_hit)))
+                .child(small_line(format!("{} Focus{notes}", preview.focus)));
+        }
+    }
+    small_line("Adjacent preview: no target")
+}
+
+fn workshop_panel(workshop: &Workshop, game: &Game) -> Div {
+    let maneuver = workshop.draft();
+    let technique = maneuver.technique;
+    let reason = workshop.reason().or_else(|| (!game.can_prepare()).then_some("Nearby creatures prevent preparation."));
+    let validation_message = match reason {
+        Some(reason) => format!("Cannot prepare: {reason}"),
+        None => "Core validates; safe to prepare when alone.".into(),
+    };
+    let validation_color = if reason.is_some() { HP } else { 0x8c_e0_6a };
+    let mut panel = div()
+        .flex()
+        .flex_col()
+        .child(heading("WORKSHOP · PAUSED"))
+        .child(pair("Name", maneuver.name.clone()))
+        .child(pair("1 Weapon", maneuver.weapon.name().into()))
+        .child(pair("2 Delivery", delivery_name(technique.delivery).into()))
+        .child(pair("3 Aim", aim_name(technique.aim).into()))
+        .child(pair("4 Payload", if technique.burst.is_some() { "on" } else { "off" }.into()));
+    if let Some(burst) = technique.burst {
+        panel = panel
+            .child(pair("5 Element", element_name(burst.element).into()))
+            .child(pair("6 Release", trigger_name(burst.trigger).into()))
+            .child(pair("7 Shape", shape_name(burst.shape)))
+            .child(pair("+/- Power", burst.power.to_string()));
+    }
+    panel = panel
+        .child(pair("Focus cost", format!("{} per use", technique.focus_cost())))
+        .child(colored_small_line(validation_message, validation_color));
+    if let Ok(damage) = maneuver.backlash() {
+        panel = panel
+            .child(colored_small_line(format!("Area also hits you: up to {damage} Health."), HP))
+            .child(small_line("No safe center. This can kill you."));
+    }
+    panel
+        .child(small_line("Enter prepares only with no creatures in view; Esc discards."))
+        .child(div().h(px(6.0)))
+        .child(small_line("1 weapon · 2 delivery · 3 aim · 4 payload"))
+        .child(small_line("5 element · 6 trigger · 7 shape"))
+        .child(small_line(format!("+ / - power (1–{MAX_BURST_POWER}) · area radius 1–{MAX_AREA_RADIUS}")))
+        .child(small_line("0 dagger example · 9 staff inferno"))
+}
+
+fn delivery_name(delivery: Delivery) -> &'static str {
+    match delivery {
+        Delivery::Weapon => "Weapon",
+        Delivery::Touch => "Touch",
+        Delivery::Ground => "Ground",
+    }
+}
+
+fn aim_name(aim: Aim) -> &'static str {
+    match aim {
+        Aim::Direct => "Direct",
+        Aim::Opening => "Opening",
+    }
+}
+
+fn element_name(element: Element) -> &'static str {
+    match element {
+        Element::Force => "Force",
+        Element::Fire => "Fire",
+    }
+}
+
+fn trigger_name(trigger: Trigger) -> &'static str {
+    match trigger {
+        Trigger::Contact => "Contact",
+        Trigger::Penetration => "Penetration",
+    }
+}
+
+fn shape_name(shape: Shape) -> String {
+    match shape {
+        Shape::Point => "Point".into(),
+        Shape::Area(radius) => format!("Area {radius}"),
+    }
+}
+
+fn small_line(text: impl Into<SharedString>) -> Div {
+    div().text_size(px(SMALL_SIZE)).line_height(px(SMALL_LINE)).text_color(rgb(DIM)).child(text.into())
+}
+
+fn colored_small_line(text: impl Into<SharedString>, tint: u32) -> Div {
+    div().text_size(px(SMALL_SIZE)).line_height(px(SMALL_LINE)).text_color(rgb(tint)).child(text.into())
 }
 
 fn wanderer(game: &Game) -> Div {
@@ -345,7 +563,7 @@ fn place(game: &Game) -> Div {
 /// The species in view, nearest first, each with how it differs from its kin in a region visited before.
 fn nearby(game: &Game, sprites: &mut SpriteCache) -> Div {
     let species: Vec<SpeciesId> = game.nearby_species().into_iter().take(NEARBY).collect();
-    let list = div().flex().flex_col().gap(px(10.0)).child(heading("NEARBY"));
+    let list = div().flex().flex_col().gap(px(6.0)).child(heading("NEARBY"));
     if species.is_empty() {
         return list.child(div().text_color(rgb(FAINT)).child("nothing in sight"));
     }
@@ -384,7 +602,7 @@ fn nearby_entry(game: &Game, id: SpeciesId, sprites: &mut SpriteCache) -> Option
         .text_size(px(SMALL_SIZE))
         .line_height(px(SMALL_LINE))
         .text_color(rgb(DIM))
-        .line_clamp(2)
+        .line_clamp(1)
         .child(species.description.clone());
     let text = div()
         .flex_1()
@@ -471,7 +689,7 @@ fn heading(text: &'static str) -> Div {
 }
 
 fn rule() -> Div {
-    div().my(px(10.0)).h(px(1.0)).w_full().bg(rgb(FAINT))
+    div().my(px(6.0)).h(px(1.0)).w_full().bg(rgb(FAINT))
 }
 
 fn pair(label: &'static str, value: String) -> Div {
@@ -481,7 +699,7 @@ fn pair(label: &'static str, value: String) -> Div {
         .flex_row()
         .justify_between()
         .child(div().text_color(rgb(DIM)).child(label))
-        .child(div().text_color(rgb(TEXT)).child(value))
+        .child(div().min_w_0().truncate().text_color(rgb(TEXT)).child(value))
 }
 
 /// A segmented gauge: label, ten cells filled in proportion, and the value over its maximum.
@@ -532,6 +750,41 @@ fn glyph_shade(c @ [r, g, b]: [u8; 3]) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workshop_blocks_all_play_actions_until_closed() {
+        let mut game = Game::inferno_trial(42).unwrap();
+        let workshop = Workshop::new(game.maneuver().clone());
+        let before = game.clone();
+        let mut mark = 999;
+        let actions: [fn(&mut Game); 5] = [
+            |g| {
+                g.step(Dir::East);
+            },
+            |g| {
+                g.wait();
+            },
+            |g| {
+                g.toggle_sneak();
+            },
+            |g| {
+                g.recover_focus();
+            },
+            |g| {
+                g.unleash();
+            },
+        ];
+        for action in actions {
+            assert!(!apply_play_action(&mut game, &mut mark, Some(&workshop), action));
+            assert_eq!(game, before);
+            assert_eq!(mark, 999);
+        }
+        assert!(apply_play_action(&mut game, &mut mark, None, |g| {
+            g.unleash();
+        }));
+        assert_eq!(game.turn(), before.turn() + 1);
+        assert_eq!(mark, before.log().total());
+    }
 
     #[test]
     fn tile_shading_is_slight_and_fixed() {

@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::biome::Biome;
 use crate::clade::{Clade, CladeId, clades};
+use crate::combat::{AreaPreview, AttackContext, AttackPreview, AttackResult, Delivery, MAX_FOCUS, Maneuver};
 use crate::genome::Genome;
 use crate::hash::Rng;
 use crate::life::{RegionLife, Species, SpeciesId, TraitDelta, compare};
@@ -257,6 +258,12 @@ pub struct Comparison {
     pub deltas: Vec<TraitDelta>,
 }
 
+/// The immutable consequences of an area action before any actors are removed.
+struct AreaPlan {
+    preview: AreaPreview,
+    hits: Vec<(usize, i32)>,
+}
+
 /// One game in progress: a world, the wanderer in it, the creatures around it, the turn count, and what
 /// has been said.
 #[derive(Clone, Debug)]
@@ -283,6 +290,10 @@ pub struct Game {
     monsters: Vec<Monster>,
     next_monster: u64,
     deaths: u32,
+    maneuver: Maneuver,
+    sneaking: bool,
+    /// Last resolved attempt, for the prototype's explanation panel. Not advancement credit.
+    last_attack: Option<AttackResult>,
 }
 
 /// Games are equal when their state is; what the caches happen to hold doesn't count.
@@ -292,6 +303,7 @@ impl PartialEq for Game {
             == (other.world, other.position, other.home, other.turn, other.wanderer, other.next_monster, other.deaths)
             && (&self.region, &self.visited, &self.log, &self.monsters)
                 == (&other.region, &other.visited, &other.log, &other.monsters)
+            && (&self.maneuver, self.sneaking, self.last_attack) == (&other.maneuver, other.sneaking, other.last_attack)
     }
 }
 
@@ -325,9 +337,85 @@ impl Game {
             monsters: Vec::new(),
             next_monster: 0,
             deaths: 0,
+            maneuver: Maneuver::default(),
+            sneaking: false,
+            last_attack: None,
         };
         game.populate(&mut Rng::keyed(seed, b"populate", &[]));
         game
+    }
+
+    /// A clearly labeled developer trial: the normal world and action loop, with a known loadout and a
+    /// durable adjacent sentinel. It starts sneaking so the first eastward bump can test the opening.
+    ///
+    /// This does not simulate earned mastery or a naturally generated encounter.
+    pub fn composition_trial(seed: u64, maneuver: Maneuver) -> Result<Game, &'static str> {
+        maneuver.validate()?;
+        let mut game = Self::new(seed);
+        let start = game.position;
+        let position = (0..80)
+            .flat_map(|r| ring(r).map(move |(dx, dy)| (start.0 + dx, start.1 + dy)))
+            .find(|&(x, y)| {
+                (-2..=2).all(|dy| (-2..=2).all(|dx| is_land(game.world.tile(x + dx, y + dy).biome.biome())))
+            })
+            .ok_or("No open ground near this seed's starting point.")?;
+        game.position = position;
+        game.home = position;
+        game.update_region(false);
+        game.monsters.clear();
+        game.prepare(maneuver)?;
+        let species = game.local_life().species[0].clone();
+        let mut genome = species.pool[0];
+        genome.set(crate::Gene::Water, 0.2);
+        genome.set(crate::Gene::Aggression, 1.0);
+        let mut phenotype = Phenotype::of(&genome);
+        phenotype.stats = crate::Stats { hp: 40, attack: 2, defense: 3, speed: ACTION_COST };
+        phenotype.sense = 4;
+        let at = (position.0 + 1, position.1);
+        let sprite = Sprite::draw(&phenotype, &game.clade(species.id.clade).plan, species.biome);
+        game.monsters.push(Monster {
+            id: MonsterId(game.next_monster),
+            species: species.id,
+            name: "trial sentinel".into(),
+            genome,
+            phenotype,
+            sprite,
+            position: at,
+            hp: 40,
+            home: at,
+            alerted: false,
+            energy: 0,
+        });
+        game.next_monster += 1;
+        game.sneaking = true;
+        game.log.push(LogKind::Region, "COMPOSITION TRIAL: bump east. Then compare an attack after you are located.");
+        Ok(game)
+    }
+
+    /// A developer trial of costly area fire: several nearby creatures with different heat tolerances.
+    pub fn inferno_trial(seed: u64) -> Result<Game, &'static str> {
+        let mut game = Self::composition_trial(seed, Maneuver::staff_inferno())?;
+        game.sneaking = false;
+        let (x, y) = game.position;
+        game.monsters[0].hp = 6;
+        game.monsters[0].phenotype.stats.hp = 6;
+        game.monsters[0].phenotype.heat = 0.0;
+        game.monsters[0].name = "tender trial sentinel".into();
+        for (at, heat, name) in
+            [((x - 2, y), 0.4, "warm-adapted trial sentinel"), ((x, y + 2), 0.9, "heat-hardy trial sentinel")]
+        {
+            let mut creature = game.monsters[0].clone();
+            creature.id = MonsterId(game.next_monster);
+            game.next_monster += 1;
+            creature.position = at;
+            creature.home = at;
+            creature.phenotype.heat = heat;
+            creature.name = name.into();
+            game.monsters.push(creature);
+        }
+        game.log
+            .push(LogKind::Region, "INFERNO TRIAL: F strikes the staff. The fire costs 18 Focus and also burns you.");
+        Ok(game)
     }
 
     /// The world being walked.
@@ -388,6 +476,173 @@ impl Game {
     #[must_use]
     pub const fn wanderer(&self) -> &Wanderer {
         &self.wanderer
+    }
+
+    /// The prepared executable structure and its cosmetic name.
+    #[must_use]
+    pub const fn maneuver(&self) -> &Maneuver {
+        &self.maneuver
+    }
+
+    /// Whether careful movement is active, not a guarantee that every observer is unaware.
+    #[must_use]
+    pub const fn sneaking(&self) -> bool {
+        self.sneaking
+    }
+
+    /// The actual effects of the most recent attack attempt.
+    #[must_use]
+    pub const fn last_attack(&self) -> Option<AttackResult> {
+        self.last_attack
+    }
+
+    /// Preparation is safe only when no creature is in the visible neighborhood.
+    #[must_use]
+    pub fn can_prepare(&self) -> bool {
+        self.monsters_in_view().next().is_none()
+    }
+
+    /// Prepare a validated composition at a safe point. Invalid edits change nothing.
+    ///
+    /// Preparation and previews pass no time and grant no learning. No AI verdict is required.
+    pub fn prepare(&mut self, maneuver: Maneuver) -> Result<(), &'static str> {
+        maneuver.validate()?;
+        if !self.can_prepare() {
+            return Err("Prepare away from nearby creatures.");
+        }
+        self.log.push(
+            LogKind::Attack,
+            format!("Prepared {} ({} Focus per attempt).", maneuver.name, maneuver.technique.focus_cost()),
+        );
+        self.maneuver = maneuver;
+        Ok(())
+    }
+
+    /// Preview an adjacent target without drawing randomness, spending resources, or advancing time.
+    pub fn preview_attack(&self, dir: Dir) -> Result<AttackPreview, &'static str> {
+        let (x, y) = self.ahead(dir);
+        let target = self.monster_at(x, y).ok_or("No adjacent target in that direction.")?;
+        self.maneuver.preview(self.attack_context(target))
+    }
+
+    fn attack_context(&self, target: &Monster) -> AttackContext {
+        AttackContext {
+            attack: self.wanderer.stats.attack,
+            defense: target.phenotype.stats.defense,
+            unguarded: self.sneaking && !target.detects(self.position, true),
+            fire_resistance: target.fire_resistance(),
+        }
+    }
+
+    fn area_plan(&self) -> Result<AreaPlan, &'static str> {
+        let (radius, burst) = self.maneuver.area_payload()?;
+        let hits: Vec<_> = self
+            .monsters
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| chebyshev(m.position, self.position) <= i64::from(radius))
+            .map(|(i, m)| (i, burst.damage(m.phenotype.stats.defense, m.fire_resistance(), false, false)))
+            .collect();
+        let preview = AreaPreview {
+            radius,
+            focus: self.maneuver.technique.focus_cost(),
+            targets: hits.len(),
+            damage: hits.iter().map(|(_, damage)| damage).sum(),
+            self_damage: burst.damage(self.wanderer.stats.defense, 0, false, false),
+        };
+        Ok(AreaPlan { preview, hits })
+    }
+
+    /// Preview the current area discharge. It hits all nearby creatures and the caster, without a miss
+    /// roll or faction filtering. Terrain does not obstruct the wave in this small prototype.
+    pub fn preview_area(&self) -> Result<AreaPreview, &'static str> {
+        self.area_plan().map(|plan| plan.preview)
+    }
+
+    /// Strike the ground and resolve a bounded area discharge. Focus is paid before any effect.
+    ///
+    /// Self-damage can kill the caster. Empty casts still cost resources; no learning is awarded.
+    pub fn unleash(&mut self) -> Step {
+        let AreaPlan { preview, hits } = match self.area_plan() {
+            Ok(plan) => plan,
+            Err(reason) => {
+                self.log.push(LogKind::Blocked, reason);
+                return Step::Blocked;
+            }
+        };
+        if self.wanderer.focus < preview.focus {
+            self.log.push(LogKind::Blocked, "Not enough Focus to discharge this area.");
+            return Step::Blocked;
+        }
+        self.turn += 1;
+        self.wanderer.focus -= preview.focus;
+        self.sneaking = false;
+        self.last_attack = None;
+        self.log.push(
+            LogKind::Attack,
+            format!(
+                "{} hits {} creatures for {} total damage; {} Focus spent.",
+                self.maneuver.name, preview.targets, preview.damage, preview.focus
+            ),
+        );
+        for (i, damage) in hits {
+            let monster = &mut self.monsters[i];
+            monster.hp = monster.hp.saturating_sub(damage);
+            monster.alerted = true;
+            self.log.push(LogKind::Attack, format!("The {} takes {damage}.", monster.name));
+            if monster.hp <= 0 {
+                self.log.push(LogKind::Kill, format!("The {} dies.", monster.name));
+            }
+        }
+        self.monsters.retain(|monster| monster.hp > 0);
+        self.wanderer.hp -= preview.self_damage;
+        if preview.self_damage > 0 {
+            self.log
+                .push(LogKind::Hurt, format!("The same area hits you for {}. No safe center.", preview.self_damage));
+        }
+        if self.wanderer.hp <= 0 {
+            self.die();
+        } else {
+            self.end_turn();
+        }
+        Step::Attacked
+    }
+
+    /// Enter or leave careful movement. Entering spends one Focus and a turn; it does not erase tracking.
+    pub fn toggle_sneak(&mut self) -> Step {
+        if !self.sneaking && self.wanderer.focus < 1 {
+            self.log.push(LogKind::Blocked, "Not enough Focus to sneak.");
+            return Step::Blocked;
+        }
+        self.sneaking = !self.sneaking;
+        if self.sneaking {
+            self.wanderer.focus -= 1;
+        }
+        self.turn += 1;
+        self.log.push(
+            LogKind::Attack,
+            if self.sneaking {
+                "You move carefully. Enemies already tracking you still know where you are."
+            } else {
+                "You stop sneaking."
+            },
+        );
+        self.end_turn();
+        Step::Waited
+    }
+
+    /// Recover Focus at home, with no creatures nearby. Ordinary waiting never restores it.
+    pub fn recover_focus(&mut self) -> Step {
+        if self.position != self.home || !self.can_prepare() {
+            self.log.push(LogKind::Blocked, "Recover Focus at home, away from nearby creatures.");
+            return Step::Blocked;
+        }
+        self.turn += 1;
+        self.sneaking = false;
+        self.wanderer.focus = MAX_FOCUS;
+        self.log.push(LogKind::Attack, "You recover your Focus at home.");
+        self.end_turn();
+        Step::Waited
     }
 
     /// Times the wanderer has died.
@@ -475,9 +730,16 @@ impl Game {
     /// moving passes a turn, and the monsters act.
     pub fn step(&mut self, dir: Dir) -> Step {
         let (x, y) = self.ahead(dir);
+        if self.monster_at(x, y).is_some() && self.maneuver.technique.delivery == Delivery::Ground {
+            return self.unleash();
+        }
         if !self.can_step(dir) {
             // Biome names are sentence case ("Deep water"); mid-sentence they are common nouns.
-            let line = format!("The way is blocked by {}.", self.world.tile(x, y).biome.biome().name.to_lowercase());
+            let line = if self.monster_at(x, y).is_some() || self.sneaking && self.wanderer.focus < 1 {
+                "Not enough Focus. Change your approach or recover at home.".to_owned()
+            } else {
+                format!("The way is blocked by {}.", self.world.tile(x, y).biome.biome().name.to_lowercase())
+            };
             if self.log.lines().next_back() != Some(line.as_str()) {
                 self.log.push(LogKind::Blocked, line);
             }
@@ -491,6 +753,9 @@ impl Game {
             return Step::Attacked;
         }
         self.position = (x, y);
+        if self.sneaking {
+            self.wanderer.focus -= 1;
+        }
         self.update_region(true);
         self.end_turn();
         Step::Moved
@@ -501,7 +766,11 @@ impl Game {
     #[must_use]
     pub fn can_step(&self, dir: Dir) -> bool {
         let (x, y) = self.ahead(dir);
-        self.monster_at(x, y).is_some() || self.world.tile(x, y).biome.biome().passable
+        if self.monster_at(x, y).is_some() {
+            self.maneuver.technique.focus_cost() <= self.wanderer.focus
+        } else {
+            self.world.tile(x, y).biome.biome().passable && (!self.sneaking || self.wanderer.focus >= 1)
+        }
     }
 
     /// The tile one step from the wanderer in `dir`.
@@ -625,6 +894,7 @@ impl Game {
                 position: (x, y),
                 hp: phenotype.stats.hp,
                 home: (x, y),
+                alerted: false,
                 energy: rng.below(ACTION_COST as usize) as i32,
             };
             self.next_monster += 1;
@@ -635,16 +905,35 @@ impl Game {
 
     /// The wanderer attacks monster `index`.
     fn wanderer_attacks(&mut self, index: usize, rng: &mut Rng) {
+        let context = self.attack_context(&self.monsters[index]);
+        let result = self.maneuver.resolve(context, rng).expect("prepared maneuvers are validated");
+        self.wanderer.focus -= self.maneuver.technique.focus_cost();
+        self.last_attack = Some(result);
+        // Even a miss reveals the attempt. No repeated surprise by toggling sneak.
+        self.sneaking = false;
         let monster = &mut self.monsters[index];
-        match damage(self.wanderer.stats.attack, monster.phenotype.stats.defense, rng) {
-            None => self.log.push(LogKind::Attack, format!("You miss the {}.", monster.name)),
-            Some(d) => {
-                monster.hp -= d;
-                self.log.push(LogKind::Attack, format!("You hit the {} for {d}.", monster.name));
-                if monster.hp <= 0 {
-                    self.log.push(LogKind::Kill, format!("The {} dies.", monster.name));
-                    self.monsters.remove(index);
-                }
+        monster.alerted = true;
+        if !result.hit {
+            self.log.push(LogKind::Attack, format!("You miss the {}.", monster.name));
+        } else {
+            monster.hp = monster.hp.saturating_sub(result.total());
+            self.log.push(LogKind::Attack, format!("You hit the {} for {}.", monster.name, result.total()));
+            if self.maneuver.technique.burst.is_some() || result.opening {
+                let detail = if result.amplified {
+                    "unguarded placement amplifies the burst"
+                } else if self.maneuver.technique.burst.is_some() && !result.burst_released {
+                    "no penetration; the burst does not release"
+                } else {
+                    "no amplified placement"
+                };
+                self.log.push(
+                    LogKind::Attack,
+                    format!("{}: {} physical + {} burst; {detail}.", self.maneuver.name, result.physical, result.burst),
+                );
+            }
+            if monster.hp <= 0 {
+                self.log.push(LogKind::Kill, format!("The {} dies.", monster.name));
+                self.monsters.remove(index);
             }
         }
     }
@@ -654,6 +943,8 @@ impl Game {
     fn monsters_act(&mut self) {
         let deaths = self.deaths;
         for i in 0..self.monsters.len() {
+            // Observation belongs to the turn, not to a speed-dependent opportunity to act.
+            self.monsters[i].alerted = self.monsters[i].detects(self.position, self.sneaking);
             let mut rng = Rng::keyed(self.world.seed(), b"monsters", &[self.turn, self.monsters[i].id.0]);
             self.monsters[i].energy += self.monsters[i].phenotype.stats.speed;
             let mut actions = 0;
@@ -671,13 +962,14 @@ impl Game {
     /// One action of monster `i`, by temperament: aggressive ones close in and attack, territorial ones
     /// attack near home, skittish ones flee, and all of them wander when nothing has their attention.
     fn monster_acts(&mut self, i: usize, rng: &mut Rng) {
+        self.monsters[i].alerted = self.monsters[i].detects(self.position, self.sneaking);
         let m = &self.monsters[i];
         let (me, you, home) = (m.position, self.position, m.home);
         let adjacent = manhattan(me, you) == 1;
-        let senses = chebyshev(me, you) <= m.phenotype.sense;
+        let senses = m.alerted;
         match m.phenotype.temperament {
             Temperament::Aggressive => {
-                if adjacent {
+                if adjacent && senses {
                     self.monster_attacks(i, rng);
                 } else if senses {
                     self.approach(i, you);
@@ -731,6 +1023,9 @@ impl Game {
         self.turn += DEATH_TURNS;
         self.position = self.home;
         self.wanderer.hp = self.wanderer.max_hp();
+        self.wanderer.focus = MAX_FOCUS;
+        self.sneaking = false;
+        self.last_attack = None;
         self.monsters.clear();
         self.update_region(false);
         self.log.push(LogKind::Death, format!("You wake, much later, in {}.", self.region.name));
@@ -1041,6 +1336,7 @@ mod tests {
             position: at,
             hp: phenotype.stats.hp,
             home: at,
+            alerted: false,
             energy: 0,
         });
         id
@@ -1469,6 +1765,237 @@ mod tests {
             let points: std::collections::HashSet<_> = (0..8 * r).map(|k| ring_point(r, k)).collect();
             assert_eq!(points, ring(r).collect());
         }
+    }
+
+    #[test]
+    fn composed_attacks_use_real_openings_and_charge_for_every_attempt() {
+        let mut hits = 0;
+        let mut misses = 0;
+        for seed in 0..40 {
+            let mut game = Game::composition_trial(seed, Maneuver::backstab_burst()).unwrap();
+            let before = game.clone();
+            let preview = game.preview_attack(Dir::East).unwrap();
+            assert_eq!(game, before, "preview must not mutate the world or RNG");
+            assert_eq!((preview.min_hit, preview.max_hit, preview.focus, preview.opening), (15, 17, 7, true));
+            let mut guarded = game.clone();
+            guarded.sneaking = false;
+            assert_eq!(game.step(Dir::East), Step::Attacked);
+            assert_eq!(guarded.step(Dir::East), Step::Attacked);
+            let result = game.last_attack().unwrap();
+            assert_eq!(game.wanderer.focus, MAX_FOCUS - 7);
+            assert!(!game.sneaking);
+            assert!(game.monsters[0].alerted);
+            assert_eq!(game.monsters[0].hp, 40 - result.total());
+            if result.hit {
+                hits += 1;
+                assert!(result.amplified);
+                assert!(!guarded.last_attack().unwrap().amplified);
+                assert!(result.total() > guarded.last_attack().unwrap().total());
+            } else {
+                misses += 1;
+                assert_eq!(result.total(), 0);
+            }
+            game.toggle_sneak();
+            assert!(!game.preview_attack(Dir::East).unwrap().opening, "toggling cannot refresh surprise");
+        }
+        assert!(hits > 0 && misses > 0);
+    }
+
+    #[test]
+    fn failed_preparation_and_unaffordable_attacks_are_atomic() {
+        let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
+        let before = game.clone();
+        assert!(game.prepare(Maneuver::default()).is_err());
+        assert_eq!(game, before);
+        game.wanderer.focus = 6;
+        let before = game.clone();
+        assert!(!game.can_step(Dir::East));
+        assert_eq!(game.step(Dir::East), Step::Blocked);
+        assert_eq!(game.turn, before.turn);
+        assert_eq!(game.wanderer, before.wanderer);
+        assert_eq!(game.monsters, before.monsters);
+        assert_eq!(game.last_attack, None);
+        assert!(game.sneaking);
+
+        game.monsters.clear();
+        let before = game.clone();
+        let mut invalid = Maneuver::backstab_burst();
+        invalid.weapon = crate::Weapon::Club;
+        assert!(game.prepare(invalid).is_err());
+        assert_eq!(game, before);
+    }
+
+    #[test]
+    fn blocked_delivery_spends_focus_without_creating_a_burst() {
+        let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
+        game.monsters[0].phenotype.stats.defense = 100;
+        assert_eq!(game.preview_attack(Dir::East).unwrap().max_hit, 1);
+        game.step(Dir::East);
+        let result = game.last_attack().unwrap();
+        assert_eq!(result.burst, 0);
+        assert!(!result.burst_released && !result.penetrated);
+        assert_eq!(game.wanderer.focus, MAX_FOCUS - 7);
+    }
+
+    #[test]
+    fn observation_does_not_depend_on_monster_speed_and_tracking_must_be_broken() {
+        let mut game = on_open_land(0, 3);
+        let (x, y) = game.position;
+        game.toggle_sneak();
+        put_monster(&mut game, (x + 1, y), 1.0);
+        game.monsters[0].phenotype.stats.speed = 0;
+        game.monsters[0].phenotype.sense = 4;
+        game.wait();
+        assert!(!game.monsters[0].alerted);
+        game.monsters[0].phenotype.sense = 8;
+        game.wait();
+        assert!(game.monsters[0].alerted, "an acute observer can detect a sneak before it gets an action");
+        game.monsters[0].phenotype.sense = 4;
+        game.wait();
+        assert!(game.monsters[0].alerted, "normal range maintains tracking");
+        game.monsters[0].position = (x + 6, y);
+        game.wait();
+        assert!(!game.monsters[0].alerted, "leaving normal range loses tracking");
+    }
+
+    #[test]
+    fn focus_recovers_only_at_a_safe_home_or_after_death() {
+        let mut game = on_open_land(0, 3);
+        game.home = game.position;
+        game.toggle_sneak();
+        assert_eq!(game.wanderer.focus, MAX_FOCUS - 1);
+        game.step(Dir::East);
+        assert_eq!(game.wanderer.focus, MAX_FOCUS - 2);
+        let before = game.turn;
+        assert_eq!(game.recover_focus(), Step::Blocked);
+        assert_eq!(game.turn, before);
+        game.wait();
+        assert_eq!(game.wanderer.focus, MAX_FOCUS - 2);
+        game.step(Dir::West);
+        game.monsters.clear();
+        assert_eq!(game.recover_focus(), Step::Waited);
+        assert_eq!(game.wanderer.focus, MAX_FOCUS);
+        assert!(!game.sneaking);
+        game.wanderer.focus = 0;
+        assert_eq!(game.toggle_sneak(), Step::Blocked);
+        game.die();
+        assert_eq!(game.wanderer.focus, MAX_FOCUS);
+        assert!(!game.sneaking);
+    }
+
+    #[test]
+    fn an_unlisted_composition_runs_through_the_same_game_entry_point() {
+        let mut maneuver = Maneuver::backstab_burst();
+        maneuver.weapon = crate::Weapon::Spear;
+        maneuver.name = "Quiet comet".into();
+        let mut game = Game::composition_trial(42, maneuver.clone()).unwrap();
+        let mut twin = game.clone();
+        twin.maneuver.name = "A name suggested by an AI".into();
+        for action in [Dir::East, Dir::East, Dir::West, Dir::West] {
+            assert_eq!(game.preview_attack(action), twin.preview_attack(action));
+            assert_eq!(game.step(action), twin.step(action));
+            assert_eq!(game.wanderer, twin.wanderer);
+            assert_eq!(game.monsters, twin.monsters);
+            assert_eq!(game.last_attack, twin.last_attack);
+        }
+        assert_eq!(game.maneuver, maneuver);
+    }
+
+    #[test]
+    fn a_fire_payload_can_use_the_same_precise_weapon_relationship() {
+        let mut maneuver = Maneuver::backstab_burst();
+        maneuver.name = "Ember needle".into();
+        maneuver.technique.burst.as_mut().unwrap().element = crate::Element::Fire;
+        let mut game = Game::composition_trial(42, maneuver).unwrap();
+        game.monsters[0].phenotype.heat = 2.0 / 3.0;
+        assert_eq!(game.monsters[0].fire_resistance(), 50);
+        let preview = game.preview_attack(Dir::East).unwrap();
+        assert_eq!((preview.min_hit, preview.max_hit, preview.focus), (9, 11, 7));
+        game.step(Dir::East);
+        let result = game.last_attack().unwrap();
+        assert_eq!((result.physical, result.burst, result.amplified), (4, 6, true));
+    }
+
+    #[test]
+    fn area_fire_hits_the_whole_boundary_and_caster_but_not_outside_it() {
+        let mut game = on_open_land(0, 4);
+        let mut maneuver = Maneuver::staff_inferno();
+        maneuver.name = "Another legal shape".into();
+        maneuver.weapon = crate::Weapon::Club;
+        maneuver.technique.burst.as_mut().unwrap().shape = crate::Shape::Area(3);
+        game.prepare(maneuver).unwrap();
+        let (x, y) = game.position;
+        let mut inside = Vec::new();
+        for dy in -3..=3 {
+            for dx in -3..=3 {
+                if (dx, dy) != (0, 0) {
+                    inside.push(put_monster(&mut game, (x + dx, y + dy), if dx < 0 { 0.0 } else { 1.0 }));
+                }
+            }
+        }
+        let outside = put_monster(&mut game, (x + 4, y), 1.0);
+        for monster in &mut game.monsters {
+            monster.phenotype.heat = 0.0;
+            monster.phenotype.stats.speed = 0;
+            monster.hp = 40;
+        }
+        game.wanderer.hp = 30;
+        game.turn = 0;
+        let before = game.clone();
+        let preview = game.preview_area().unwrap();
+        assert_eq!(game, before);
+        assert_eq!(preview, AreaPreview { radius: 3, focus: 23, targets: 48, damage: 576, self_damage: 12 });
+        assert_eq!(game.unleash(), Step::Attacked);
+        assert_eq!(game.turn, 1);
+        assert_eq!((game.wanderer.focus, game.wanderer.hp), (1, 18));
+        for monster in &game.monsters {
+            if inside.contains(&monster.id) {
+                assert_eq!(monster.hp, 28, "every inside tile, regardless of temperament, is hit");
+            } else if monster.id == outside {
+                assert_eq!(monster.hp, 40);
+            }
+        }
+        let before = game.clone();
+        assert_eq!(game.unleash(), Step::Blocked);
+        assert_eq!(game.turn, before.turn);
+        assert_eq!(game.wanderer, before.wanderer);
+        assert_eq!(game.monsters, before.monsters);
+    }
+
+    #[test]
+    fn staff_trial_demonstrates_tolerance_cost_and_identical_bump_resolution() {
+        let mut game = Game::inferno_trial(42).unwrap();
+        let preview = game.preview_area().unwrap();
+        // 0%, 30%, and rounded 68% resistance: 12 + 8 + 3.
+        assert_eq!(preview, AreaPreview { radius: 2, focus: 18, targets: 3, damage: 23, self_damage: 12 });
+        let mut bump = game.clone();
+        assert_eq!(game.unleash(), bump.step(Dir::East));
+        assert_eq!(game, bump);
+        assert_eq!(game.wanderer.focus, 6);
+        assert_eq!(game.log.last(20).filter(|e| e.kind == LogKind::Kill).count(), 2);
+        assert!(game.monsters.iter().any(|m| m.name == "heat-hardy trial sentinel" && m.hp == 3));
+    }
+
+    #[test]
+    fn area_self_damage_can_kill_and_cannot_be_avoided_by_an_empty_cast() {
+        let mut game = Game::inferno_trial(42).unwrap();
+        game.wanderer.hp = 12;
+        assert_eq!(game.unleash(), Step::Attacked);
+        assert_eq!(game.deaths, 1);
+        assert_eq!(game.turn, 1 + DEATH_TURNS);
+        assert_eq!(game.wanderer.hp, game.wanderer.max_hp());
+        assert!(!game.sneaking && game.monsters.is_empty());
+
+        let mut game = Game::inferno_trial(42).unwrap();
+        game.monsters.clear();
+        assert_eq!(game.preview_area().unwrap().targets, 0);
+        assert_eq!(game.unleash(), Step::Attacked);
+        assert_eq!((game.wanderer.focus, game.wanderer.hp), (6, 18));
+        let before = game.clone();
+        game.maneuver = Maneuver::default();
+        assert_eq!(game.unleash(), Step::Blocked);
+        assert_eq!(game.turn, before.turn);
+        assert_eq!(game.wanderer, before.wanderer);
     }
 
     /// A scripted game's exact course, pinned: the same seed and moves must give the same monsters in the

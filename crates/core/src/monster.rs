@@ -2,6 +2,7 @@
 //!
 //! The game loop that moves them lives in [`Game`](crate::Game); this module holds the pieces it uses.
 
+use crate::combat::{MAX_FOCUS, SNEAK_REDUCTION};
 use crate::genome::Genome;
 use crate::hash::Rng;
 use crate::life::SpeciesId;
@@ -33,11 +34,31 @@ pub struct Monster {
     pub hp: i32,
     /// Where it spawned. Territorial monsters guard the ground around it.
     pub home: (i64, i64),
+    /// Whether this individual has located the wanderer. Sneaking does not erase existing tracking.
+    pub alerted: bool,
     /// Speed banked toward its next action, in tenths of an action.
     pub(crate) energy: i32,
 }
 
 impl Monster {
+    /// Heat tolerance becomes up to 75 percent fire resistance in the combat prototype.
+    #[must_use]
+    pub fn fire_resistance(&self) -> u8 {
+        (self.phenotype.heat.clamp(0.0, 1.0) * 75.0).round() as u8
+    }
+
+    /// Whether its senses locate the actor now. Break normal sensing range to lose tracking.
+    #[must_use]
+    pub fn detects(&self, position: (i64, i64), sneaking: bool) -> bool {
+        let distance = (self.position.0 - position.0).abs().max((self.position.1 - position.1).abs());
+        let range = if sneaking && !self.alerted {
+            self.phenotype.sense.saturating_sub(SNEAK_REDUCTION).max(0)
+        } else {
+            self.phenotype.sense
+        };
+        distance <= range
+    }
+
     /// Hit points when unhurt.
     #[must_use]
     pub const fn max_hp(&self) -> i32 {
@@ -52,13 +73,15 @@ pub struct Wanderer {
     pub hp: i32,
     /// Combat numbers. Speed is always [`ACTION_COST`]: one action a turn.
     pub stats: Stats,
+    /// Focus left for special techniques and careful movement; no passive regeneration.
+    pub focus: i32,
 }
 
 impl Wanderer {
     /// A fresh wanderer.
     #[must_use]
     pub const fn new() -> Wanderer {
-        Wanderer { hp: WANDERER_STATS.hp, stats: WANDERER_STATS }
+        Wanderer { hp: WANDERER_STATS.hp, stats: WANDERER_STATS, focus: MAX_FOCUS }
     }
 
     /// Hit points when unhurt.

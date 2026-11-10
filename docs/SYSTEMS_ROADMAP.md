@@ -1,6 +1,7 @@
 # Growing Into Power: design index
 
-**Status:** proposed systems and delivery plan, not implemented gameplay.
+**Status:** proposed long-term systems and delivery plan. A narrow [composition proof](systems/composition-poc.md)
+is now executable; the full progression system is not.
 **Baseline:** 2026-11-09, repository revision `0b82077`.
 
 > The world changes what you do. What you do changes who you become.
@@ -23,11 +24,14 @@ Checked items in the decisions document record agreed direction, not completed f
 2. [Committed decisions and prototype assumptions](systems/decisions.md)
 3. [Current implementation baseline](systems/baseline.md)
 4. [Implementation checkpoints](systems/checkpoints.md)
+5. [Play the composition proof](systems/composition-poc.md)
 
 ## Character and skill systems
 
 | Document | Covers |
 | --- | --- |
+| [Playable composition proof](systems/composition-poc.md) | Dagger/stealth/burst synergy, costly staff fire, controls, and current limits |
+| [Visual skill-web example](systems/skill-web-example.md) | A diagram of practice, weaving, lasting choices, and extraordinary refinement |
 | [Character development](systems/character.md) | Potential, foundations, irreversible commitments, specialization, godlike refinement |
 | [Techniques](systems/techniques.md) | Composable skill structure, legality, acquisition, starter actions |
 | [Physical and magical disciplines](systems/disciplines.md) | Distinct tracks with their own practices, constraints, and connections |
@@ -44,6 +48,7 @@ physical/magical combinations must all have interesting possibilities.
 | Document | Covers |
 | --- | --- |
 | [Equipment and treasure](systems/equipment.md) | Loadouts, relics, gathering, rewards, resource ownership |
+| [Loadout properties](systems/loadout-properties.md) | Mass, noise, and material deciding what each loadout can do; backstab, cleave, magic and armor |
 | [Ecology and enemy power](systems/ecology.md) | Inherited potential, individual development, persistent life, no player-level scaling |
 | [Encounter arcs](systems/encounters.md) | Peon dominance, warning, escalation, exceptional apex foes, persistent site state |
 | [OpenRouter arc drafting](systems/arc-generation.md) | Factual snapshots, structured drafts, validation, budgets, offline fallbacks |
@@ -90,4 +95,5 @@ The original slice remains accurately documented as independent regional evoluti
 stats, bump combat, no save system, and no implemented remote clients. Proposed features are not claimed
 as shipped.
 
-No paid generation, external posting, or gameplay implementation is part of writing these documents.
+The original roadmap was documentation-only. The separate composition proof now implements a small
+interaction kernel; no paid generation or external posting was performed for it.
