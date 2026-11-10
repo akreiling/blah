@@ -2,7 +2,9 @@
 
 [Design index](../SYSTEMS_ROADMAP.md) · [Equipment](equipment.md) · [Techniques](techniques.md) · [Combat exploration](combat-exploration.md)
 
-Proposed design, not implemented. It expands [Equipment changes expression](equipment.md#equipment-changes-expression)
+Proposed design, mostly not implemented. The free basic strike is implemented in the
+[composition proof](composition-poc.md); the property-based loadout model is not.
+It expands [Equipment changes expression](equipment.md#equipment-changes-expression)
 into concrete rules. The numbers and lists here are starting points for a prototype, not settled balance.
 
 ## The idea

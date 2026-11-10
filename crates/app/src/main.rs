@@ -36,6 +36,14 @@ actions!(
         MoveEast,
         /// Step one tile left.
         MoveWest,
+        /// Use the prepared technique north.
+        TechniqueNorth,
+        /// Use the prepared technique south.
+        TechniqueSouth,
+        /// Use the prepared technique east.
+        TechniqueEast,
+        /// Use the prepared technique west.
+        TechniqueWest,
         /// Stay put for a turn.
         Wait,
         /// Open the composition workshop.
@@ -82,15 +90,19 @@ fn keymap() -> Vec<KeyBinding> {
     let mut bindings = Vec::new();
     for key in ["up", "k", "w"] {
         bindings.push(KeyBinding::new(key, MoveNorth, None));
+        bindings.push(KeyBinding::new(&format!("shift-{key}"), TechniqueNorth, None));
     }
     for key in ["down", "j", "s"] {
         bindings.push(KeyBinding::new(key, MoveSouth, None));
+        bindings.push(KeyBinding::new(&format!("shift-{key}"), TechniqueSouth, None));
     }
     for key in ["right", "l", "d"] {
         bindings.push(KeyBinding::new(key, MoveEast, None));
+        bindings.push(KeyBinding::new(&format!("shift-{key}"), TechniqueEast, None));
     }
     for key in ["left", "h", "a"] {
         bindings.push(KeyBinding::new(key, MoveWest, None));
+        bindings.push(KeyBinding::new(&format!("shift-{key}"), TechniqueWest, None));
     }
     for key in [".", "space"] {
         bindings.push(KeyBinding::new(key, Wait, None));

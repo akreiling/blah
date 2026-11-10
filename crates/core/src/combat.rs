@@ -244,6 +244,12 @@ impl Default for Maneuver {
 }
 
 impl Maneuver {
+    /// A free ordinary strike with the same equipped weapon, without aim or payload.
+    #[must_use]
+    pub fn basic_strike(&self) -> Self {
+        Self { name: "Strike".into(), weapon: self.weapon, technique: Technique::default() }
+    }
+
     /// The requested example, expressed using exactly the same grammar as any other combination.
     #[must_use]
     pub fn backstab_burst() -> Self {

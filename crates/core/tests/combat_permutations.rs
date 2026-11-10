@@ -152,7 +152,14 @@ fn play(mut game: Game, style: Style) -> (Outcome, usize) {
                 distance((x + dx, y + dy))
             });
             match approach {
-                Some(direction) => game.step(direction),
+                Some(direction) => {
+                    let (dx, dy) = direction.delta();
+                    if game.monster_at(x + dx, y + dy).is_some() {
+                        game.use_technique(direction)
+                    } else {
+                        game.step(direction)
+                    }
+                }
                 None => game.wait(),
             }
         };

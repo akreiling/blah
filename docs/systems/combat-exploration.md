@@ -2,8 +2,14 @@
 
 [Composition proof](composition-poc.md) · [Validation goals](validation.md)
 
-This investigation characterizes the current executable prototype. It does not approve its balance or
-implement new combat rules. Passing tests can reproduce a bad design just as accurately as a good one.
+This investigation records the technique-only combat baseline. It does not approve its balance.
+Passing tests can reproduce a bad design just as accurately as a good one.
+
+**Implemented since that baseline:** bump attacks are free weapon strikes, while Shift + direction
+explicitly uses the prepared technique. The dagger exhaustion and staff survivor scenarios now check
+this fix. The permutation and loadout surveys deliberately retain technique-only policies to isolate
+their costs; their exhaustion outcomes do not mean the player lacks an affordable attack.
+See [current controls and regression coverage](composition-poc.md).
 
 ## Reproduce
 
@@ -61,13 +67,13 @@ exercise multiple targets.
 - Bare weapons rarely exhausted (only opening aim costs Focus) and account for most kills and all deaths.
   A bare dagger usually loses the attrition race.
 
-Against one durable target, magic in this prototype is a finite Focus pool with no way to sustain a
-fight. That holds for every weapon, element, trigger, and style tried.
+Against one durable target, magic alone is a finite Focus pool. The surveys do not switch to free
+strikes after exhausting it.
 
 ## Property tests
 
 [`combat_properties.rs`](../../crates/core/tests/combat_properties.rs) uses proptest to generate a random
-seed, any of the 356 legal structures, and random player action sequences (steps, waits, sneak, recover,
+seed, any of the 356 legal structures, and random player action sequences (steps, techniques, waits, sneak, recover,
 discharge, attempted re-preparation). These must always hold, and do:
 
 - Focus stays within 0–24. Blocked actions change nothing but the log. Every other action passes time.
@@ -75,10 +81,10 @@ discharge, attempted re-preparation). These must always hold, and do:
   their previews.
 - Same seed, loadout, and inputs give the same game. Renaming a maneuver changes no outcome.
 
-Running out of options mid-fight is not treated as a bug. Walking away and dying are legitimate
-ways out; death returns you home with full Health and Focus after 1,000 turns. No property requires an
-affordable attack. For example, the cheapest area spell (5 Focus) leaves 4 Focus after four
-discharges beside a living sentinel. That is a fight you lost, not a broken game.
+Running out of Focus blocks costly techniques, not weapon strikes. For example, the cheapest area spell
+(5 Focus) leaves 4 Focus after four discharges beside a living sentinel; the player can still strike,
+retreat, or die. Current code returns the player home with full Health and Focus after 1,000 turns;
+the [approved death rule](actions.md#death-and-retreat) is not implemented yet.
 
 ## What longer journeys already show
 
@@ -129,8 +135,9 @@ trajectory groups:
 - Why admit opening aim on touch or a nonprecise weapon if it only adds Focus cost?
 - Does a successful cheap Fire touch communicate that integer rounding can reduce its entire effect
   to zero against a heat-hardy target?
-- Can the player finish a fight without replacing their entire prepared composition? At present a
-  costly payload is mandatory on every bump, including after tracking removes its opening benefit.
+- Can the player finish a fight without replacing their entire prepared composition? Free bump strikes
+  now permit this, including after tracking removes the technique's opening benefit. The staff survivor
+  regression exercises it; broader mixed strike/technique tactics remain unmeasured.
 - Is recovery a tactical decision, or a long trip back to an exact tile that can still refuse recovery?
 
 Force and Fire really do have different counters: armor reduces surface Force, heat tolerance reduces

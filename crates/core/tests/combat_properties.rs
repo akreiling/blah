@@ -1,7 +1,6 @@
 //! Property tests over random legal compositions, seeds, and player action sequences.
 //!
-//! These are rule invariants. Running out of options in a fight is allowed: retreat and death are
-//! legitimate ways out, so no property requires an affordable attack.
+//! These are rule invariants. Techniques can run out of Focus, but ordinary weapon strikes remain free.
 
 use blah_core::{
     Aim, Burst, Delivery, Dir, Element, Game, MAX_FOCUS, Maneuver, Monster, Shape, Step, Technique, Trigger, Wanderer,
@@ -40,6 +39,7 @@ fn legal_maneuvers() -> Vec<Maneuver> {
 #[derive(Clone, Copy, Debug)]
 enum Action {
     Step(Dir),
+    Technique(Dir),
     Wait,
     Sneak,
     Recover,
@@ -50,6 +50,7 @@ enum Action {
 fn action() -> impl Strategy<Value = Action> {
     prop_oneof![
         4 => prop::sample::select(Dir::ALL.to_vec()).prop_map(Action::Step),
+        3 => prop::sample::select(Dir::ALL.to_vec()).prop_map(Action::Technique),
         1 => Just(Action::Wait),
         1 => Just(Action::Sneak),
         1 => Just(Action::Recover),
@@ -72,6 +73,7 @@ fn state(g: &Game) -> State {
 fn apply(g: &mut Game, a: Action) -> Step {
     match a {
         Action::Step(d) => g.step(d),
+        Action::Technique(d) => g.use_technique(d),
         Action::Wait => g.wait(),
         Action::Sneak => g.toggle_sneak(),
         Action::Recover => g.recover_focus(),
@@ -101,22 +103,21 @@ proptest! {
             let before = state(&g);
             let (deaths, focus) = (g.deaths(), g.wanderer().focus);
             let attack_preview = match a {
-                Action::Step(d) if g.maneuver().technique.delivery != Delivery::Ground => g.preview_attack(d).ok(),
+                Action::Step(d) => g.preview_strike(d).ok(),
+                Action::Technique(d) if g.maneuver().technique.delivery != Delivery::Ground => g.preview_attack(d).ok(),
                 _ => None,
             };
-            let ground_bump = matches!(a, Action::Step(d) if g.maneuver().technique.delivery == Delivery::Ground
-                && g.preview_attack(d).is_err() && {
+            let ground_technique = matches!(a, Action::Technique(d) if g.maneuver().technique.delivery == Delivery::Ground
+                && {
                     let (x, y) = g.position();
                     let (dx, dy) = d.delta();
                     g.monster_at(x + dx, y + dy).is_some()
                 });
-            let area_preview = if matches!(a, Action::Unleash) || ground_bump { g.preview_area().ok() } else { None };
+            let area_preview = if matches!(a, Action::Unleash) || ground_technique { g.preview_area().ok() } else { None };
             if let Action::Step(d) = a {
                 let can = g.can_step(d);
                 let result = apply(&mut g, a);
-                if !ground_bump {
-                    prop_assert_eq!(can, result != Step::Blocked, "can_step disagrees with step");
-                }
+                prop_assert_eq!(can, result != Step::Blocked, "can_step disagrees with step");
                 check(&g, &before, result, deaths, focus, attack_preview, area_preview)?;
             } else {
                 let result = apply(&mut g, a);
@@ -182,9 +183,12 @@ fn check(
     let died = g.deaths() != deaths;
     if let (Some(p), Step::Attacked, false) = (attack, result, died)
         && let Some(r) = g.last_attack()
-        && r.hit
     {
-        prop_assert!((p.min_hit..=p.max_hit).contains(&r.total()), "{:?} outside {:?}", r, p);
+        if r.hit {
+            prop_assert!((p.min_hit..=p.max_hit).contains(&r.total()), "{:?} outside {:?}", r, p);
+        } else {
+            prop_assert_eq!(r.total(), 0);
+        }
         prop_assert_eq!(focus - f, p.focus);
     }
     if let (Some(p), Step::Attacked, false) = (area, result, died) {

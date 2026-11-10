@@ -15,10 +15,10 @@ mise exec -- just run --combat-demo
 mise exec -- just run --inferno-demo
 ```
 
-- **Combat demo:** start beside a durable sentinel while sneaking. Bump east to attempt the opening strike.
+- **Combat demo:** start beside a durable sentinel while sneaking. Press **Shift + east** to attempt the opening strike.
   Compare the next attack after it has located you.
 - **Inferno demo:** press **F** to strike the staff. Three nearby creatures have different heat tolerances.
-  The fire hits all of them, and you. Bumping a creature also executes the prepared ground discharge.
+  The fire hits all of them, and you. Bumping a creature uses a free staff strike, not the fire.
 - **Normal world:** `mise exec -- just run`. Open the workshop with **M** while safely away from creatures.
   Both proofs use the same `Game` action methods as normal play, not a separate combat simulator.
 - **Without a window:** `mise exec -- just composition-demo` prints both trials' structures, previews,
@@ -30,6 +30,12 @@ apex encounters or proof that the progression curve is balanced.
 Workshop keys: **1** instrument, **2** delivery, **3** aim, **4** payload on/off, **5** element,
 **6** release, **7** shape, **+ / −** power. **0** loads the dagger example and **9** the staff example
 into the draft only. **Enter** prepares; **Esc** discards. Movement and combat remain paused while editing.
+
+Combat keys: arrows, WASD, or hjkl move and **bump for a free weapon strike**. **Shift + direction**
+uses the prepared technique against an adjacent target. **F** discharges a ground-area technique even
+without an adjacent target. A basic strike is available at any Focus total, with any prepared delivery.
+It uses the equipped weapon, never the prepared aim or payload. It still takes a turn, can miss,
+reveals the player, and permits retaliation. It neither changes the preparation nor swaps equipment.
 
 ## Composition, not recipe lookup
 
@@ -119,7 +125,10 @@ or delayed telegraphs.** Terrain does not block the wave. Do not treat this as a
 The automated checks exercise:
 
 - Components alone, composed, detected, blocked, and missed.
-- Unlisted equipment/composition combinations through the real `Game::step` entry point.
+- Unlisted equipment/composition combinations through the real `Game::use_technique` entry point.
+- Free weapon strikes through `Game::step`, across weapons, prepared deliveries, and Focus totals
+  including zero. Their previews come from `Game::preview_strike`; `Game::preview_attack` previews
+  the prepared technique.
 - Cosmetic names producing identical damage and resource outcomes.
 - Preview versus resolution, atomic rejection, and turn accounting.
 - Full radius-three occupancy: **48 creature tiles plus the caster**, excluding an outside tile.
@@ -134,16 +143,17 @@ four player styles, controlled comparisons, retreat, refitting, and return-to-ho
 [`combat_scenarios.rs`](../../crates/core/tests/combat_scenarios.rs) exercises the public `Game` API without
 injecting resources, enemy stats, positions, or random outcomes:
 
-- Dagger, seeds 0, 7, and 42: three attacks leave a living sentinel and only 3 Focus. Further attacks,
-  recovery even at home, and switching to a free basic strike are blocked. Waiting does not restore Focus.
+- Dagger, seeds 0, 7, and 42: three techniques leave a living sentinel and only 3 Focus. Further techniques
+  are blocked, but bumping still strikes without spending Focus or replacing the prepared maneuver.
+  Recovery even at home and changing the preparation remain blocked by the nearby sentinel.
 - Dagger, seed 42: sneaking again spends Focus and a turn but does not restore surprise against the
   tracking sentinel.
-- Staff, seed 42: the fire leaves a 3-Health survivor and 6 Focus. Neither another discharge nor bumping
-  the survivor is affordable; recovery and preparation are also blocked.
+- Staff, seed 42: the fire leaves a 3-Health survivor and 6 Focus. Another discharge is blocked, but
+  free staff strikes finish the survivor. Recovery and preparation are still blocked while it is nearby.
 
-These passing characterization tests **reproduce problems**, not certify an acceptable play loop.
-They do not establish that retreat is impossible or diagnose keyboard focus. No combat rules were
-changed to make these tests pass.
+The dagger and staff scenarios now guard the free-strike fix. The other characterization tests still
+reproduce limitations, not certify an acceptable play loop. They do not establish that retreat is
+impossible or diagnose keyboard focus.
 
 Print each scenario's action, state, and new log messages in order:
 

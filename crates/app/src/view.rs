@@ -17,9 +17,10 @@ use blah_core::{
 use crate::sprites::{Key, SPRITE_PX, SpriteCache};
 use crate::workshop::{Edit, Workshop};
 use crate::{
-    CancelWorkshop, MoveEast, MoveNorth, MoveSouth, MoveWest, OpenWorkshop, PrepareWorkshop, RecoverFocus, ToggleSneak,
-    Unleash, Wait, WorkshopAim, WorkshopDaggerExample, WorkshopDelivery, WorkshopElement, WorkshopPayload,
-    WorkshopPowerDown, WorkshopPowerUp, WorkshopShape, WorkshopStaffExample, WorkshopTrigger, WorkshopWeapon,
+    CancelWorkshop, MoveEast, MoveNorth, MoveSouth, MoveWest, OpenWorkshop, PrepareWorkshop, RecoverFocus,
+    TechniqueEast, TechniqueNorth, TechniqueSouth, TechniqueWest, ToggleSneak, Unleash, Wait, WorkshopAim,
+    WorkshopDaggerExample, WorkshopDelivery, WorkshopElement, WorkshopPayload, WorkshopPowerDown, WorkshopPowerUp,
+    WorkshopShape, WorkshopStaffExample, WorkshopTrigger, WorkshopWeapon,
 };
 
 /// Tiles along each side of the viewport. Odd, so the wanderer sits on the center tile.
@@ -187,6 +188,10 @@ impl Render for GameView {
             .on_action(cx.listener(|this, _: &MoveSouth, _, cx| this.act(|g| _ = g.step(Dir::South), cx)))
             .on_action(cx.listener(|this, _: &MoveEast, _, cx| this.act(|g| _ = g.step(Dir::East), cx)))
             .on_action(cx.listener(|this, _: &MoveWest, _, cx| this.act(|g| _ = g.step(Dir::West), cx)))
+            .on_action(cx.listener(|this, _: &TechniqueNorth, _, cx| this.act(|g| _ = g.use_technique(Dir::North), cx)))
+            .on_action(cx.listener(|this, _: &TechniqueSouth, _, cx| this.act(|g| _ = g.use_technique(Dir::South), cx)))
+            .on_action(cx.listener(|this, _: &TechniqueEast, _, cx| this.act(|g| _ = g.use_technique(Dir::East), cx)))
+            .on_action(cx.listener(|this, _: &TechniqueWest, _, cx| this.act(|g| _ = g.use_technique(Dir::West), cx)))
             .on_action(cx.listener(|this, _: &Wait, _, cx| this.act(|g| _ = g.wait(), cx)))
             .on_action(cx.listener(|this, _: &ToggleSneak, _, cx| this.act(|g| _ = g.toggle_sneak(), cx)))
             .on_action(cx.listener(|this, _: &RecoverFocus, _, cx| this.act(|g| _ = g.recover_focus(), cx)))
@@ -255,6 +260,8 @@ fn map(game: &Game, sprites: &mut SpriteCache, hurt: bool) -> Div {
                     wanderer_cell(&tile, hurt)
                 } else if let Some(monster) = game.monster_at(x, y) {
                     monster_cell(&tile, (x, y), monster, sprites)
+                } else if (x, y) == game.home() {
+                    home_cell(&tile, (x, y))
                 } else {
                     terrain_cell(&tile, (x, y))
                 }
@@ -271,6 +278,29 @@ fn terrain_cell(tile: &Tile, at: (i64, i64)) -> Div {
     tile_base(biome.color, at)
         .text_color(color(glyph_shade(biome.color)))
         .child(SharedString::from(biome.glyph.to_string()))
+}
+
+/// Home, where Focus recovers and death returns you: a bright marker on its own ground.
+fn home_cell(tile: &Tile, at: (i64, i64)) -> Div {
+    tile_base(tile.biome.biome().color, at)
+        .border_2()
+        .border_color(rgb(HEADING))
+        .text_color(rgb(HEADING))
+        .font_weight(FontWeight::BOLD)
+        .child("H")
+}
+
+/// Which way home is and how many steps away, e.g. "12 N, 3 W", or "here".
+fn home_hint((x, y): (i64, i64), (hx, hy): (i64, i64)) -> String {
+    let (dx, dy) = (hx - x, hy - y);
+    let mut parts = Vec::new();
+    if dy != 0 {
+        parts.push(format!("{} {}", dy.unsigned_abs(), if dy < 0 { "N" } else { "S" }));
+    }
+    if dx != 0 {
+        parts.push(format!("{} {}", dx.unsigned_abs(), if dx < 0 { "W" } else { "E" }));
+    }
+    if parts.is_empty() { "here (R recovers)".into() } else { parts.join(", ") }
 }
 
 /// The wanderer's tile: an `@` on darkened ground, or on red the turn it was hurt.
@@ -354,7 +384,8 @@ fn panel(game: &Game, sprites: &mut SpriteCache, workshop: Option<&Workshop>) ->
                 .text_color(rgb(FAINT))
                 .text_size(px(SMALL_SIZE))
                 .line_height(px(SMALL_LINE))
-                .child("Arrows / hjkl / wasd move · bump attacks")
+                .child("Arrows / hjkl / wasd · bump = free strike")
+                .child("Shift + direction = prepared technique")
                 .child("M edit · C sneak · R recover · F unleash")
                 .child("Space / . wait · Q quit"),
         )
@@ -377,8 +408,18 @@ fn combat_status(game: &Game) -> Div {
 }
 
 fn combat_preview(game: &Game) -> Div {
+    let mut previews = div().flex().flex_col();
+    for direction in Dir::ALL {
+        if let Ok(preview) = game.preview_strike(direction) {
+            previews = previews.child(small_line(format!(
+                "Bump {direction:?}: {}–{} on hit · 0 Focus",
+                preview.min_hit, preview.max_hit
+            )));
+            break;
+        }
+    }
     if game.maneuver().technique.delivery == Delivery::Ground {
-        return match game.preview_area() {
+        return previews.child(match game.preview_area() {
             Ok(preview) => div()
                 .flex()
                 .flex_col()
@@ -391,7 +432,7 @@ fn combat_preview(game: &Game) -> Div {
                     HP,
                 )),
             Err(reason) => small_line(format!("Area preview: {reason}")),
-        };
+        });
     }
 
     for direction in Dir::ALL {
@@ -410,14 +451,12 @@ fn combat_preview(game: &Game) -> Div {
                 notes.push("penetration");
             }
             let notes = if notes.is_empty() { String::new() } else { format!(" · {}", notes.join(", ")) };
-            return div()
-                .flex()
-                .flex_col()
-                .child(small_line(format!("{direction}: {}–{} on hit; misses do 0", preview.min_hit, preview.max_hit)))
+            return previews
+                .child(small_line(format!("Shift+{direction}: {}–{} on hit; miss 0", preview.min_hit, preview.max_hit)))
                 .child(small_line(format!("{} Focus{notes}", preview.focus)));
         }
     }
-    small_line("Adjacent preview: no target")
+    previews.child(small_line("Adjacent technique: no target"))
 }
 
 fn workshop_panel(workshop: &Workshop, game: &Game) -> Div {
@@ -558,6 +597,7 @@ fn place(game: &Game) -> Div {
                 .child(div().flex_grow())
                 .child(div().text_color(rgb(FAINT)).child(format!("{x}, {y}"))),
         )
+        .child(pair("Home", home_hint(game.position(), game.home())))
 }
 
 /// The species in view, nearest first, each with how it differs from its kin in a region visited before.
@@ -757,7 +797,10 @@ mod tests {
         let workshop = Workshop::new(game.maneuver().clone());
         let before = game.clone();
         let mut mark = 999;
-        let actions: [fn(&mut Game); 5] = [
+        let actions: [fn(&mut Game); 6] = [
+            |g| {
+                g.use_technique(Dir::East);
+            },
             |g| {
                 g.step(Dir::East);
             },
@@ -784,6 +827,38 @@ mod tests {
         }));
         assert_eq!(game.turn(), before.turn() + 1);
         assert_eq!(mark, before.log().total());
+    }
+
+    #[test]
+    fn play_actions_can_choose_a_free_strike_then_the_prepared_technique() {
+        let mut game = Game::composition_trial(42, blah_core::Maneuver::backstab_burst()).unwrap();
+        let prepared = game.maneuver().clone();
+        let mut mark = 0;
+        let turn = game.turn();
+        assert!(apply_play_action(&mut game, &mut mark, None, |g| {
+            assert_eq!(g.step(Dir::East), blah_core::Step::Attacked);
+        }));
+        assert_eq!(game.turn(), turn + 1);
+        assert_eq!(game.wanderer().focus, MAX_FOCUS);
+        assert_eq!(game.maneuver(), &prepared);
+        assert_eq!(game.last_attack().unwrap().burst, 0);
+        assert!(!game.sneaking());
+        let previous_log = game.log().total();
+        assert!(apply_play_action(&mut game, &mut mark, None, |g| {
+            assert_eq!(g.use_technique(Dir::East), blah_core::Step::Attacked);
+        }));
+        assert_eq!(mark, previous_log);
+        assert_eq!(game.turn(), turn + 2);
+        assert_eq!(game.wanderer().focus, MAX_FOCUS - prepared.technique.focus_cost());
+        assert_eq!(game.maneuver(), &prepared);
+    }
+
+    #[test]
+    fn home_hint_names_direction_and_steps() {
+        assert_eq!(home_hint((0, 0), (0, 0)), "here (R recovers)");
+        assert_eq!(home_hint((5, 5), (2, -7)), "12 N, 3 W");
+        assert_eq!(home_hint((0, 0), (4, 1)), "1 S, 4 E");
+        assert_eq!(home_hint((0, 0), (0, 9)), "9 S");
     }
 
     #[test]

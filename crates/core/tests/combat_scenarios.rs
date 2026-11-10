@@ -1,4 +1,4 @@
-//! Player-action reproductions of the current demo dead ends, not assertions that those rules are fun.
+//! Player-action regressions for the demo dead ends, plus bounded encounter surveys.
 //! Only public Game entry points are used: no injected Focus, enemy stats, positions, or RNG results.
 
 use blah_core::{Aim, Dir, Element, Game, LogKind, MAX_FOCUS, Maneuver, Step, Technique, Trigger, Weapon};
@@ -39,7 +39,7 @@ fn blocked(game: &mut Game, label: &str, action: impl FnOnce(&mut Game) -> Step)
 }
 
 #[test]
-fn dagger_demo_runs_out_before_the_sentinel_dies_and_cannot_change_approach() {
+fn exhausted_dagger_can_strike_without_replacing_its_prepared_technique() {
     for seed in [0, 7, 42] {
         println!("\nDAGGER seed {seed}");
         let mut game = Game::composition_trial(seed, Maneuver::backstab_burst()).unwrap();
@@ -48,24 +48,32 @@ fn dagger_demo_runs_out_before_the_sentinel_dies_and_cannot_change_approach() {
         assert!(game.preview_attack(Dir::East).unwrap().opening);
 
         for attempt in 1..=3 {
-            assert_eq!(act(&mut game, "bump east", |g| g.step(Dir::East)), Step::Attacked);
+            assert_eq!(act(&mut game, "technique east", |g| g.use_technique(Dir::East)), Step::Attacked);
             assert_eq!(game.wanderer().focus, MAX_FOCUS - 7 * attempt);
             assert!(game.monsters().iter().any(|m| m.id == sentinel && m.hp > 0));
             assert!(!game.preview_attack(Dir::East).unwrap().opening);
         }
 
-        assert!(!game.can_step(Dir::East));
-        blocked(&mut game, "fourth bump", |g| g.step(Dir::East));
-        blocked(&mut game, "repeat blocked bump", |g| g.step(Dir::East));
+        assert!(game.can_step(Dir::East));
+        blocked(&mut game, "fourth technique", |g| g.use_technique(Dir::East));
+        blocked(&mut game, "repeat blocked technique", |g| g.use_technique(Dir::East));
         assert_eq!(game.position(), game.home(), "the demo already starts at the recovery location");
         blocked(&mut game, "recover at home with sentinel alive", Game::recover_focus);
 
         let before = game.clone();
         let reason = game.prepare(Maneuver::default()).unwrap_err();
-        println!("prepare a free basic strike: {reason}");
-        assert_eq!(game, before, "nearby sentinel prevents switching to a free attack");
+        println!("replace the prepared maneuver: {reason}");
+        assert_eq!(game, before, "preparation is still blocked, but a basic strike does not require it");
 
         let focus = game.wanderer().focus;
+        let turn = game.turn();
+        assert_eq!(act(&mut game, "free bump east", |g| g.step(Dir::East)), Step::Attacked);
+        assert_eq!(game.turn(), turn + 1);
+        assert_eq!(game.wanderer().focus, focus);
+        let result = game.last_attack().unwrap();
+        assert_eq!(result.burst, 0);
+        assert!(!result.opening && !result.burst_released);
+        assert_eq!(game.maneuver(), &Maneuver::backstab_burst());
         assert_eq!(act(&mut game, "wait instead", Game::wait), Step::Waited);
         assert_eq!(game.wanderer().focus, focus, "waiting does not repair the exhausted combat loop");
         assert_eq!(game.deaths(), 0);
@@ -75,7 +83,7 @@ fn dagger_demo_runs_out_before_the_sentinel_dies_and_cannot_change_approach() {
 #[test]
 fn sneaking_again_after_the_opening_spends_focus_without_restoring_surprise() {
     let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
-    assert_eq!(act(&mut game, "opening strike", |g| g.step(Dir::East)), Step::Attacked);
+    assert_eq!(act(&mut game, "opening strike", |g| g.use_technique(Dir::East)), Step::Attacked);
     assert!(game.last_attack().unwrap().amplified);
     let focus = game.wanderer().focus;
     assert_eq!(act(&mut game, "try sneaking again", Game::toggle_sneak), Step::Waited);
@@ -83,7 +91,7 @@ fn sneaking_again_after_the_opening_spends_focus_without_restoring_surprise() {
     assert_eq!(game.wanderer().focus, focus - 1);
     assert!(!game.preview_attack(Dir::East).unwrap().opening);
 
-    assert_eq!(act(&mut game, "attack while tracked", |g| g.step(Dir::East)), Step::Attacked);
+    assert_eq!(act(&mut game, "attack while tracked", |g| g.use_technique(Dir::East)), Step::Attacked);
     assert!(!game.last_attack().unwrap().amplified);
     assert!(!game.sneaking());
     assert_eq!(game.wanderer().focus, focus - 1 - 7);
@@ -91,7 +99,7 @@ fn sneaking_again_after_the_opening_spends_focus_without_restoring_surprise() {
 }
 
 #[test]
-fn staff_demo_leaves_a_survivor_but_neither_cast_nor_bump_can_finish_it() {
+fn staff_demo_survivor_can_be_finished_with_free_weapon_strikes() {
     let mut game = Game::inferno_trial(42).unwrap();
     let survivor = game.monsters().iter().find(|m| m.name == "heat-hardy trial sentinel").unwrap().id;
     assert_eq!(act(&mut game, "strike staff", Game::unleash), Step::Attacked);
@@ -128,9 +136,18 @@ fn staff_demo_leaves_a_survivor_but_neither_cast_nor_bump_can_finish_it() {
     } else {
         Dir::North
     };
-    assert!(!game.can_step(direction));
-    blocked(&mut game, "bump survivor with staff", |g| g.step(direction));
-    assert_eq!(game.monsters().iter().find(|m| m.id == survivor).unwrap().hp, 3);
+    assert!(game.can_step(direction));
+    for _ in 0..16 {
+        if !game.monsters().iter().any(|m| m.id == survivor) {
+            break;
+        }
+        assert_eq!(act(&mut game, "bump survivor with staff", |g| g.step(direction)), Step::Attacked);
+        assert_eq!(game.wanderer().focus, 6);
+        assert_eq!(game.last_attack().unwrap().burst, 0);
+    }
+    assert!(!game.monsters().iter().any(|m| m.id == survivor));
+    assert!(game.log().entries().any(|e| e.kind == LogKind::Kill && e.text.contains("heat-hardy trial sentinel")));
+    assert_eq!(game.maneuver(), &Maneuver::staff_inferno());
     assert_eq!(game.wanderer().focus, 6);
     assert_eq!(game.deaths(), 0);
 }
@@ -183,7 +200,7 @@ fn survey_committed_loadouts_against_the_same_sentinel() {
                 if attempts == 64 {
                     break 3;
                 }
-                match game.step(Dir::East) {
+                match game.use_technique(Dir::East) {
                     Step::Attacked => attempts += 1,
                     Step::Blocked => break 1,
                     other => panic!("sentinel did not stay adjacent: {other:?}, seed {seed}"),
@@ -229,7 +246,7 @@ fn survey_retreat_after_exhaustion_in_both_demos() {
                     game.unleash();
                 } else {
                     for _ in 0..3 {
-                        game.step(Dir::East);
+                        game.use_technique(Dir::East);
                     }
                 }
                 let sentinel = game.monsters().iter().find(|m| m.name.contains("trial sentinel")).unwrap().id;
@@ -331,7 +348,7 @@ fn moves_from_home(game: &Game) -> i64 {
 fn exhausted_dagger_can_walk_but_a_same_speed_pursuer_stays_close() {
     let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
     for _ in 0..3 {
-        game.step(Dir::East);
+        game.use_technique(Dir::East);
     }
     let sentinel = game.monsters()[0].id;
     let hp = game.wanderer().hp;
@@ -351,7 +368,7 @@ fn exhausted_dagger_can_walk_but_a_same_speed_pursuer_stays_close() {
 fn waiting_for_death_restores_the_resources_that_waiting_alive_does_not() {
     let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
     for _ in 0..3 {
-        game.step(Dir::East);
+        game.use_technique(Dir::East);
     }
     let exhausted_turn = game.turn();
     for _ in 0..64 {

@@ -346,7 +346,7 @@ impl Game {
     }
 
     /// A clearly labeled developer trial: the normal world and action loop, with a known loadout and a
-    /// durable adjacent sentinel. It starts sneaking so the first eastward bump can test the opening.
+    /// durable adjacent sentinel. It starts sneaking so the first eastward technique can test the opening.
     ///
     /// This does not simulate earned mastery or a naturally generated encounter.
     pub fn composition_trial(seed: u64, maneuver: Maneuver) -> Result<Game, &'static str> {
@@ -388,7 +388,7 @@ impl Game {
         });
         game.next_monster += 1;
         game.sneaking = true;
-        game.log.push(LogKind::Region, "COMPOSITION TRIAL: bump east. Then compare an attack after you are located.");
+        game.log.push(LogKind::Region, "COMPOSITION TRIAL: Shift+east uses the technique; bump east strikes for free.");
         Ok(game)
     }
 
@@ -518,11 +518,36 @@ impl Game {
         Ok(())
     }
 
-    /// Preview an adjacent target without drawing randomness, spending resources, or advancing time.
+    /// Preview the prepared technique against an adjacent target, without advancing time.
     pub fn preview_attack(&self, dir: Dir) -> Result<AttackPreview, &'static str> {
         let (x, y) = self.ahead(dir);
         let target = self.monster_at(x, y).ok_or("No adjacent target in that direction.")?;
         self.maneuver.preview(self.attack_context(target))
+    }
+
+    /// Preview the free weapon strike used by a bump, regardless of the prepared delivery.
+    pub fn preview_strike(&self, dir: Dir) -> Result<AttackPreview, &'static str> {
+        let (x, y) = self.ahead(dir);
+        let target = self.monster_at(x, y).ok_or("No adjacent target in that direction.")?;
+        self.maneuver.basic_strike().preview(self.attack_context(target))
+    }
+
+    /// Deliberately use the prepared technique on an adjacent creature. A ground technique discharges
+    /// its whole area, just like [`Game::unleash`]. Rejection spends neither time nor resources.
+    pub fn use_technique(&mut self, dir: Dir) -> Step {
+        let (x, y) = self.ahead(dir);
+        let Some(target) = self.monsters.iter().position(|m| m.position == (x, y)) else {
+            self.log.push(LogKind::Blocked, "No adjacent target in that direction.");
+            return Step::Blocked;
+        };
+        if self.maneuver.technique.delivery == Delivery::Ground {
+            return self.unleash();
+        }
+        if self.wanderer.focus < self.maneuver.technique.focus_cost() {
+            self.log.push(LogKind::Blocked, "Not enough Focus for the technique. Bump to strike for free.");
+            return Step::Blocked;
+        }
+        self.attack(target, self.maneuver.clone())
     }
 
     fn attack_context(&self, target: &Monster) -> AttackContext {
@@ -724,18 +749,16 @@ impl Game {
         })
     }
 
-    /// Tries to step one tile in `dir`. A monster there is attacked instead. Otherwise the wanderer moves if
+    /// Tries to step one tile in `dir`. A monster there takes a free basic weapon strike instead.
+    /// The prepared technique is unchanged and never discharged by a bump. Otherwise the wanderer moves if
     /// the target is passable, naming the region if that changes, or stays put and logs what is in the way,
     /// unless that is already the last line, so pushing against a wall doesn't flood the log. Attacking or
     /// moving passes a turn, and the monsters act.
     pub fn step(&mut self, dir: Dir) -> Step {
         let (x, y) = self.ahead(dir);
-        if self.monster_at(x, y).is_some() && self.maneuver.technique.delivery == Delivery::Ground {
-            return self.unleash();
-        }
         if !self.can_step(dir) {
             // Biome names are sentence case ("Deep water"); mid-sentence they are common nouns.
-            let line = if self.monster_at(x, y).is_some() || self.sneaking && self.wanderer.focus < 1 {
+            let line = if self.sneaking && self.wanderer.focus < 1 {
                 "Not enough Focus. Change your approach or recover at home.".to_owned()
             } else {
                 format!("The way is blocked by {}.", self.world.tile(x, y).biome.biome().name.to_lowercase())
@@ -745,13 +768,10 @@ impl Game {
             }
             return Step::Blocked;
         }
-        self.turn += 1;
         if let Some(target) = self.monsters.iter().position(|m| m.position == (x, y)) {
-            let mut rng = Rng::keyed(self.world.seed(), b"wanderer", &[self.turn]);
-            self.wanderer_attacks(target, &mut rng);
-            self.end_turn();
-            return Step::Attacked;
+            return self.attack(target, self.maneuver.basic_strike());
         }
+        self.turn += 1;
         self.position = (x, y);
         if self.sneaking {
             self.wanderer.focus -= 1;
@@ -767,7 +787,7 @@ impl Game {
     pub fn can_step(&self, dir: Dir) -> bool {
         let (x, y) = self.ahead(dir);
         if self.monster_at(x, y).is_some() {
-            self.maneuver.technique.focus_cost() <= self.wanderer.focus
+            true
         } else {
             self.world.tile(x, y).biome.biome().passable && (!self.sneaking || self.wanderer.focus >= 1)
         }
@@ -903,11 +923,19 @@ impl Game {
         }
     }
 
-    /// The wanderer attacks monster `index`.
-    fn wanderer_attacks(&mut self, index: usize, rng: &mut Rng) {
+    fn attack(&mut self, index: usize, maneuver: Maneuver) -> Step {
+        self.turn += 1;
+        let mut rng = Rng::keyed(self.world.seed(), b"wanderer", &[self.turn]);
+        self.wanderer_attacks(index, &maneuver, &mut rng);
+        self.end_turn();
+        Step::Attacked
+    }
+
+    /// The wanderer attacks monster `index` using the selected action, not necessarily the preparation.
+    fn wanderer_attacks(&mut self, index: usize, maneuver: &Maneuver, rng: &mut Rng) {
         let context = self.attack_context(&self.monsters[index]);
-        let result = self.maneuver.resolve(context, rng).expect("prepared maneuvers are validated");
-        self.wanderer.focus -= self.maneuver.technique.focus_cost();
+        let result = maneuver.resolve(context, rng).expect("attack maneuvers are validated");
+        self.wanderer.focus -= maneuver.technique.focus_cost();
         self.last_attack = Some(result);
         // Even a miss reveals the attempt. No repeated surprise by toggling sneak.
         self.sneaking = false;
@@ -918,17 +946,17 @@ impl Game {
         } else {
             monster.hp = monster.hp.saturating_sub(result.total());
             self.log.push(LogKind::Attack, format!("You hit the {} for {}.", monster.name, result.total()));
-            if self.maneuver.technique.burst.is_some() || result.opening {
+            if maneuver.technique.burst.is_some() || result.opening {
                 let detail = if result.amplified {
                     "unguarded placement amplifies the burst"
-                } else if self.maneuver.technique.burst.is_some() && !result.burst_released {
+                } else if maneuver.technique.burst.is_some() && !result.burst_released {
                     "no penetration; the burst does not release"
                 } else {
                     "no amplified placement"
                 };
                 self.log.push(
                     LogKind::Attack,
-                    format!("{}: {} physical + {} burst; {detail}.", self.maneuver.name, result.physical, result.burst),
+                    format!("{}: {} physical + {} burst; {detail}.", maneuver.name, result.physical, result.burst),
                 );
             }
             if monster.hp <= 0 {
@@ -1779,8 +1807,8 @@ mod tests {
             assert_eq!((preview.min_hit, preview.max_hit, preview.focus, preview.opening), (15, 17, 7, true));
             let mut guarded = game.clone();
             guarded.sneaking = false;
-            assert_eq!(game.step(Dir::East), Step::Attacked);
-            assert_eq!(guarded.step(Dir::East), Step::Attacked);
+            assert_eq!(game.use_technique(Dir::East), Step::Attacked);
+            assert_eq!(guarded.use_technique(Dir::East), Step::Attacked);
             let result = game.last_attack().unwrap();
             assert_eq!(game.wanderer.focus, MAX_FOCUS - 7);
             assert!(!game.sneaking);
@@ -1802,6 +1830,67 @@ mod tests {
     }
 
     #[test]
+    fn basic_strikes_use_the_equipped_weapon_without_focus_aim_or_payload() {
+        let mut hits = 0;
+        let mut misses = 0;
+        for (weapon, minimum, maximum) in [
+            (crate::Weapon::Dagger, 1, 2),
+            (crate::Weapon::Spear, 2, 4),
+            (crate::Weapon::Club, 3, 5),
+            (crate::Weapon::Staff, 1, 3),
+        ] {
+            for delivery in [Delivery::Weapon, Delivery::Touch, Delivery::Ground] {
+                let mut maneuver = if delivery == Delivery::Ground {
+                    Maneuver::staff_inferno()
+                } else {
+                    let mut m = Maneuver::backstab_burst();
+                    m.technique.delivery = delivery;
+                    m.technique.burst.as_mut().unwrap().trigger = crate::Trigger::Contact;
+                    m
+                };
+                maneuver.weapon = weapon;
+                if maneuver.validate().is_err() {
+                    continue;
+                }
+                for seed in 0..16 {
+                    let fixture = Game::composition_trial(seed, maneuver.clone()).unwrap();
+                    for focus in [0, maneuver.technique.focus_cost() - 1, maneuver.technique.focus_cost(), MAX_FOCUS] {
+                        let mut game = fixture.clone();
+                        game.wanderer.focus = focus;
+                        game.monsters[0].phenotype.stats.speed = 0;
+                        let before = game.clone();
+                        let preview = game.preview_strike(Dir::East).unwrap();
+                        assert_eq!(game, before, "preview changes nothing");
+                        assert_eq!((preview.min_hit, preview.max_hit, preview.focus), (minimum, maximum, 0));
+                        assert!(!preview.opening);
+                        assert!(game.can_step(Dir::East));
+                        assert_eq!(game.step(Dir::East), Step::Attacked);
+                        assert_eq!(game.turn, before.turn + 1);
+                        assert_eq!(game.position, before.position);
+                        assert_eq!(game.wanderer.focus, focus);
+                        assert_eq!(game.wanderer.hp, before.wanderer.hp, "no area backlash");
+                        assert_eq!(game.maneuver, maneuver, "no re-preparation or weapon swap");
+                        assert!(!game.sneaking);
+                        assert!(game.monsters[0].alerted);
+                        let result = game.last_attack.unwrap();
+                        assert_eq!(result.burst, 0);
+                        assert!(!result.burst_released && !result.opening && !result.amplified);
+                        if result.hit {
+                            hits += 1;
+                            assert!((minimum..=maximum).contains(&result.total()));
+                        } else {
+                            misses += 1;
+                            assert_eq!(result.total(), 0);
+                        }
+                        assert_eq!(game.monsters[0].hp, before.monsters[0].hp - result.total());
+                    }
+                }
+            }
+        }
+        assert!(hits > 0 && misses > 0, "both hits and misses spend a turn without Focus");
+    }
+
+    #[test]
     fn failed_preparation_and_unaffordable_attacks_are_atomic() {
         let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
         let before = game.clone();
@@ -1809,13 +1898,17 @@ mod tests {
         assert_eq!(game, before);
         game.wanderer.focus = 6;
         let before = game.clone();
-        assert!(!game.can_step(Dir::East));
-        assert_eq!(game.step(Dir::East), Step::Blocked);
+        assert!(game.can_step(Dir::East), "a basic strike is still available");
+        assert_eq!(game.use_technique(Dir::East), Step::Blocked);
         assert_eq!(game.turn, before.turn);
         assert_eq!(game.wanderer, before.wanderer);
         assert_eq!(game.monsters, before.monsters);
         assert_eq!(game.last_attack, None);
         assert!(game.sneaking);
+        assert_eq!(game.use_technique(Dir::West), Step::Blocked);
+        assert_eq!(game.turn, before.turn);
+        assert_eq!(game.wanderer, before.wanderer);
+        assert_eq!(game.monsters, before.monsters);
 
         game.monsters.clear();
         let before = game.clone();
@@ -1823,6 +1916,13 @@ mod tests {
         invalid.weapon = crate::Weapon::Club;
         assert!(game.prepare(invalid).is_err());
         assert_eq!(game, before);
+
+        let mut game = Game::inferno_trial(42).unwrap();
+        let before = game.clone();
+        assert_eq!(game.use_technique(Dir::North), Step::Blocked, "no target does not cast an area");
+        assert_eq!(game.turn, before.turn);
+        assert_eq!(game.wanderer, before.wanderer);
+        assert_eq!(game.monsters, before.monsters);
     }
 
     #[test]
@@ -1830,7 +1930,7 @@ mod tests {
         let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
         game.monsters[0].phenotype.stats.defense = 100;
         assert_eq!(game.preview_attack(Dir::East).unwrap().max_hit, 1);
-        game.step(Dir::East);
+        game.use_technique(Dir::East);
         let result = game.last_attack().unwrap();
         assert_eq!(result.burst, 0);
         assert!(!result.burst_released && !result.penetrated);
@@ -1893,7 +1993,7 @@ mod tests {
         twin.maneuver.name = "A name suggested by an AI".into();
         for action in [Dir::East, Dir::East, Dir::West, Dir::West] {
             assert_eq!(game.preview_attack(action), twin.preview_attack(action));
-            assert_eq!(game.step(action), twin.step(action));
+            assert_eq!(game.use_technique(action), twin.use_technique(action));
             assert_eq!(game.wanderer, twin.wanderer);
             assert_eq!(game.monsters, twin.monsters);
             assert_eq!(game.last_attack, twin.last_attack);
@@ -1911,7 +2011,7 @@ mod tests {
         assert_eq!(game.monsters[0].fire_resistance(), 50);
         let preview = game.preview_attack(Dir::East).unwrap();
         assert_eq!((preview.min_hit, preview.max_hit, preview.focus), (9, 11, 7));
-        game.step(Dir::East);
+        game.use_technique(Dir::East);
         let result = game.last_attack().unwrap();
         assert_eq!((result.physical, result.burst, result.amplified), (4, 6, true));
     }
@@ -1963,13 +2063,13 @@ mod tests {
     }
 
     #[test]
-    fn staff_trial_demonstrates_tolerance_cost_and_identical_bump_resolution() {
+    fn staff_trial_demonstrates_tolerance_cost_and_identical_technique_resolution() {
         let mut game = Game::inferno_trial(42).unwrap();
         let preview = game.preview_area().unwrap();
         // 0%, 30%, and rounded 68% resistance: 12 + 8 + 3.
         assert_eq!(preview, AreaPreview { radius: 2, focus: 18, targets: 3, damage: 23, self_damage: 12 });
         let mut bump = game.clone();
-        assert_eq!(game.unleash(), bump.step(Dir::East));
+        assert_eq!(game.unleash(), bump.use_technique(Dir::East));
         assert_eq!(game, bump);
         assert_eq!(game.wanderer.focus, 6);
         assert_eq!(game.log.last(20).filter(|e| e.kind == LogKind::Kill).count(), 2);
