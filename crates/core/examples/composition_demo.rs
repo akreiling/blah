@@ -2,7 +2,7 @@
 //!
 //! These are explicit developer fixtures, not evidence of earned progression or a balanced encounter.
 
-use blah_core::{Dir, Game, Maneuver, Step};
+use blah_core::{Dir, Game, LogKind, Maneuver, Rank, Step, Weapon};
 
 fn main() {
     let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).expect("trial ground");
@@ -38,4 +38,17 @@ fn main() {
     assert_eq!(game.step(direction), Step::Attacked);
     println!("Free staff result: {:?}", game.last_attack().unwrap());
     assert_eq!(game.wanderer().focus, 6);
+
+    let mut game = Game::composition_trial(42, Maneuver::default()).expect("trial ground");
+    println!("\nWEAPON PRACTICE: {}", game.wanderer().weapons.get(Weapon::Dagger).rank().name());
+    for _ in 0..32 {
+        assert_eq!(game.step(Dir::East), Step::Attacked);
+        if game.wanderer().weapons.get(Weapon::Dagger).rank() != Rank::Novice {
+            let learned = game.log().entries().rfind(|e| e.kind == LogKind::Learning).unwrap();
+            println!("{}", learned.text);
+            println!("Earned strike preview: {:?}", game.preview_strike(Dir::East).unwrap());
+            return;
+        }
+    }
+    panic!("the trial must demonstrate an earned weapon rank");
 }

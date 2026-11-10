@@ -4,6 +4,35 @@
 
 Proposed design. See the decisions document for committed direction versus prototype rules.
 
+## Implemented prototype: weapon practice
+
+Stage 1 of skill growth is in [`skills.rs`](../../crates/core/src/skills.rs). Focus capacity and stealth
+growth come next and will reuse the same engine. Move unlocks, saving, and tuning come later.
+
+- **What trains:** physical damage from weapon delivery (a free strike or a weapon technique) that actually
+  lands. Misses, waiting, moving, resting, sneaking, dying, refitting, and elapsed turns teach nothing.
+  Touch and ground-area magic do not train weapons.
+- **Per weapon family:** dagger, spear, club, and staff each grow separately. Practice belongs to the
+  character, not the item. Equipping another weapon neither transfers nor resets it.
+- **Threat scales learning:** threat is roughly the percent of your full Health a creature would take
+  while an unskilled fighter with that weapon beat it down: its attack against your defense, its full Health
+  against your weapon's base damage, and its speed. Injury, Focus, and earned bonuses do not change it.
+  Skittish and inert (speed 0) creatures have zero threat.
+- **Threat caps learning:** below 10 teaches nothing. Below 25 teaches up to *practiced*, below 50 *skilled*,
+  below 100 *adept*, and above that *expert*. Weak creatures stop teaching once you outgrow them. A
+  lower ceiling never removes practice you already earned.
+- **Finite per creature:** each individual can pay out practice for at most its full Health in damage.
+  Overkill does not count, and magic damage uses up the same allowance. Healing a creature, including the
+  recovery after your death, does not refill it.
+- **Effects:** ranks are words only (novice, practiced, skilled, adept, expert). They add +1 weapon damage
+  at practiced and skilled, +2 at adept and expert, and lower the weapon miss chance from 10% to 9%, 8%, 7%,
+  and 6%. Previews use the same numbers. Bursts, touch, and area damage are unchanged.
+- **Visibility:** the panel shows the equipped weapon's rank. A log line announces each rank gained.
+
+Practice thresholds are 1,000, 4,000, 12,000, and 30,000; one landed damage point earns its threat in
+practice. These are untuned prototype numbers. The 40-Health trial sentinel has a dagger threat of 133, so
+one full dagger fight against it goes from novice to skilled. Ordinary wild creatures teach far less.
+Skills are not saved; there is no save system yet.
 ## Award learning from outcomes
 
 The core emits a resolved activity record after an action or encounter outcome. Learning reads that record;

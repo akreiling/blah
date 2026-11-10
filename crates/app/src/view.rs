@@ -95,8 +95,8 @@ const fn tint(kind: LogKind, new: bool) -> u32 {
         (LogKind::Kill, false) => 0x4e_7a_40,
         (LogKind::Death, true) => 0xe0_70_ff,
         (LogKind::Death, false) => 0x7a_48_8a,
-        (LogKind::Region, true) => HEADING,
-        (LogKind::Region, false) => 0x86_70_3a,
+        (LogKind::Region | LogKind::Learning, true) => HEADING,
+        (LogKind::Region | LogKind::Learning, false) => 0x86_70_3a,
     }
 }
 
@@ -551,6 +551,7 @@ fn wanderer(game: &Game) -> Div {
         .flex()
         .flex_col()
         .child(heading("WANDERER"))
+        .child(pair(game.maneuver().weapon.name(), w.weapons.get(game.maneuver().weapon).rank().name().into()))
         .child(bar("HP", w.hp, w.max_hp(), HP))
         .child(
             div()

@@ -8,8 +8,9 @@ This inventory is a code-inspected baseline, not a completion checklist for the 
 
 **Later delta:** the [playable composition proof](composition-poc.md) adds a bounded technique grammar,
 prototype equipment, Focus, simple observer tracking and sneaking, a keyboard workshop, and costly area
-fire. The table below remains the historical `0b82077` baseline. Progression, saves, AI naming, and Jev
-integration still do not exist.
+fire. [Weapon practice](learning.md#implemented-prototype-weapon-practice) adds word-only weapon ranks
+earned from landed strikes. The table below remains the historical `0b82077` baseline. Other progression,
+saves, AI naming, and Jev integration still do not exist.
 
 | Area | Implemented at the baseline | Not implemented |
 | --- | --- | --- |

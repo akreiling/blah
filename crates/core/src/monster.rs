@@ -8,6 +8,7 @@ use crate::hash::Rng;
 use crate::life::SpeciesId;
 use crate::phenotype::{Phenotype, Stats};
 use crate::sprite::Sprite;
+use crate::{Temperament, Weapon, WeaponSkills};
 
 /// A monster's stable id within one game, in order of appearance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -38,9 +39,34 @@ pub struct Monster {
     pub alerted: bool,
     /// Speed banked toward its next action, in tenths of an action.
     pub(crate) energy: i32,
+    /// Finite damage evidence left for this individual. Healing after death never refills it.
+    pub(crate) practice_left: i32,
 }
 
 impl Monster {
+    /// Approximate percent of full Health threatened over an unskilled, guarded weapon fight.
+    /// Uses full Health and base competence, never current injury, Focus, or earned weapon bonuses.
+    pub(crate) fn weapon_threat(&self, wanderer: &Wanderer, weapon: Weapon) -> u32 {
+        if self.phenotype.temperament == Temperament::Skittish {
+            return 0;
+        }
+        let stats = self.phenotype.stats;
+        let incoming = (i128::from(stats.attack) - i128::from(wanderer.stats.defense)).max(1);
+        let outgoing =
+            (i128::from(wanderer.stats.attack) + i128::from(weapon.force()) - i128::from(stats.defense)).max(1);
+        let speed = i128::from(stats.speed.clamp(0, ACTION_COST * MAX_ACTIONS as i32));
+        let threat = 100 * incoming * i128::from(stats.hp.max(0)) * speed
+            / (outgoing * i128::from(ACTION_COST) * i128::from(wanderer.max_hp().max(1)));
+        threat.min(200) as u32
+    }
+
+    /// Consume a shared, finite damage opportunity, including damage delivered by magic.
+    pub(crate) fn spend_practice(&mut self, damage: i32) -> u32 {
+        let spent = damage.max(0).min(self.hp.max(0)).min(self.practice_left.max(0));
+        self.practice_left -= spent;
+        spent as u32
+    }
+
     /// Heat tolerance becomes up to 75 percent fire resistance in the combat prototype.
     #[must_use]
     pub fn fire_resistance(&self) -> u8 {
@@ -75,13 +101,15 @@ pub struct Wanderer {
     pub stats: Stats,
     /// Focus left for special techniques and careful movement; no passive regeneration.
     pub focus: i32,
+    /// Earned weapon competence belongs to the character, not to the equipped item.
+    pub weapons: WeaponSkills,
 }
 
 impl Wanderer {
     /// A fresh wanderer.
     #[must_use]
-    pub const fn new() -> Wanderer {
-        Wanderer { hp: WANDERER_STATS.hp, stats: WANDERER_STATS, focus: MAX_FOCUS }
+    pub fn new() -> Wanderer {
+        Wanderer { hp: WANDERER_STATS.hp, stats: WANDERER_STATS, focus: MAX_FOCUS, weapons: WeaponSkills::default() }
     }
 
     /// Hit points when unhurt.
@@ -97,7 +125,7 @@ impl Default for Wanderer {
     }
 }
 
-/// The wanderer's numbers until levels and abilities exist.
+/// The wanderer's base numbers, before weapon practice.
 pub const WANDERER_STATS: Stats = Stats { hp: 30, attack: 4, defense: 1, speed: ACTION_COST };
 
 /// Energy one action costs. A creature banks its speed each turn and acts once per this much.

@@ -137,6 +137,8 @@ pub enum LogKind {
     Kill,
     /// The wanderer died, or woke after dying.
     Death,
+    /// Earned practice raised a weapon proficiency band.
+    Learning,
 }
 
 /// One line of the log and what it reports.
@@ -386,6 +388,7 @@ impl Game {
             sprite,
             position: at,
             hp: 40,
+            practice_left: 40,
             home: at,
             alerted: false,
             energy: 0,
@@ -403,6 +406,7 @@ impl Game {
         let (x, y) = game.position;
         game.monsters[0].hp = 6;
         game.monsters[0].phenotype.stats.hp = 6;
+        game.monsters[0].practice_left = 6;
         game.monsters[0].phenotype.heat = 0.0;
         game.monsters[0].name = "tender trial sentinel".into();
         for (at, heat, name) in
@@ -526,14 +530,16 @@ impl Game {
     pub fn preview_attack(&self, dir: Dir) -> Result<AttackPreview, &'static str> {
         let (x, y) = self.ahead(dir);
         let target = self.monster_at(x, y).ok_or("No adjacent target in that direction.")?;
-        self.maneuver.preview(self.attack_context(target))
+        self.maneuver.preview_with_skill(self.attack_context(target), self.wanderer.weapons.get(self.maneuver.weapon))
     }
 
     /// Preview the free weapon strike used by a bump, regardless of the prepared delivery.
     pub fn preview_strike(&self, dir: Dir) -> Result<AttackPreview, &'static str> {
         let (x, y) = self.ahead(dir);
         let target = self.monster_at(x, y).ok_or("No adjacent target in that direction.")?;
-        self.maneuver.basic_strike().preview(self.attack_context(target))
+        self.maneuver
+            .basic_strike()
+            .preview_with_skill(self.attack_context(target), self.wanderer.weapons.get(self.maneuver.weapon))
     }
 
     /// Deliberately use the prepared technique on an adjacent creature. A ground technique discharges
@@ -616,6 +622,7 @@ impl Game {
         );
         for (i, damage) in hits {
             let monster = &mut self.monsters[i];
+            monster.spend_practice(damage);
             monster.hp = monster.hp.saturating_sub(damage);
             monster.alerted = true;
             self.log.push(LogKind::Attack, format!("The {} takes {damage}.", monster.name));
@@ -929,6 +936,7 @@ impl Game {
                 sprite: Sprite::draw(&phenotype, plan, species.biome),
                 position: (x, y),
                 hp: phenotype.stats.hp,
+                practice_left: phenotype.stats.hp,
                 home: (x, y),
                 alerted: false,
                 energy: rng.below(ACTION_COST as usize) as i32,
@@ -950,7 +958,13 @@ impl Game {
     /// The wanderer attacks monster `index` using the selected action, not necessarily the preparation.
     fn wanderer_attacks(&mut self, index: usize, maneuver: &Maneuver, rng: &mut Rng) {
         let context = self.attack_context(&self.monsters[index]);
-        let result = maneuver.resolve(context, rng).expect("attack maneuvers are validated");
+        let skill = self.wanderer.weapons.get(maneuver.weapon);
+        let result = maneuver.resolve_with_skill(context, skill, rng).expect("attack maneuvers are validated");
+        let threat = self.monsters[index].weapon_threat(&self.wanderer, maneuver.weapon);
+        let opportunity = self.monsters[index].spend_practice(result.total());
+        let physical = opportunity.min(result.physical.max(0) as u32);
+        let improved = maneuver.technique.delivery == Delivery::Weapon
+            && self.wanderer.weapons.learn(maneuver.weapon, physical, threat);
         self.wanderer.focus -= maneuver.technique.focus_cost();
         self.last_attack = Some(result);
         // Even a miss reveals the attempt. No repeated surprise by toggling sneak.
@@ -979,6 +993,16 @@ impl Game {
                 self.log.push(LogKind::Kill, format!("The {} dies.", monster.name));
                 self.monsters.remove(index);
             }
+        }
+        if improved {
+            self.log.push(
+                LogKind::Learning,
+                format!(
+                    "Your {} skill is now {}.",
+                    maneuver.weapon.name().to_lowercase(),
+                    self.wanderer.weapons.get(maneuver.weapon).rank().name()
+                ),
+            );
         }
     }
 
@@ -1389,6 +1413,7 @@ mod tests {
             sprite: Sprite::draw(&phenotype, plan, species.biome),
             position: at,
             hp: phenotype.stats.hp,
+            practice_left: phenotype.stats.hp,
             home: at,
             alerted: false,
             energy: 0,
@@ -2165,6 +2190,158 @@ mod tests {
         assert_eq!(game.wanderer, before.wanderer);
     }
 
+    #[test]
+    fn weapon_learning_uses_landed_physical_damage_not_magic_or_attempts() {
+        let mut hits = 0;
+        let mut misses = 0;
+        for seed in 0..32 {
+            for technique in [false, true] {
+                let mut game = Game::composition_trial(seed, Maneuver::backstab_burst()).unwrap();
+                if technique {
+                    game.use_technique(Dir::East);
+                } else {
+                    game.step(Dir::East);
+                }
+                let result = game.last_attack.unwrap();
+                let mut expected = crate::Skill::default();
+                // Sentinel: 40 HP, one incoming damage per action, one unskilled dagger damage
+                // against defense 3. Relative to 30 full HP: floor(100 * 40 / 30) = 133.
+                expected.learn(result.physical as u32 * 133, crate::Rank::Expert);
+                assert_eq!(game.wanderer.weapons.get(crate::Weapon::Dagger), expected);
+                for other in [crate::Weapon::Spear, crate::Weapon::Club, crate::Weapon::Staff] {
+                    assert_eq!(game.wanderer.weapons.get(other), crate::Skill::default());
+                }
+                if result.hit {
+                    hits += 1;
+                } else {
+                    misses += 1;
+                }
+            }
+            let mut touch = Maneuver::backstab_burst();
+            touch.technique.delivery = Delivery::Touch;
+            touch.technique.burst.as_mut().unwrap().trigger = crate::Trigger::Contact;
+            let mut game = Game::composition_trial(seed, touch).unwrap();
+            let before = game.wanderer.weapons;
+            game.use_technique(Dir::East);
+            assert_eq!(game.wanderer.weapons, before);
+
+            let mut game = Game::inferno_trial(seed).unwrap();
+            let before = game.wanderer.weapons;
+            game.unleash();
+            assert_eq!(game.wanderer.weapons, before);
+        }
+        assert!(hits > 0 && misses > 0);
+    }
+
+    #[test]
+    fn weak_or_inert_creatures_and_noncombat_actions_give_no_practice() {
+        for inert in [false, true] {
+            let mut game = Game::composition_trial(42, Maneuver::default()).unwrap();
+            if inert {
+                game.monsters[0].phenotype.stats.speed = 0;
+            } else {
+                game.monsters[0].hp = 3;
+                game.monsters[0].phenotype.stats = crate::Stats { hp: 3, attack: 1, defense: 0, speed: ACTION_COST };
+            }
+            let before = game.wanderer.weapons;
+            game.step(Dir::East);
+            assert!(game.last_attack.unwrap().hit);
+            assert_eq!(game.wanderer.weapons, before);
+        }
+        let mut game = Game::composition_trial(42, Maneuver::default()).unwrap();
+        game.step(Dir::East);
+        let learned = game.wanderer.weapons;
+        assert_ne!(learned, crate::WeaponSkills::default(), "fixture has real earned practice");
+        game.monsters.clear();
+        game.wait();
+        game.toggle_sneak();
+        game.step(Dir::West);
+        game.step(Dir::East);
+        game.monsters.clear();
+        game.wanderer.hp = 20;
+        game.recover_focus();
+        game.die();
+        assert_eq!(game.wanderer.weapons, learned, "time, injury, death, rest, and movement neither train nor erase");
+        game.monsters.clear();
+        let spear = Maneuver { weapon: crate::Weapon::Spear, ..Maneuver::default() };
+        game.prepare(spear).unwrap();
+        game.prepare(Maneuver::default()).unwrap();
+        assert_eq!(game.wanderer.weapons, learned, "refitting does not transfer or reset practice");
+    }
+
+    #[test]
+    fn overkill_and_death_healing_cannot_refill_an_individuals_practice() {
+        let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
+        game.monsters[0].hp = 1;
+        game.use_technique(Dir::East);
+        assert!(game.last_attack.unwrap().hit);
+        let mut expected = crate::Skill::default();
+        expected.learn(133, crate::Rank::Expert);
+        assert_eq!(game.wanderer.weapons.get(crate::Weapon::Dagger), expected, "only one remaining HP counts");
+
+        let mut game = Game::composition_trial(42, Maneuver::default()).unwrap();
+        game.monsters[0].practice_left = 1;
+        game.step(Dir::East);
+        assert_eq!(game.monsters[0].practice_left, 0);
+        let learned = game.wanderer.weapons;
+        let (x, y) = game.home;
+        game.monsters[0].position = (x + VIEW_RADIUS + 1, y);
+        game.die();
+        assert_eq!(game.monsters[0].hp, 40);
+        assert_eq!(game.monsters[0].practice_left, 0);
+        game.monsters[0].position = (x + 1, y);
+        // The previously trained creature survives death but cannot pay again, even with a new weapon.
+        game.wanderer.hp = game.wanderer.max_hp();
+        game.maneuver.weapon = crate::Weapon::Club;
+        game.step(Dir::East);
+        assert_eq!(game.wanderer.weapons, learned);
+    }
+
+    #[test]
+    fn practice_improves_real_strike_previews_and_logs_only_rank_changes() {
+        let mut game = Game::composition_trial(42, Maneuver::default()).unwrap();
+        let initial = game.preview_strike(Dir::East).unwrap();
+        let id = game.monsters[0].id;
+        for _ in 0..32 {
+            if !game.monsters.iter().any(|m| m.id == id) {
+                break;
+            }
+            game.step(Dir::East);
+            if game.wanderer.weapons.get(crate::Weapon::Dagger).rank() >= crate::Rank::Practiced {
+                let preview = game.preview_strike(Dir::East).unwrap();
+                assert_eq!(preview.max_hit, initial.max_hit + 1);
+                assert_eq!(game.log.entries().filter(|e| e.kind == LogKind::Learning).count(), 1);
+                assert!(game.log.lines().any(|line| line == "Your dagger skill is now practiced."));
+                return;
+            }
+        }
+        panic!("ordinary play must reach the first rank without injected practice");
+    }
+
+    #[test]
+    fn threat_tracks_full_strength_and_speed_not_injury_or_earned_skill() {
+        let mut game = Game::composition_trial(42, Maneuver::default()).unwrap();
+        for (weapon, expected) in [
+            (crate::Weapon::Dagger, 133),
+            (crate::Weapon::Spear, 44),
+            (crate::Weapon::Club, 33),
+            (crate::Weapon::Staff, 66),
+        ] {
+            assert_eq!(game.monsters[0].weapon_threat(&game.wanderer, weapon), expected);
+            game.wanderer.hp = 1;
+            game.wanderer.focus = 0;
+            game.monsters[0].hp = 1;
+            game.wanderer.weapons.learn(weapon, u32::MAX, 200);
+            assert_eq!(game.monsters[0].weapon_threat(&game.wanderer, weapon), expected);
+        }
+        for (speed, expected) in [(-1, 0), (0, 0), (1, 13), (10, 133), (20, 200), (i32::MAX, 200)] {
+            game.monsters[0].phenotype.stats.speed = speed;
+            assert_eq!(game.monsters[0].weapon_threat(&game.wanderer, crate::Weapon::Dagger), expected);
+        }
+        game.monsters[0].phenotype.temperament = Temperament::Skittish;
+        assert_eq!(game.monsters[0].weapon_threat(&game.wanderer, crate::Weapon::Dagger), 0);
+    }
+
     /// A scripted game's exact course, pinned: the same seed and moves must give the same monsters in the
     /// same places with the same hit points on every machine, since spawns draw from evolved pools weighted by
     /// fitness.
@@ -2192,7 +2369,7 @@ mod tests {
             }
         }
         assert_eq!(
-            h, 0x2a04_a38f_e24d_9338,
+            h, 0xcd3b_2621_7ed4_cc68,
             "the sim's arithmetic changed; see this test's doc before touching the constant"
         );
     }

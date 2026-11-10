@@ -3,8 +3,9 @@
 [Design index](../SYSTEMS_ROADMAP.md) · [Technique rules](techniques.md) · [Jev review](../review/technique-review.md)
 
 This is a narrow executable proof, not the full advancement system. It deliberately gives the player
-developer equipment and known components. Foundations, earned adaptations, practice credit, saved
-techniques, remote naming, and Jev calls are **not implemented**.
+developer equipment and known components. Foundations, earned adaptations, saved techniques, remote
+naming, and Jev calls are **not implemented**. Weapon practice is implemented; see
+[weapon practice](learning.md#implemented-prototype-weapon-practice).
 
 ## Try it
 
@@ -22,7 +23,8 @@ mise exec -- just run --inferno-demo
 - **Normal world:** `mise exec -- just run`. Open the workshop with **M** while safely away from creatures.
   Both proofs use the same `Game` action methods as normal play, not a separate combat simulator.
 - **Without a window:** `mise exec -- just composition-demo` prints both trials' structures, previews,
-  actual results, costs, and the rejected immediate repeat.
+  actual results, costs, and the rejected immediate repeat. It then strikes the sentinel with free
+  dagger strikes until the dagger reaches *practiced*, and prints the improved strike preview.
 
 The trial enemies have deliberately controlled stats. They are developer fixtures, not naturally generated
 apex encounters or proof that the progression curve is balanced.
