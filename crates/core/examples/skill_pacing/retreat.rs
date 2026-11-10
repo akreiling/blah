@@ -7,6 +7,8 @@ use blah_core::{ACTION_COST, AttackContext, MAX_ACTIONS, Monster, TERRITORY};
 pub(super) enum Policy {
     Baseline,
     Cautious,
+    BaselineMoves,
+    CautiousMoves,
 }
 
 impl Policy {
@@ -14,6 +16,19 @@ impl Policy {
         match self {
             Self::Baseline => "baseline",
             Self::Cautious => "cautious",
+            Self::BaselineMoves => "baseline-moves",
+            Self::CautiousMoves => "cautious-moves",
+        }
+    }
+
+    pub(super) const fn uses_moves(self) -> bool {
+        matches!(self, Self::BaselineMoves | Self::CautiousMoves)
+    }
+
+    pub(super) const fn base(self) -> Self {
+        match self {
+            Self::Baseline | Self::BaselineMoves => Self::Baseline,
+            Self::Cautious | Self::CautiousMoves => Self::Cautious,
         }
     }
 }

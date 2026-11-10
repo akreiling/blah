@@ -96,7 +96,7 @@ current preview. See [the move controls](composition-poc.md#try-it) for the full
 
 ## Stage 3: measured prototype pacing
 
-Run `just skill-pacing [seeds] [actions] [baseline|cautious|compare]`
+Run `just skill-pacing [seeds] [actions] [baseline|cautious|compare|move-compare]`
 (defaults: 8 seeds, 600 actions, baseline). It creates fresh
 `Game::new` characters and drives the same public actions as the app. No injected skill, resources,
 or trial creatures. `just test` includes the probe's determinism, action-accounting, and play-style checks.
@@ -148,6 +148,46 @@ Changing learned stealth also changes later actions through its concealment and 
 These probes support a small relative pacing correction, not a claim of balanced human play, a
 death-free progression route, or a final mastery curve. Broader exploration, safe evasion routes,
 area casting, and human playtesting remain unmeasured.
+
+## Stage 4: first learned-move balance probe
+
+Run `just skill-pacing 16 1200 move-compare`. This compares the existing baseline and cautious pilots
+with matching move-aware variants on the same 16 seeds and six styles, for 96 runs per policy. Every
+run starts from `Game::new`; ranks, Focus, and move unlocks are earned normally. The move-aware pilot
+uses weapon moves when they have a valid opportunity, tries Reach before a one-tile advance, uses
+Shove only when a push is possible, sweeps only when at least two targets are adjacent, slips away
+while retreating when its route is valid and no observed pursuer gets closer, and tries Pulse when its
+caster cannot afford the prepared technique. This is a simple policy probe, not an optimal player model.
+
+The output adds final Health/Focus per run and a move table: runs unlocking the skill, median unlock
+action, affordable opportunities, uses, hit actions, actual damage, Focus spent, movement steps, and
+successful Shove pushes. An opportunity means at least one direction passed the real move preview.
+The paired policies share seeds and initial styles, but their later worlds diverge because their
+actions differ.
+
+| Policy pair | Total deaths, no moves → moves | Death-free runs, no moves → moves | Mean kills/run, no moves → moves | Mean Focus left, no moves → moves |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline | 95 → 148 | 45/96 → 50/96 | 59.82 → 58.39 | 20.69 → 11.52 |
+| Cautious | 77 → 72 | 60/96 → 62/96 | 7.34 → 6.53 | 22.43 → 4.89 |
+
+The mixed baseline result is largely driven by Pulse: the caster policy chose it 1,728 times, but
+cumulative kills fell by 8.5 per caster run and deaths rose by 76 across the 16 caster runs. Pulse's
+one damage is a poor automatic fallback when the same character still has a free weapon strike.
+Because Pulse is optional, this is not a forced-player failure, but its role needs a separate design
+decision if it is meant to compete rather than offer a thematic alternative.
+
+The other moves had different results. In the baseline-move runs, spear Reach was used 499 times
+(2,612 actual damage for 998 Focus), club Shove 601 times (307 pushes), staff Sweep 50 times across
+101 targets, and sneaking Slip away 262 times for 524 steps. In the 16 spear runs, Reach coincided
+with 5.06 more mean kills per run and nine fewer total deaths; in the staff runs, Sweep coincided
+with 1.81 more mean kills per run and 13 fewer total deaths. Shove and Withdraw had smaller or mixed
+survival and kill changes. These are policy-level associations, not isolated causal estimates.
+
+**Decision:** retain the current Focus costs (Withdraw 3, Reach 2, Shove 3, Sweep 4, Slip away 4,
+Pulse 0). The small sample supports Reach and Sweep as useful choices, but does not justify a broad
+cost change; the aggressive and cautious policies also trade different amounts of Focus for different
+outcomes. Do not automatically prefer Pulse over the free strike. These numbers are provisional, and
+the probe does not measure human use or late-rank moves.
 
 ## Award learning from outcomes
 
