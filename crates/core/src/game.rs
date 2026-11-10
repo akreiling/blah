@@ -227,7 +227,7 @@ const OPENING_LESSON: i32 = 3;
 /// Lessons breaking a creature's tracking takes from it.
 const ESCAPE_LESSON: i32 = 3;
 /// Stealth practice per lesson per point of threat.
-const STEALTH_PRACTICE: u32 = 5;
+const STEALTH_PRACTICE: u32 = 2;
 /// How far from home a territorial monster will go after the wanderer, in tiles.
 pub const TERRITORY: i64 = 4;
 /// Chance an idle monster takes a step.
@@ -2516,10 +2516,11 @@ mod tests {
             if result.hit {
                 openings += 1;
                 assert!(result.opening);
-                // Sentinel threat 133: three stealth lessons at 5 each, and 7 Focus paid.
-                assert_eq!(game.wanderer.stealth, practiced(3 * 133 * 5));
+                // Sentinel threat 133: three stealth lessons at 2 each, and 7 Focus paid.
+                assert_eq!(game.wanderer.stealth, practiced(3 * 133 * 2));
                 assert_eq!(game.wanderer.focus_skill, practiced(7 * 133));
-                assert!(game.log.lines().any(|line| line == "Your stealth is now practiced."));
+                assert_eq!(game.wanderer.stealth.rank(), Rank::Novice, "one opening is not an entire rank");
+                assert!(!game.log.lines().any(|line| line == "Your stealth is now practiced."));
             } else {
                 assert_eq!(game.wanderer.stealth, crate::Skill::default());
                 assert_eq!(game.wanderer.focus_skill, crate::Skill::default(), "a miss teaches no Focus");

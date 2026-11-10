@@ -7,7 +7,8 @@ Proposed design. See the decisions document for committed direction versus proto
 ## Implemented prototype: weapon practice
 
 Stage 1 of skill growth is in [`skills.rs`](../../crates/core/src/skills.rs). Stage 2, Focus and
-stealth, is described below. Tuning, move unlocks, and saving come later.
+stealth, is described below. Stage 3 adds measured pacing probes and a first stealth tuning pass.
+Move unlocks and saving come later.
 
 - **What trains:** physical damage from weapon delivery (a free strike or a weapon technique) that actually
   lands. Misses, waiting, moving, resting, sneaking, dying, refitting, and elapsed turns teach nothing.
@@ -30,9 +31,10 @@ stealth, is described below. Tuning, move unlocks, and saving come later.
 - **Visibility:** the panel shows the equipped weapon's rank. A log line announces each rank gained.
 
 Practice thresholds are 1,000, 4,000, 12,000, and 30,000; one landed damage point earns its threat in
-practice. These are untuned prototype numbers. The 40-Health trial sentinel has a dagger threat of 133, so
+practice. These remain prototype numbers. The 40-Health trial sentinel has a dagger threat of 133, so
 one full dagger fight against it goes from novice to skilled. Ordinary wild creatures teach far less.
 Skills are not saved; there is no save system yet.
+
 ## Implemented prototype: Focus and stealth practice
 
 Stage 2 reuses the same engine: ranks, teaching ceilings set by threat, and finite lessons per creature.
@@ -53,7 +55,7 @@ Growth raises the cap, not current Focus; resting at home fills the larger pool.
 | Landed opening strike | 3 | A hit that actually exploited an unguarded opening |
 | Escape | 3 | A creature that was tracking you at the last turn's observation loses you |
 
-Each lesson is worth 5 times the creature's threat. Entering sneak, standing still, sneaking with no
+Each lesson is worth 2 times the creature's threat. Entering sneak, standing still, sneaking with no
 threat near, and creatures below threat 10 teach nothing and use up no lessons. Being revealed by your own
 attack and then leaving range is not an escape, and death clears tracking without paying for it.
 
@@ -64,8 +66,59 @@ Stealth effects, by rank (novice, practiced, skilled, adept, expert):
 - Landed opening strikes gain 0, +1, +1, +2, +2 physical damage, on top of weapon practice.
 
 The panel shows the Focus and stealth ranks beside the weapon rank, and the log announces each rank
-gained. These numbers are untuned. In the dagger trial, one opening strike on the threat-133 sentinel
-takes stealth to *practiced*. Two paid technique hits take Focus to *practiced*.
+gained. In the dagger trial, one opening strike on the threat-133 sentinel earns 798 stealth practice,
+below *practiced*. Two paid technique hits still take Focus to *practiced*.
+
+## Stage 3: measured prototype pacing
+
+Run `just skill-pacing [seeds] [actions]` (defaults: 8 seeds, 600 actions per run). It creates fresh
+`Game::new` characters and drives the same public actions as the app. No injected skill, resources,
+or trial creatures. `just test` includes the probe's determinism, action-accounting, and play-style checks.
+
+The six policies use all four weapons as free-striking fighters, a sneaking dagger opener, and a
+staff-equipped touch-fire caster. They seek visible non-skittish creatures, explore cardinal waypoints
+six tiles from home, and try to retreat at 10 Health or, for specialists, below 8 Focus. They rest
+at home, clearing nearby threats when those prevent rest. The caster falls back to free staff strikes;
+the sneak uses the paid technique only at an opening. These are simple, fallible policies, not expert
+players. They do not assess whether a particular creature is safe to fight.
+
+Output has two CSV tables: per-run totals and rank milestones. An **action** is a command that spends
+a turn, including rest and sneak toggles. **Turns** additionally include death's 1,000-turn penalty.
+An **encounter** counts a distinct non-skittish creature observed in its normal sensing range or
+targeted by an attack, including unseen observers. It is not a completed fight, kill, or guarantee of
+teaching eligibility. Milestones report upper medians among runs that reached the rank, alongside
+the reached/run count and minimum/maximum action count. Unreached ranks remain explicit, not zero.
+Encounter medians are calculated separately, not necessarily from the median-action run.
+
+First comparison: seeds 0–15, 1,200 actions each, 96 runs per version (115,200 actions).
+The provisional target was to bring first-rank stealth into the same rough range as early weapon
+experimentation, without moving all skill thresholds to compensate for an artificial trial.
+
+| Policy / skill reaching practiced | Before: median actions | After: median actions | After: range | After: reached | After: median encounters |
+| --- | ---: | ---: | --- | --- | ---: |
+| Dagger / weapon | 80 | 80 | 14–192 | 16/16 | 4 |
+| Spear / weapon | 87 | 87 | 24–196 | 16/16 | 7 |
+| Club / weapon | 132 | 132 | 25–383 | 16/16 | 9 |
+| Staff / weapon | 71 | 71 | 14–170 | 16/16 | 5 |
+| Sneak / stealth | 30 | 107 | 12–699 | 16/16 | 6 |
+| Caster / Focus | 183 | 183 | 23–481 | 16/16 | 13 |
+
+**Changed:** stealth evidence per lesson from 5 × threat to 2 × threat. The same finite 12-lesson
+allowance and qualifying outcomes remain. Sneak-policy stealth reached skilled in 9/16 runs
+(median 517 actions among those nine), adept in 1/16, and expert in 0/16, versus 16/16, 7/16,
+and 1/16 before. Its fastest practiced result is still 12 actions, so this is not a minimum-time gate.
+
+**Unchanged:** weapon and Focus evidence, rank thresholds, threat ceilings, and skill effects. Wild
+weapon and caster Focus progression does not reproduce the trial's one-fight/two-hit pacing.
+Slowing every skill based on that fixture would address the wrong input.
+
+**Limits:** the tuned policies died 516 times in aggregate (519 before). Successful retreat is not
+assured. Death loses time and resources and awards no practice; previously earned practice persists.
+Changing learned stealth also changes later actions through its concealment and resource effects.
+These probes support a small relative pacing correction, not a claim of balanced human play, a
+death-free progression route, or a final mastery curve. Broader exploration, safe evasion routes,
+area casting, and human playtesting remain unmeasured.
+
 ## Award learning from outcomes
 
 The core emits a resolved activity record after an action or encounter outcome. Learning reads that record;

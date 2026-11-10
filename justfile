@@ -9,6 +9,7 @@ run *args:
 # Run every test in the workspace.
 test:
     {{cargo}} test --workspace
+    {{cargo}} test -p blah-core --example skill_pacing
 
 # Check formatting and lints; warnings fail.
 lint:
@@ -30,3 +31,7 @@ jev-review *args:
 # Print the actual dagger and staff composition trials without opening a window.
 composition-demo:
     {{cargo}} run --quiet -p blah-core --example composition_demo
+
+# Measure fresh-character wild-encounter skill pacing: just skill-pacing [seeds] [actions]
+skill-pacing *args:
+    {{cargo}} run --quiet --release -p blah-core --example skill_pacing -- {{args}}
