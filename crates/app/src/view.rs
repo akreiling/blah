@@ -11,7 +11,7 @@ use gpui::{
 
 use blah_core::{
     Aim, Comparison, Delivery, Dir, Element, Game, Gene, LearnedMove, LogKind, MAX_AREA_RADIUS, MAX_BURST_POWER,
-    Monster, Shape, SpeciesId, Tile, Trigger, VIEW_RADIUS, Weapon, hash_point,
+    Monster, MovePreview, Shape, SpeciesId, Tile, Trigger, VIEW_RADIUS, Weapon, hash_point,
 };
 
 use crate::sprites::{Key, SPRITE_PX, SpriteCache};
@@ -108,6 +108,10 @@ const FONT: &str = "Menlo";
 const TEXT_SIZE: f32 = 15.0;
 const SMALL_SIZE: f32 = 12.0;
 const SMALL_LINE: f32 = 15.0;
+/// Menlo's advance width as a fraction of its size (1233/2048 units).
+const MENLO_ADVANCE: f32 = 0.602;
+/// Small-text characters that fit across the panel inside its border and padding.
+const PANEL_CHARS: usize = ((PANEL - 2.0 * (INSET + BORDER)) / (SMALL_SIZE * MENLO_ADVANCE)) as usize;
 
 /// The palette: a near-black screen, dim periwinkle window frames, amber headings.
 const SCREEN: u32 = 0x07_08_0b;
@@ -488,65 +492,118 @@ fn combat_status(game: &Game, move_slot: EarnedMoveSlot) -> Div {
 
 fn earned_move_status(game: &Game, slot: EarnedMoveSlot) -> Div {
     let learned_move = earned_move_for_slot(slot, game.maneuver().weapon);
-    let status = if !learned_move.unlocked(game.wanderer()) {
-        format!("Locked · {}", learned_move.requirement())
-    } else {
-        let mut first_error = None;
-        let mut preview = None;
-        for direction in Dir::ALL {
-            match game.preview_move(learned_move, direction) {
-                Ok(move_preview) => {
-                    preview = Some((direction, move_preview));
-                    break;
-                }
-                Err(reason) => first_error.get_or_insert(reason),
-            };
-        }
-        match preview {
-            Some((direction, move_preview)) => {
-                let direction = match direction {
-                    Dir::North => "N",
-                    Dir::South => "S",
-                    Dir::East => "E",
-                    Dir::West => "W",
-                };
-                let mut message = match learned_move {
-                    LearnedMove::SlipAway => format!("Ready · Alt+{direction} · 2 steps"),
-                    LearnedMove::Sweep => format!(
-                        "Ready · Alt+direction · {} targets · {}–{} if all hit",
-                        move_preview.targets, move_preview.min_hit, move_preview.max_hit
-                    ),
-                    _ => format!(
-                        "Ready · Alt+{direction} · {} target{} · {}–{} on hit",
-                        move_preview.targets,
-                        if move_preview.targets == 1 { "" } else { "s" },
-                        move_preview.min_hit,
-                        move_preview.max_hit
-                    ),
-                };
-                if let Some((x, y)) = move_preview.destination {
-                    message.push_str(&format!(" · you→{x},{y}"));
-                }
-                if let Some((x, y)) = move_preview.push {
-                    message.push_str(&format!(" · push→{x},{y}"));
-                } else if learned_move == LearnedMove::Shove {
-                    message.push_str(" · no room to push");
-                }
-                if move_preview.focus_gain > 0 {
-                    message.push_str(&format!(" · +{} Focus on hit", move_preview.focus_gain));
-                }
-                message
-            }
-            None => format!("Unavailable · {}", first_error.unwrap_or("no valid direction")),
-        }
-    };
+    let lines = earned_move_lines(game, slot, learned_move)
+        .into_iter()
+        .fold(div().flex().flex_col(), |lines, line| lines.child(small_line(line)));
     div()
         .flex()
         .flex_col()
         .child(pair("Move", format!("{} · {}F", learned_move.name(), learned_move.focus_cost())))
-        .child(small_line(format!("{} · {status}", slot.name())).min_w_0().truncate())
+        .child(lines)
 }
 
+/// Move status split into lines that fit the panel, so no detail is clipped.
+fn earned_move_lines(game: &Game, slot: EarnedMoveSlot, learned_move: LearnedMove) -> Vec<String> {
+    let slot = slot.name();
+    if !learned_move.unlocked(game.wanderer()) {
+        return pack_line(format!("{slot} · Locked"), &[format!("needs {}", learned_move.requirement())]);
+    }
+    let mut first_error = None;
+    for direction in Dir::ALL {
+        match game.preview_move(learned_move, direction) {
+            Ok(preview) => return ready_move_lines(slot, learned_move, direction, preview),
+            Err(reason) => {
+                first_error.get_or_insert(reason);
+            }
+        }
+    }
+    pack_line(format!("{slot} · Unavailable"), &[first_error.unwrap_or("no valid direction").to_owned()])
+}
+
+fn ready_move_lines(slot: &str, learned_move: LearnedMove, direction: Dir, preview: MovePreview) -> Vec<String> {
+    let direction = match direction {
+        Dir::North => "N",
+        Dir::South => "S",
+        Dir::East => "E",
+        Dir::West => "W",
+    };
+    let mut details = Vec::new();
+    let head = match learned_move {
+        LearnedMove::SlipAway => {
+            details.push("2 steps".to_owned());
+            format!("{slot} · Ready · Alt+{direction}")
+        }
+        LearnedMove::Sweep => {
+            details.push(format!("{} targets", preview.targets));
+            details.push(format!("{}–{} if all hit", preview.min_hit, preview.max_hit));
+            format!("{slot} · Ready · Alt+direction")
+        }
+        _ => {
+            details.push(format!("{} target{}", preview.targets, if preview.targets == 1 { "" } else { "s" }));
+            details.push(format!("{}–{} on hit", preview.min_hit, preview.max_hit));
+            format!("{slot} · Ready · Alt+{direction}")
+        }
+    };
+    if let Some((x, y)) = preview.destination {
+        details.push(format!("you→{x},{y}"));
+    }
+    if let Some((x, y)) = preview.push {
+        details.push(format!("push→{x},{y}"));
+    } else if learned_move == LearnedMove::Shove {
+        details.push("no room to push".to_owned());
+    }
+    if preview.focus_gain > 0 {
+        details.push(format!("+{} Focus on hit", preview.focus_gain));
+    }
+    pack_line(head, &details)
+}
+
+/// Put the head on its own line, then pack details with " · " and word-wrap any that are too long.
+fn pack_line(head: String, details: &[String]) -> Vec<String> {
+    let mut lines = wrap(&head);
+    let mut current = String::new();
+    for detail in details {
+        for part in wrap(detail) {
+            let joined = if current.is_empty() { part.clone() } else { format!("{current} · {part}") };
+            if joined.chars().count() <= PANEL_CHARS {
+                current = joined;
+            } else {
+                lines.push(std::mem::replace(&mut current, part));
+            }
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+fn wrap(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let mut word = word.to_owned();
+        while word.chars().count() > PANEL_CHARS {
+            if !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+            }
+            let rest = word.split_off(word.char_indices().nth(PANEL_CHARS).map_or(word.len(), |(i, _)| i));
+            lines.push(std::mem::replace(&mut word, rest));
+        }
+        if line.is_empty() {
+            line = word;
+        } else if line.chars().count() + 1 + word.chars().count() <= PANEL_CHARS {
+            line.push(' ');
+            line.push_str(&word);
+        } else {
+            lines.push(std::mem::replace(&mut line, word));
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
 fn combat_preview(game: &Game) -> Div {
     let mut previews = div().flex().flex_col();
     for direction in Dir::ALL {
@@ -1053,6 +1110,82 @@ mod tests {
         );
     }
 
+    #[test]
+    fn panel_line_width_matches_the_panel_geometry() {
+        // 324 px of text area at 12 px Menlo.
+        assert_eq!(PANEL_CHARS, 44);
+    }
+
+    fn fits(lines: &[String]) {
+        for line in lines {
+            assert!(line.chars().count() <= PANEL_CHARS, "{line:?} is wider than {PANEL_CHARS}");
+        }
+    }
+
+    #[test]
+    fn every_ready_move_fits_the_panel_without_dropping_details() {
+        let far = -9_999_999_i64;
+        for learned_move in [
+            LearnedMove::Withdraw,
+            LearnedMove::Reach,
+            LearnedMove::Shove,
+            LearnedMove::Sweep,
+            LearnedMove::SlipAway,
+            LearnedMove::Pulse,
+        ] {
+            for push in [None, Some((far, far))] {
+                let preview = MovePreview {
+                    focus: learned_move.focus_cost(),
+                    focus_gain: 99,
+                    targets: 4,
+                    min_hit: 999,
+                    max_hit: 9_999,
+                    destination: Some((far, far)),
+                    push,
+                };
+                for slot in [EarnedMoveSlot::Weapon, EarnedMoveSlot::Stealth, EarnedMoveSlot::Focus] {
+                    let lines = ready_move_lines(slot.name(), learned_move, Dir::West, preview);
+                    fits(&lines);
+                    let all = lines.join(" · ");
+                    assert!(all.contains("Ready"), "{all}");
+                    assert!(all.contains(&format!("you→{far},{far}")), "{all}");
+                    assert!(all.contains("+99 Focus on hit"), "{all}");
+                    if push.is_some() {
+                        assert!(all.contains(&format!("push→{far},{far}")), "{all}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn long_reasons_wrap_instead_of_being_cut() {
+        let reason = "Not enough Focus for the learned move. Bump strikes remain free.";
+        let lines = pack_line("Weapon · Unavailable".into(), &[reason.into(), "x".repeat(PANEL_CHARS * 2 + 3)]);
+        fits(&lines);
+        let words: Vec<_> = lines[1..].join(" ").split_whitespace().map(str::to_owned).collect();
+        assert_eq!(words[..reason.split_whitespace().count()].join(" "), reason);
+        assert_eq!(lines.concat().matches('x').count(), PANEL_CHARS * 2 + 3);
+    }
+
+    #[test]
+    fn real_move_status_lines_fit_from_locked_to_ready() {
+        let fresh = Game::new(42);
+        for slot in [EarnedMoveSlot::Weapon, EarnedMoveSlot::Stealth, EarnedMoveSlot::Focus] {
+            let lines = earned_move_lines(&fresh, slot, earned_move_for_slot(slot, fresh.maneuver().weapon));
+            fits(&lines);
+            assert!(lines[0].ends_with("Locked"), "{lines:?}");
+        }
+        let mut caster = Game::composition_trial(42, blah_core::Maneuver::backstab_burst()).unwrap();
+        for _ in 0..3 {
+            caster.use_technique(Dir::East);
+        }
+        assert!(LearnedMove::Pulse.unlocked(caster.wanderer()));
+        let lines = earned_move_lines(&caster, EarnedMoveSlot::Focus, LearnedMove::Pulse);
+        fits(&lines);
+        assert!(lines[0].starts_with("Focus · Ready"), "{lines:?}");
+        assert!(lines.join(" ").contains("Focus on hit"), "{lines:?}");
+    }
     #[test]
     fn home_hint_names_direction_and_steps() {
         assert_eq!(home_hint((0, 0), (0, 0)), "here (R rests)");
