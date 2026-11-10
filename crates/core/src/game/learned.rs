@@ -68,6 +68,7 @@ impl Game {
         let mut total = AttackResult::default();
         for (id, result) in results {
             let i = self.monsters.iter().position(|m| m.id == id).expect("distinct planned target");
+            let drawn = if result.hit && self.monsters[i].practice_left > 0 { plan.preview.focus_gain } else { 0 };
             let source = if action == LearnedMove::Pulse {
                 AttackSource::Pulse(maneuver.weapon)
             } else {
@@ -79,6 +80,10 @@ impl Game {
             total.burst = total.burst.saturating_add(result.burst);
             total.penetrated |= result.penetrated;
             total.burst_released |= result.burst_released;
+            if drawn > 0 {
+                self.wanderer.focus += drawn;
+                self.log.push(LogKind::Attack, format!("{} draws {drawn} Focus.", action.name()));
+            }
             if action == LearnedMove::Shove
                 && result.hit
                 && let Some(push) = plan.preview.push
@@ -115,6 +120,7 @@ impl Game {
             |p: (i64, i64)| self.world.tile(p.0, p.1).biome.biome().passable && self.monster_at(p.0, p.1).is_none();
         let mut preview = MovePreview {
             focus: action.focus_cost(),
+            focus_gain: 0,
             targets: 0,
             min_hit: 0,
             max_hit: 0,
@@ -164,6 +170,10 @@ impl Game {
                     if self.open_to(i, far) {
                         preview.push = Some(far);
                     }
+                }
+                if m.practice_left > 0 {
+                    let room = self.wanderer.max_focus() - (self.wanderer.focus - preview.focus);
+                    preview.focus_gain = action.focus_on_hit().min(room).max(0);
                 }
                 vec![m.id]
             }

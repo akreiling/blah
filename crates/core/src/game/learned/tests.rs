@@ -244,23 +244,46 @@ fn pulse_is_weak_free_and_cannot_train_itself_or_the_equipped_weapon() {
         game.monsters[0].practice_left = 1;
         let before = game.clone();
         let p = game.preview_move(LearnedMove::Pulse, Dir::East).unwrap();
-        assert_eq!((p.focus, p.min_hit, p.max_hit), (0, 1, 1));
+        assert_eq!((p.focus, p.focus_gain, p.min_hit, p.max_hit), (0, 2, 1, 1));
         assert_eq!(game.use_move(LearnedMove::Pulse, Dir::East), Step::Attacked);
         let result = game.last_attack.unwrap();
         assert_eq!(result.physical, 0);
         assert_eq!(game.wanderer.weapons, before.wanderer.weapons);
         assert_eq!(game.wanderer.focus_skill, before.wanderer.focus_skill);
-        assert_eq!(game.wanderer.focus, 0);
         if result.hit {
             hits += 1;
             assert_eq!(result.burst, 1);
             assert_eq!(game.monsters[0].practice_left, 0, "uses the shared damage allowance");
+            assert_eq!(game.wanderer.focus, 2, "a landed pulse draws Focus");
+            // The allowance is spent, so the same creature cannot be farmed for more Focus.
+            let p = game.preview_move(LearnedMove::Pulse, Dir::East).unwrap();
+            assert_eq!(p.focus_gain, 0);
+            for _ in 0..8 {
+                game.use_move(LearnedMove::Pulse, Dir::East);
+            }
+            assert_eq!(game.wanderer.focus, 2);
         } else {
             misses += 1;
             assert_eq!(game.monsters[0].practice_left, 1);
+            assert_eq!(game.wanderer.focus, 0);
         }
     }
     assert!(hits > 0 && misses > 0);
+}
+
+#[test]
+fn pulse_focus_never_exceeds_capacity() {
+    for seed in 0..16 {
+        let mut game = ready(seed, Weapon::Dagger);
+        game.wanderer.stats.attack = 100;
+        game.monsters[0].phenotype.stats.defense = 100;
+        game.wanderer.focus = game.wanderer.max_focus() - 1;
+        assert_eq!(game.preview_move(LearnedMove::Pulse, Dir::East).unwrap().focus_gain, 1);
+        game.use_move(LearnedMove::Pulse, Dir::East);
+        assert!(game.wanderer.focus <= game.wanderer.max_focus());
+        game.wanderer.focus = game.wanderer.max_focus();
+        assert_eq!(game.preview_move(LearnedMove::Pulse, Dir::East).unwrap().focus_gain, 0);
+    }
 }
 
 #[test]
@@ -309,7 +332,9 @@ proptest! {
             if let Ok(p) = preview {
                 prop_assert_eq!(game.turn, before.turn + 1 + u64::from(game.deaths - before.deaths) * DEATH_TURNS);
                 if game.deaths == before.deaths {
-                    prop_assert_eq!(game.wanderer.focus, before.wanderer.focus - p.focus);
+                    let hit = result == Step::Attacked && game.last_attack.unwrap().hit;
+                    let gain = if hit { p.focus_gain } else { 0 };
+                    prop_assert_eq!(game.wanderer.focus, before.wanderer.focus - p.focus + gain);
                     if let Some(destination) = p.destination { prop_assert_eq!(game.position, destination); }
                     if result == Step::Attacked {
                         prop_assert!(game.last_attack.unwrap().total() <= p.max_hit);

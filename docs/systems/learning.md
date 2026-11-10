@@ -83,12 +83,13 @@ bump strikes remain free. Moves and skills are not saved across application rest
 | Club | **Shove** | 3 | Strike an adjacent target; on a hit, push a survivor one tile directly away if that creature can occupy the tile. The strike still works when there is no room to push. |
 | Staff | **Sweep** | 4 | Strike every cardinally adjacent target once. Diagonals are not included; Focus is paid once for the whole sweep. |
 | Stealth | **Slip away** | 4 | Move two empty, passable tiles in one direction in one turn and enter sneaking. The ordinary final observation decides whether tracking is broken. |
-| Focus | **Pulse** | 0 | Make a weak adjacent magic attack for 1 damage on a hit. It can be used at zero Focus, trains neither weapon nor Focus, and consumes the target's shared finite damage-learning allowance when it lands. |
+| Focus | **Pulse** | 0 | Make a weak adjacent magic attack for 1 damage on a hit. It can be used at zero Focus and trains neither weapon nor Focus. A hit that spends the target's shared finite damage-learning allowance draws 2 Focus back, up to capacity; that allowance never refills, so a creature cannot be farmed. |
 
 Every accepted move takes one turn. Its Focus cost is paid once, including on a miss; Pulse costs
 nothing. Invalid range, blocked movement, insufficient Focus, or a locked move spends neither Focus
 nor a turn. Weapon moves use the ordinary trained basic strike, not the prepared aim or payload.
-Previews and logs identify valid targets, damage bounds, movement, optional pushes, and Focus cost.
+Previews and logs identify valid targets, damage bounds, movement, optional pushes, Focus cost, and
+any Focus a hit would draw.
 
 In the app, **Tab** cycles the Weapon, Stealth, and Focus slots. **Alt + direction** uses the selected
 move; the Weapon slot follows the currently equipped family. The status panel shows its lock or a
@@ -156,25 +157,29 @@ with matching move-aware variants on the same 16 seeds and six styles, for 96 ru
 run starts from `Game::new`; ranks, Focus, and move unlocks are earned normally. The move-aware pilot
 uses weapon moves when they have a valid opportunity, tries Reach before a one-tile advance, uses
 Shove only when a push is possible, sweeps only when at least two targets are adjacent, slips away
-while retreating when its route is valid and no observed pursuer gets closer, and tries Pulse when its
-caster cannot afford the prepared technique. This is a simple policy probe, not an optimal player model.
+while retreating when its route is valid and no observed pursuer gets closer, and has its caster use
+Pulse only when the Focus it draws would afford the next prepared technique. This is a simple policy
+probe, not an optimal player model.
 
 The output adds final Health/Focus per run and a move table: runs unlocking the skill, median unlock
-action, affordable opportunities, uses, hit actions, actual damage, Focus spent, movement steps, and
+action, affordable opportunities, uses, hit actions, actual damage, Focus spent, Focus drawn, movement steps, and
 successful Shove pushes. An opportunity means at least one direction passed the real move preview.
 The paired policies share seeds and initial styles, but their later worlds diverge because their
 actions differ.
 
 | Policy pair | Total deaths, no moves → moves | Death-free runs, no moves → moves | Mean kills/run, no moves → moves | Mean Focus left, no moves → moves |
 | --- | ---: | ---: | ---: | ---: |
-| Baseline | 95 → 148 | 45/96 → 50/96 | 59.82 → 58.39 | 20.69 → 11.52 |
+| Baseline | 95 → 74 | 45/96 → 57/96 | 59.82 → 59.79 | 20.69 → 12.24 |
 | Cautious | 77 → 72 | 60/96 → 62/96 | 7.34 → 6.53 | 22.43 → 4.89 |
 
-The mixed baseline result is largely driven by Pulse: the caster policy chose it 1,728 times, but
-cumulative kills fell by 8.5 per caster run and deaths rose by 76 across the 16 caster runs. Pulse's
-one damage is a poor automatic fallback when the same character still has a free weapon strike.
-Because Pulse is optional, this is not a forced-player failure, but its role needs a separate design
-decision if it is meant to compete rather than offer a thematic alternative.
+Pulse was first a free 1-damage strike with no other effect. A caster that used it whenever it could
+not afford its technique replaced nearly every staff strike: all 16 such runs ended with a novice
+staff (versus one in 16 without moves), kills fell by 8.5 per caster run, and deaths rose from 8 to 84.
+Pulse now draws 2 Focus on a hit. That alone was not enough while it still displaced every strike
+(62 deaths). Used only to top up the next cast, it was chosen 151 times, drew 280 Focus, and gave
+11.7 more casts per caster run, with kills unchanged (46.56 → 46.50) and deaths 8 → 10. A 1-Focus
+draw almost never completed a cast (12 uses); a 3-Focus draw added no more casts and had 12 deaths.
+Constant use of Pulse remains a poor choice because it starves weapon practice.
 
 The other moves had different results. In the baseline-move runs, spear Reach was used 499 times
 (2,612 actual damage for 998 Focus), club Shove 601 times (307 pushes), staff Sweep 50 times across
@@ -184,10 +189,12 @@ with 1.81 more mean kills per run and 13 fewer total deaths. Shove and Withdraw 
 survival and kill changes. These are policy-level associations, not isolated causal estimates.
 
 **Decision:** retain the current Focus costs (Withdraw 3, Reach 2, Shove 3, Sweep 4, Slip away 4,
-Pulse 0). The small sample supports Reach and Sweep as useful choices, but does not justify a broad
-cost change; the aggressive and cautious policies also trade different amounts of Focus for different
-outcomes. Do not automatically prefer Pulse over the free strike. These numbers are provisional, and
-the probe does not measure human use or late-rank moves.
+Pulse 0) and give Pulse a 2-Focus draw on a hit. The small sample supports Reach and Sweep as useful
+choices, but does not justify a broad cost change; the aggressive and cautious policies also trade
+different amounts of Focus for different outcomes. Pulse pays off as a top-up for the next cast, not
+as a replacement for the free strike. The cautious caster rarely earns it (2 of 16 runs), so its
+effect there is unmeasured. These numbers are provisional, and the probe does not measure human use
+or late-rank moves.
 
 ## Award learning from outcomes
 

@@ -107,6 +107,7 @@ struct MoveStats {
     targets: u64,
     damage: u64,
     focus_spent: u64,
+    focus_drawn: u64,
     steps: u64,
     pushes: u64,
 }
@@ -182,9 +183,12 @@ fn move_aware_action(game: &Game, style: Style, retreating: bool, fallback: Acti
     let weapon_move = LearnedMove::for_weapon(game.maneuver().weapon);
     match fallback {
         Action::Strike(dir) => {
+            let cost = game.maneuver().technique.focus_cost();
+            let focus = game.wanderer().focus;
+            // Pulse only to top up the next cast; pulsing every turn would starve weapon practice.
             if matches!(style, Style::Caster)
-                && game.wanderer().focus < game.maneuver().technique.focus_cost()
-                && game.preview_move(LearnedMove::Pulse, dir).is_ok()
+                && focus < cost
+                && game.preview_move(LearnedMove::Pulse, dir).is_ok_and(|p| focus + p.focus_gain >= cost)
             {
                 return Action::Learned(LearnedMove::Pulse, dir);
             }
@@ -378,6 +382,9 @@ fn record_move_use(
         game.last_attack().filter(|attack| attack.hit).map_or(0, |attack| attack.total().min(remaining).max(0) as u64)
     };
     metric.focus_spent += preview.focus.max(0) as u64;
+    if game.last_attack().is_some_and(|attack| attack.hit) {
+        metric.focus_drawn += preview.focus_gain.max(0) as u64;
+    }
     if game.deaths() == deaths_before {
         metric.steps += manhattan(start, game.position());
     }
@@ -585,7 +592,7 @@ fn main() -> Result<(), String> {
         }
     }
     println!(
-        "\npolicy,style,move,unlocked_runs,unlock_action_median,available_opportunities,uses,hit_actions,targets,damage,focus_spent,steps,pushes"
+        "\npolicy,style,move,unlocked_runs,unlock_action_median,available_opportunities,uses,hit_actions,targets,damage,focus_spent,focus_drawn,steps,pushes"
     );
     for &policy in policies {
         for style in Style::ALL {
@@ -599,7 +606,7 @@ fn main() -> Result<(), String> {
                 let unlock_median = median(&mut unlocks).map_or_else(|| "-".into(), |n| n.to_string());
                 let sum = |f: fn(&MoveStats) -> u64| runs.iter().map(|r| f(&r.moves[index])).sum::<u64>();
                 println!(
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                     policy.name(),
                     style.name(),
                     learned.name(),
@@ -611,6 +618,7 @@ fn main() -> Result<(), String> {
                     sum(|m| m.targets),
                     sum(|m| m.damage),
                     sum(|m| m.focus_spent),
+                    sum(|m| m.focus_drawn),
                     sum(|m| m.steps),
                     sum(|m| m.pushes)
                 );
@@ -681,6 +689,7 @@ mod tests {
         assert!(pulse.hit_actions > 0);
         assert!(pulse.damage > 0);
         assert_eq!(pulse.focus_spent, 0);
+        assert!(pulse.focus_drawn > 0);
     }
 
     #[test]

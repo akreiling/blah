@@ -17,6 +17,7 @@ pub enum LearnedMove {
     /// Two quiet steps in one turn, without magically erasing tracking.
     SlipAway,
     /// A free adjacent magic pulse: one damage on a hit, without weapon or Focus practice.
+    /// A hit that does real damage draws Focus back from the target.
     Pulse,
 }
 
@@ -53,6 +54,16 @@ impl LearnedMove {
             Self::Reach => 2,
             Self::Sweep | Self::SlipAway => 4,
             Self::Pulse => 0,
+        }
+    }
+
+    /// Focus regained by a hit that spends the target's finite damage allowance, up to capacity.
+    /// The allowance never refills, so a creature cannot be farmed for unbounded Focus.
+    #[must_use]
+    pub const fn focus_on_hit(self) -> i32 {
+        match self {
+            Self::Pulse => 2,
+            Self::Withdraw | Self::Reach | Self::Shove | Self::Sweep | Self::SlipAway => 0,
         }
     }
 
@@ -98,6 +109,8 @@ impl LearnedMove {
 pub struct MovePreview {
     /// Focus paid once, not per target or tile.
     pub focus: i32,
+    /// Focus regained if the strike lands, already limited by capacity and the target's allowance.
+    pub focus_gain: i32,
     /// Number of creatures struck.
     pub targets: usize,
     /// Sum of minimum damage if every strike lands. Misses can reduce this to zero.

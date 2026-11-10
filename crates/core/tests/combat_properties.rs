@@ -216,7 +216,8 @@ fn check(
         prop_assert_eq!(focus - f, p.focus, "area discharge cost differs from preview");
     }
     if let (Some(p), Step::Attacked, false) = (previews.learned, result, died) {
-        prop_assert_eq!(focus - f, p.focus, "learned move cost differs from preview");
+        let gain = if g.last_attack().is_some_and(|hit| hit.hit) { p.focus_gain } else { 0 };
+        prop_assert_eq!(focus - f, p.focus - gain, "learned move Focus differs from preview");
         if let Some(hit) = g.last_attack() {
             if hit.hit {
                 prop_assert!(hit.total() <= p.max_hit, "{:?} exceeds {:?}", hit, p);

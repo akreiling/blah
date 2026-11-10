@@ -133,8 +133,10 @@ fn unseen_movement_earns_slip_and_real_paid_hits_earn_the_depleted_casters_pulse
         .expect("the sentinel follows the retreat");
     let focus_skill = caster.wanderer().focus_skill;
     let weapon_skill = caster.wanderer().weapons;
+    let gain = caster.preview_move(LearnedMove::Pulse, direction).unwrap().focus_gain;
     assert_eq!(caster.use_move(LearnedMove::Pulse, direction), Step::Attacked);
-    assert_eq!(caster.wanderer().focus, 0);
+    let hit = caster.last_attack().unwrap().hit;
+    assert_eq!(caster.wanderer().focus, if hit { gain } else { 0 }, "a depleted caster draws Focus back");
     assert_eq!(caster.wanderer().focus_skill, focus_skill);
     assert_eq!(caster.wanderer().weapons, weapon_skill);
     assert_eq!(caster.log().lines().filter(|line| line.starts_with("Learned Pulse.")).count(), 1);

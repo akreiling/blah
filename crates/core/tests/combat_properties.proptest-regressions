@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 737fc29423bd21cb4c2c6ecb5b8fd77ec88ea72c42134a4e01de03ce56b87776 # shrinks to seed = 1519477879959012546, m = Maneuver { name: "Generated", weapon: Staff, technique: Technique { delivery: Weapon, aim: Direct, burst: Some(Burst { power: 4, trigger: Contact, element: Force, shape: Point }) } }, actions = [Sneak, Step(East), Wait, Technique(East), Technique(East), Wait, Step(South), Step(North), Step(North), Step(North), Step(North), Technique(North), Learned(Pulse, North)]

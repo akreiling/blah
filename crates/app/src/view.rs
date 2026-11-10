@@ -532,6 +532,9 @@ fn earned_move_status(game: &Game, slot: EarnedMoveSlot) -> Div {
                 } else if learned_move == LearnedMove::Shove {
                     message.push_str(" · no room to push");
                 }
+                if move_preview.focus_gain > 0 {
+                    message.push_str(&format!(" · +{} Focus on hit", move_preview.focus_gain));
+                }
                 message
             }
             None => format!("Unavailable · {}", first_error.unwrap_or("no valid direction")),
