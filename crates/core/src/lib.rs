@@ -45,6 +45,7 @@ mod genome;
 mod hash;
 mod life;
 mod monster;
+mod moves;
 mod names;
 mod noise;
 mod phenotype;
@@ -72,6 +73,7 @@ pub use life::{
     compare, evolve, fitness, founders, generations, grow_pool, potential, reach_toward,
 };
 pub use monster::{ACTION_COST, MAX_ACTIONS, MISS_CHANCE, Monster, MonsterId, WANDERER_STATS, Wanderer, damage};
+pub use moves::{LearnedMove, MovePreview};
 pub use phenotype::{
     AGGRESSIVE_AT, AQUATIC_AT, Access, COVERINGS, Covering, CoveringTraits, HARDY_AT, Phenotype, SKITTISH_BELOW,
     SWIM_AT, Stats, Temperament, WADE_AT,

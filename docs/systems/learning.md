@@ -6,9 +6,9 @@ Proposed design. See the decisions document for committed direction versus proto
 
 ## Implemented prototype: weapon practice
 
-Stage 1 of skill growth is in [`skills.rs`](../../crates/core/src/skills.rs). Stage 2, Focus and
-stealth, is described below. Stage 3 adds measured pacing probes and a first stealth tuning pass.
-Move unlocks and saving come later.
+Stage 1 of skill growth is in [`skills.rs`](../../crates/core/src/skills.rs). Stage 2 adds Focus and
+stealth, and stage 4 adds first-rank move unlocks. Stage 3 measured pacing and tuned stealth evidence.
+Moves are implemented; saving is not.
 
 - **What trains:** physical damage from weapon delivery (a free strike or a weapon technique) that actually
   lands. Misses, waiting, moving, resting, sneaking, dying, refitting, and elapsed turns teach nothing.
@@ -68,6 +68,31 @@ Stealth effects, by rank (novice, practiced, skilled, adept, expert):
 The panel shows the Focus and stealth ranks beside the weapon rank, and the log announces each rank
 gained. In the dagger trial, one opening strike on the threat-133 sentinel earns 798 stealth practice,
 below *practiced*. Two paid technique hits still take Focus to *practiced*.
+
+## Implemented prototype: practiced-rank moves
+
+The first move for a skill unlocks automatically when its character-owned rank reaches *practiced*.
+There is no separate unlock ledger. Weapon moves also require that weapon family to be equipped, but
+earning a move survives refitting and death. The prepared technique is never replaced, and ordinary
+bump strikes remain free. Moves and skills are not saved across application restarts.
+
+| Skill | Move | Focus | Effect |
+| --- | --- | ---: | --- |
+| Dagger | **Withdraw** | 3 | Strike an adjacent target, then step one tile directly away, even on a miss. Requires an empty, passable retreat tile. |
+| Spear | **Reach** | 2 | Strike a target exactly two tiles away through one empty, passable intervening tile. |
+| Club | **Shove** | 3 | Strike an adjacent target; on a hit, push a survivor one tile directly away if that creature can occupy the tile. The strike still works when there is no room to push. |
+| Staff | **Sweep** | 4 | Strike every cardinally adjacent target once. Diagonals are not included; Focus is paid once for the whole sweep. |
+| Stealth | **Slip away** | 4 | Move two empty, passable tiles in one direction in one turn and enter sneaking. The ordinary final observation decides whether tracking is broken. |
+| Focus | **Pulse** | 0 | Make a weak adjacent magic attack for 1 damage on a hit. It can be used at zero Focus, trains neither weapon nor Focus, and consumes the target's shared finite damage-learning allowance when it lands. |
+
+Every accepted move takes one turn. Its Focus cost is paid once, including on a miss; Pulse costs
+nothing. Invalid range, blocked movement, insufficient Focus, or a locked move spends neither Focus
+nor a turn. Weapon moves use the ordinary trained basic strike, not the prepared aim or payload.
+Previews and logs identify valid targets, damage bounds, movement, optional pushes, and Focus cost.
+
+In the app, **Tab** cycles the Weapon, Stealth, and Focus slots. **Alt + direction** uses the selected
+move; the Weapon slot follows the currently equipped family. The status panel shows its lock or a
+current preview. See [the move controls](composition-poc.md#try-it) for the full key list.
 
 ## Stage 3: measured prototype pacing
 

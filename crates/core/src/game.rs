@@ -27,6 +27,41 @@ use crate::skills::Rank;
 use crate::sprite::Sprite;
 use crate::world::{Tile, World};
 
+mod learned;
+
+/// Provenance for shared damage and practice accounting.
+enum AttackSource<'a> {
+    Maneuver(&'a Maneuver),
+    Pulse(crate::Weapon),
+}
+
+impl AttackSource<'_> {
+    fn weapon(&self) -> crate::Weapon {
+        match self {
+            Self::Maneuver(m) => m.weapon,
+            Self::Pulse(weapon) => *weapon,
+        }
+    }
+
+    fn is_weapon(&self) -> bool {
+        matches!(self, Self::Maneuver(m) if m.technique.delivery == Delivery::Weapon)
+    }
+
+    fn has_payload(&self) -> bool {
+        match self {
+            Self::Maneuver(m) => m.technique.burst.is_some(),
+            Self::Pulse(_) => true,
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Self::Maneuver(m) => &m.name,
+            Self::Pulse(_) => crate::LearnedMove::Pulse.name(),
+        }
+    }
+}
+
 /// Lines the message log keeps. Older lines fall off the front.
 pub const LOG_LIMIT: usize = 100;
 
@@ -861,28 +896,37 @@ impl Game {
     }
 
     /// Log a newly reached rank.
-    fn announce(&mut self, skill: &str, rank: Rank) {
+    fn announce(&mut self, skill: &str, before: Rank, rank: Rank, action: crate::LearnedMove) {
         self.log.push(LogKind::Learning, format!("Your {skill} is now {}.", rank.name()));
+        if before == Rank::Novice {
+            self.log
+                .push(LogKind::Learning, format!("Learned {}. Tab selects; Alt + direction uses it.", action.name()));
+        }
     }
 
     /// Credit Focus spent on a technique that did real damage to a creature of this threat.
     fn learn_focus(&mut self, spent: i32, threat: u32) {
+        let before = self.wanderer.focus_skill.rank();
         let evidence = u32::try_from(spent.max(0)).unwrap_or(0).saturating_mul(threat);
         if self.wanderer.focus_skill.learn(evidence, Rank::ceiling(threat)) {
-            self.announce("Focus", self.wanderer.focus_skill.rank());
+            self.announce("Focus", before, self.wanderer.focus_skill.rank(), crate::LearnedMove::Pulse);
         }
     }
 
     /// Spend up to `units` of monster `i`'s stealth lessons, scaled by its threat. Returns whether the
-    /// stealth rank rose; the caller logs it, so the line lands after the action's own messages.
-    fn stealth_lesson(&mut self, i: usize, units: i32) -> bool {
+    /// previous rank if it rose; the caller logs it after the action's own messages.
+    fn stealth_lesson(&mut self, i: usize, units: i32) -> Option<Rank> {
         let threat = self.monsters[i].weapon_threat(&self.wanderer, self.maneuver.weapon);
         let ceiling = Rank::ceiling(threat);
         if ceiling == Rank::Novice {
-            return false;
+            return None;
         }
         let spent = self.monsters[i].spend_stealth(units);
-        self.wanderer.stealth.learn(spent.saturating_mul(threat).saturating_mul(STEALTH_PRACTICE), ceiling)
+        let before = self.wanderer.stealth.rank();
+        self.wanderer
+            .stealth
+            .learn(spent.saturating_mul(threat).saturating_mul(STEALTH_PRACTICE), ceiling)
+            .then_some(before)
     }
 
     /// The tile one step from the wanderer in `dir`.
@@ -1036,14 +1080,20 @@ impl Game {
         let context = self.attack_context(&self.monsters[index]);
         let training = self.wanderer.training(maneuver.weapon);
         let result = maneuver.resolve_trained(context, training, rng).expect("attack maneuvers are validated");
-        let threat = self.monsters[index].weapon_threat(&self.wanderer, maneuver.weapon);
+        self.wanderer.focus -= maneuver.technique.focus_cost();
+        self.record_attack(index, result, AttackSource::Maneuver(maneuver), maneuver.technique.focus_cost());
+    }
+
+    /// Apply a pre-resolved strike with the same finite damage allowance for every delivery.
+    /// Returns credited threat, so a multi-target action can teach Focus once, not once per target.
+    fn record_attack(&mut self, index: usize, result: AttackResult, source: AttackSource<'_>, focus_paid: i32) -> u32 {
+        let weapon = source.weapon();
+        let before = self.wanderer.weapons.get(weapon).rank();
+        let threat = self.monsters[index].weapon_threat(&self.wanderer, weapon);
         let opportunity = self.monsters[index].spend_practice(result.total());
         let physical = opportunity.min(result.physical.max(0) as u32);
-        let improved = maneuver.technique.delivery == Delivery::Weapon
-            && self.wanderer.weapons.learn(maneuver.weapon, physical, threat);
-        let stealthier = result.opening && self.stealth_lesson(index, OPENING_LESSON);
-        let focus_cost = if opportunity > 0 { maneuver.technique.focus_cost() } else { 0 };
-        self.wanderer.focus -= maneuver.technique.focus_cost();
+        let improved = source.is_weapon() && self.wanderer.weapons.learn(weapon, physical, threat);
+        let stealthier = if result.opening { self.stealth_lesson(index, OPENING_LESSON) } else { None };
         self.last_attack = Some(result);
         // Even a miss reveals the attempt. No repeated surprise by toggling sneak.
         self.sneaking = false;
@@ -1054,17 +1104,17 @@ impl Game {
         } else {
             monster.hp = monster.hp.saturating_sub(result.total());
             self.log.push(LogKind::Attack, format!("You hit the {} for {}.", monster.name, result.total()));
-            if maneuver.technique.burst.is_some() || result.opening {
+            if source.has_payload() || result.opening {
                 let detail = if result.amplified {
                     "unguarded placement amplifies the burst"
-                } else if maneuver.technique.burst.is_some() && !result.burst_released {
+                } else if source.has_payload() && !result.burst_released {
                     "no penetration; the burst does not release"
                 } else {
                     "no amplified placement"
                 };
                 self.log.push(
                     LogKind::Attack,
-                    format!("{}: {} physical + {} burst; {detail}.", maneuver.name, result.physical, result.burst),
+                    format!("{}: {} physical + {} burst; {detail}.", source.name(), result.physical, result.burst),
                 );
             }
             if monster.hp <= 0 {
@@ -1073,13 +1123,19 @@ impl Game {
             }
         }
         if improved {
-            let skill = format!("{} skill", maneuver.weapon.name().to_lowercase());
-            self.announce(&skill, self.wanderer.weapons.get(maneuver.weapon).rank());
+            let skill = format!("{} skill", weapon.name().to_lowercase());
+            self.announce(
+                &skill,
+                before,
+                self.wanderer.weapons.get(weapon).rank(),
+                crate::LearnedMove::for_weapon(weapon),
+            );
         }
-        self.learn_focus(focus_cost, threat);
-        if stealthier {
-            self.announce("stealth", self.wanderer.stealth.rank());
+        self.learn_focus(if opportunity > 0 { focus_paid } else { 0 }, threat);
+        if let Some(before) = stealthier {
+            self.announce("stealth", before, self.wanderer.stealth.rank(), crate::LearnedMove::SlipAway);
         }
+        if opportunity > 0 { threat } else { 0 }
     }
 
     /// Every monster acts, in order of appearance, as often as its speed allows, each drawing from its own
@@ -1103,8 +1159,10 @@ impl Game {
             } else {
                 0
             };
-            if lesson > 0 && self.stealth_lesson(i, lesson) {
-                self.announce("stealth", self.wanderer.stealth.rank());
+            if lesson > 0
+                && let Some(before) = self.stealth_lesson(i, lesson)
+            {
+                self.announce("stealth", before, self.wanderer.stealth.rank(), crate::LearnedMove::SlipAway);
             }
             let mut rng = Rng::keyed(self.world.seed(), b"monsters", &[self.turn, self.monsters[i].id.0]);
             self.monsters[i].energy += self.monsters[i].phenotype.stats.speed;
@@ -2489,7 +2547,7 @@ mod tests {
             if game.wanderer.weapons.get(crate::Weapon::Dagger).rank() >= crate::Rank::Practiced {
                 let preview = game.preview_strike(Dir::East).unwrap();
                 assert_eq!(preview.max_hit, initial.max_hit + 1);
-                assert_eq!(game.log.entries().filter(|e| e.kind == LogKind::Learning).count(), 1);
+                assert_eq!(game.log.entries().filter(|e| e.kind == LogKind::Learning).count(), 2);
                 assert!(game.log.lines().any(|line| line == "Your dagger skill is now practiced."));
                 return;
             }

@@ -44,6 +44,16 @@ actions!(
         TechniqueEast,
         /// Use the prepared technique west.
         TechniqueWest,
+        /// Use the selected earned move north.
+        EarnedMoveNorth,
+        /// Use the selected earned move south.
+        EarnedMoveSouth,
+        /// Use the selected earned move east.
+        EarnedMoveEast,
+        /// Use the selected earned move west.
+        EarnedMoveWest,
+        /// Select the next earned-move slot.
+        CycleEarnedMove,
         /// Stay put for a turn.
         Wait,
         /// Open the composition workshop.
@@ -91,18 +101,22 @@ fn keymap() -> Vec<KeyBinding> {
     for key in ["up", "k", "w"] {
         bindings.push(KeyBinding::new(key, MoveNorth, None));
         bindings.push(KeyBinding::new(&format!("shift-{key}"), TechniqueNorth, None));
+        bindings.push(KeyBinding::new(&format!("alt-{key}"), EarnedMoveNorth, None));
     }
     for key in ["down", "j", "s"] {
         bindings.push(KeyBinding::new(key, MoveSouth, None));
         bindings.push(KeyBinding::new(&format!("shift-{key}"), TechniqueSouth, None));
+        bindings.push(KeyBinding::new(&format!("alt-{key}"), EarnedMoveSouth, None));
     }
     for key in ["right", "l", "d"] {
         bindings.push(KeyBinding::new(key, MoveEast, None));
         bindings.push(KeyBinding::new(&format!("shift-{key}"), TechniqueEast, None));
+        bindings.push(KeyBinding::new(&format!("alt-{key}"), EarnedMoveEast, None));
     }
     for key in ["left", "h", "a"] {
         bindings.push(KeyBinding::new(key, MoveWest, None));
         bindings.push(KeyBinding::new(&format!("shift-{key}"), TechniqueWest, None));
+        bindings.push(KeyBinding::new(&format!("alt-{key}"), EarnedMoveWest, None));
     }
     for key in [".", "space"] {
         bindings.push(KeyBinding::new(key, Wait, None));
@@ -111,6 +125,7 @@ fn keymap() -> Vec<KeyBinding> {
         bindings.push(KeyBinding::new(key, Quit, None));
     }
     bindings.extend([
+        KeyBinding::new("tab", CycleEarnedMove, None),
         KeyBinding::new("m", OpenWorkshop, None),
         KeyBinding::new("escape", CancelWorkshop, None),
         KeyBinding::new("enter", PrepareWorkshop, None),
@@ -313,5 +328,31 @@ mod tests {
             }
         }
         assert!(!keymap().is_empty(), "all configured keystrokes must parse");
+    }
+
+    #[test]
+    fn earned_move_keybindings_cover_tab_and_alt_direction_aliases() {
+        let bindings: Vec<_> = keymap().iter().map(|binding| format!("{binding:?}")).collect();
+        for (action, directions) in [
+            ("EarnedMoveNorth", ["up", "k", "w"]),
+            ("EarnedMoveSouth", ["down", "j", "s"]),
+            ("EarnedMoveEast", ["right", "l", "d"]),
+            ("EarnedMoveWest", ["left", "h", "a"]),
+        ] {
+            for direction in directions {
+                assert!(
+                    bindings.iter().any(|binding| {
+                        binding.contains(action)
+                            && binding.contains("alt: true")
+                            && binding.contains(&format!("key: \"{direction}\""))
+                    }),
+                    "missing Alt+{direction} binding for {action}: {bindings:#?}"
+                );
+            }
+        }
+        assert!(
+            bindings.iter().any(|binding| binding.contains("CycleEarnedMove") && binding.contains("key: \"tab\"")),
+            "missing Tab slot-cycle binding: {bindings:#?}"
+        );
     }
 }

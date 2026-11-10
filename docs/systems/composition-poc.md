@@ -4,9 +4,11 @@
 
 This is a narrow executable proof, not the full advancement system. It deliberately gives the player
 developer equipment and known components. Foundations, earned adaptations, saved techniques, remote
-naming, and Jev calls are **not implemented**. Weapon, Focus, and stealth practice are implemented; see
+naming, and Jev calls are **not implemented**. Weapon, Focus, and stealth practice plus first-rank
+moves are implemented; see
 [weapon practice](learning.md#implemented-prototype-weapon-practice) and
-[Focus and stealth practice](learning.md#implemented-prototype-focus-and-stealth-practice).
+[Focus and stealth practice](learning.md#implemented-prototype-focus-and-stealth-practice) and
+[practiced-rank moves](learning.md#implemented-prototype-practiced-rank-moves).
 
 ## Try it
 
@@ -39,6 +41,11 @@ uses the prepared technique against an adjacent target. **F** discharges a groun
 without an adjacent target. A basic strike is available at any Focus total, with any prepared delivery.
 It uses the equipped weapon, never the prepared aim or payload. It still takes a turn, can miss,
 reveals the player, and permits retaliation. It neither changes the preparation nor swaps equipment.
+
+**Earned moves:** **Tab** cycles the Weapon, Stealth, and Focus slots. **Alt + direction** uses the
+selected move. The Weapon slot follows the equipped weapon; each move unlocks at *practiced* rank
+and leaves the prepared technique unchanged. Locked requirements, Focus costs, and valid action
+previews appear in the status panel. See [move effects and costs](learning.md#implemented-prototype-practiced-rank-moves).
 
 ## Composition, not recipe lookup
 

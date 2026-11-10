@@ -15,6 +15,10 @@ See [current controls and regression coverage](composition-poc.md).
 recovery failures below describe the older rule, not the current slice. See
 [retreat and recovery](retreat-recovery.md) for current matched-seed measurements.
 
+The 4,272-trajectory loadout survey below predates practiced-rank moves and does not measure their
+combat or retreat value. Their current rules and controls are documented in the
+[composition proof](composition-poc.md) and [learning notes](learning.md).
+
 ## Reproduce
 
 ```sh
@@ -77,12 +81,12 @@ strikes after exhausting it.
 ## Property tests
 
 [`combat_properties.rs`](../../crates/core/tests/combat_properties.rs) uses proptest to generate a random
-seed, any of the 356 legal structures, and random player action sequences (steps, techniques, waits, sneak, recover,
-discharge, attempted re-preparation). These must always hold, and do:
+seed, any of the 356 legal structures, and random player action sequences (steps, techniques, learned
+moves, waits, sneak, recover, discharge, attempted re-preparation). These must always hold, and do:
 
-- Focus stays within 0–24. Blocked actions change nothing but the log. Every other action passes time.
-- `can_step` agrees with `step`. Hits land inside their preview's range, and attack and area costs match
-  their previews.
+- Focus stays within its current 0–32 cap. Blocked actions change nothing but the log. Every other action passes time.
+- `can_step` agrees with `step`. Hits stay within their preview's damage bounds, and attack, area, and
+  learned-move costs match their previews.
 - Same seed, loadout, and inputs give the same game. Renaming a maneuver changes no outcome.
 
 Running out of Focus blocks costly techniques, not weapon strikes. For example, the cheapest area spell
@@ -150,15 +154,19 @@ penetration payload when armor prevents the trigger. That distinction is worth p
 
 ## Missing rather than merely unbalanced
 
-Only Force and Fire payloads exist. The prototype has no executable frost, poison, wards, healing,
-bindings, persistent effects, ranged delivery, interruptible casting, or defensive reactions.
-Physical variation is force, precision, piercing, and ground capability, not reach, tempo, knockback,
-evasion, stamina, or positioning techniques. There is no earned specialization or practice loop.
+At the time of this historical survey, only Force and Fire payloads existed. The prototype had no
+executable frost, poison, wards, healing, bindings, persistent effects, ranged delivery, interruptible
+casting, or defensive reactions. Its physical variation was force, precision, piercing, and ground
+capability, not reach, tempo, knockback, evasion, stamina, or positioning techniques.
 
-Consequently many legal permutations are numerically different expressions of the same action, or
-mechanically redundant. Enumerating them is useful for finding traps, but does not prove expressive
-character identities. More vocabulary alone would not fix mandatory costly attacks, blocked recovery,
-or weapon choices that lack a distinct advantage.
+The current slice adds only first-rank earned moves: Reach, Shove, Withdraw, and Slip away provide
+limited reach, knockback, retreat, and quiet movement. Broader specializations and the other listed
+mechanics remain unimplemented; the historical survey below did not evaluate the new moves.
+
+Consequently many legal permutations in that survey were numerically different expressions of the
+same action, or mechanically redundant. Enumerating them is useful for finding traps, but does not
+prove expressive character identities. More vocabulary alone would not fix mandatory costly attacks,
+blocked recovery, or weapon choices that lack a distinct advantage.
 
 This investigation does not diagnose keyboard focus, validate live rendering, or prove that any policy
 is optimal. No proposed feature is marked implemented by this report.

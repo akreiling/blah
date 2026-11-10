@@ -10,17 +10,18 @@ use gpui::{
 };
 
 use blah_core::{
-    Aim, Comparison, Delivery, Dir, Element, Game, Gene, LogKind, MAX_AREA_RADIUS, MAX_BURST_POWER, Monster, Shape,
-    SpeciesId, Tile, Trigger, VIEW_RADIUS, hash_point,
+    Aim, Comparison, Delivery, Dir, Element, Game, Gene, LearnedMove, LogKind, MAX_AREA_RADIUS, MAX_BURST_POWER,
+    Monster, Shape, SpeciesId, Tile, Trigger, VIEW_RADIUS, Weapon, hash_point,
 };
 
 use crate::sprites::{Key, SPRITE_PX, SpriteCache};
 use crate::workshop::{Edit, Workshop};
 use crate::{
-    CancelWorkshop, MoveEast, MoveNorth, MoveSouth, MoveWest, OpenWorkshop, PrepareWorkshop, RecoverFocus,
-    TechniqueEast, TechniqueNorth, TechniqueSouth, TechniqueWest, ToggleSneak, Unleash, Wait, WorkshopAim,
-    WorkshopDaggerExample, WorkshopDelivery, WorkshopElement, WorkshopPayload, WorkshopPowerDown, WorkshopPowerUp,
-    WorkshopShape, WorkshopStaffExample, WorkshopTrigger, WorkshopWeapon,
+    CancelWorkshop, CycleEarnedMove, EarnedMoveEast, EarnedMoveNorth, EarnedMoveSouth, EarnedMoveWest, MoveEast,
+    MoveNorth, MoveSouth, MoveWest, OpenWorkshop, PrepareWorkshop, RecoverFocus, TechniqueEast, TechniqueNorth,
+    TechniqueSouth, TechniqueWest, ToggleSneak, Unleash, Wait, WorkshopAim, WorkshopDaggerExample, WorkshopDelivery,
+    WorkshopElement, WorkshopPayload, WorkshopPowerDown, WorkshopPowerUp, WorkshopShape, WorkshopStaffExample,
+    WorkshopTrigger, WorkshopWeapon,
 };
 
 /// Tiles along each side of the viewport. Odd, so the wanderer sits on the center tile.
@@ -53,6 +54,50 @@ const CARD: f32 = 34.0;
 
 const MAP: f32 = VIEW as f32 * TILE + 2.0 * BORDER;
 const LOG: f32 = LOG_LINES as f32 * LINE + 2.0 * (INSET + BORDER);
+
+/// The three earned-move controls; the weapon slot resolves equipment at use time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum EarnedMoveSlot {
+    #[default]
+    Weapon,
+    Stealth,
+    Focus,
+}
+
+impl EarnedMoveSlot {
+    const fn next(self) -> Self {
+        match self {
+            Self::Weapon => Self::Stealth,
+            Self::Stealth => Self::Focus,
+            Self::Focus => Self::Weapon,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Weapon => "Weapon",
+            Self::Stealth => "Stealth",
+            Self::Focus => "Focus",
+        }
+    }
+}
+
+/// Resolve a slot only when it is used, so the weapon slot always follows current equipment.
+fn earned_move_for_slot(slot: EarnedMoveSlot, weapon: Weapon) -> LearnedMove {
+    match slot {
+        EarnedMoveSlot::Weapon => LearnedMove::for_weapon(weapon),
+        EarnedMoveSlot::Stealth => LearnedMove::SlipAway,
+        EarnedMoveSlot::Focus => LearnedMove::Pulse,
+    }
+}
+
+fn cycle_earned_move_slot(slot: &mut EarnedMoveSlot, workshop_open: bool) -> bool {
+    if workshop_open {
+        return false;
+    }
+    *slot = slot.next();
+    true
+}
 
 /// Window width: map, panel, and the gaps around them.
 pub const WINDOW_WIDTH: Pixels = px(GAP + MAP + GAP + PANEL + GAP);
@@ -108,6 +153,7 @@ pub struct GameView {
     mark: u64,
     sprites: SpriteCache,
     workshop: Option<Workshop>,
+    move_slot: EarnedMoveSlot,
 }
 
 impl GameView {
@@ -116,13 +162,30 @@ impl GameView {
     pub fn new(game: Game, mark: u64, window: &mut Window, cx: &mut Context<GameView>) -> GameView {
         let focus = cx.focus_handle();
         window.focus(&focus);
-        GameView { game, focus, mark, sprites: SpriteCache::default(), workshop: None }
+        GameView {
+            game,
+            focus,
+            mark,
+            sprites: SpriteCache::default(),
+            workshop: None,
+            move_slot: EarnedMoveSlot::default(),
+        }
     }
 
     fn act(&mut self, action: impl FnOnce(&mut Game), cx: &mut Context<GameView>) {
         if apply_play_action(&mut self.game, &mut self.mark, self.workshop.as_ref(), action) {
             cx.notify();
         }
+    }
+
+    fn use_earned_move(&mut self, direction: Dir, cx: &mut Context<GameView>) {
+        let learned_move = earned_move_for_slot(self.move_slot, self.game.maneuver().weapon);
+        self.act(
+            |game| {
+                let _ = game.use_move(learned_move, direction);
+            },
+            cx,
+        );
     }
 
     fn edit_workshop(&mut self, edit: Edit, cx: &mut Context<GameView>) {
@@ -178,7 +241,7 @@ impl Render for GameView {
         let hurt = self.news().any(|k| matches!(k, LogKind::Hurt | LogKind::Death));
         self.sprites.begin(window);
         let map = map(&self.game, &mut self.sprites, hurt);
-        let panel = panel(&self.game, &mut self.sprites, self.workshop.as_ref());
+        let panel = panel(&self.game, &mut self.sprites, self.workshop.as_ref(), self.move_slot);
         self.sprites.end(window);
         let title = format!("blah · seed {}", self.game.world().seed());
 
@@ -192,6 +255,15 @@ impl Render for GameView {
             .on_action(cx.listener(|this, _: &TechniqueSouth, _, cx| this.act(|g| _ = g.use_technique(Dir::South), cx)))
             .on_action(cx.listener(|this, _: &TechniqueEast, _, cx| this.act(|g| _ = g.use_technique(Dir::East), cx)))
             .on_action(cx.listener(|this, _: &TechniqueWest, _, cx| this.act(|g| _ = g.use_technique(Dir::West), cx)))
+            .on_action(cx.listener(|this, _: &EarnedMoveNorth, _, cx| this.use_earned_move(Dir::North, cx)))
+            .on_action(cx.listener(|this, _: &EarnedMoveSouth, _, cx| this.use_earned_move(Dir::South, cx)))
+            .on_action(cx.listener(|this, _: &EarnedMoveEast, _, cx| this.use_earned_move(Dir::East, cx)))
+            .on_action(cx.listener(|this, _: &EarnedMoveWest, _, cx| this.use_earned_move(Dir::West, cx)))
+            .on_action(cx.listener(|this, _: &CycleEarnedMove, _, cx| {
+                if cycle_earned_move_slot(&mut this.move_slot, this.workshop.is_some()) {
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|this, _: &Wait, _, cx| this.act(|g| _ = g.wait(), cx)))
             .on_action(cx.listener(|this, _: &ToggleSneak, _, cx| this.act(|g| _ = g.toggle_sneak(), cx)))
             .on_action(cx.listener(|this, _: &RecoverFocus, _, cx| this.act(|g| _ = g.recover_focus(), cx)))
@@ -363,8 +435,13 @@ fn jitter(x: i64, y: i64) -> f32 {
 }
 
 /// The status panel: the wanderer, where they are, and what lives nearby.
-fn panel(game: &Game, sprites: &mut SpriteCache, workshop: Option<&Workshop>) -> Div {
-    let panel = frame().w(px(PANEL)).h(px(MAP)).p(px(INSET)).flex().flex_col();
+fn panel(
+    game: &Game,
+    sprites: &mut SpriteCache,
+    workshop: Option<&Workshop>,
+    move_slot: EarnedMoveSlot,
+) -> impl IntoElement + use<> {
+    let panel = frame().id("status-panel").w(px(PANEL)).h(px(MAP)).p(px(INSET)).flex().flex_col().overflow_y_scroll();
     if let Some(workshop) = workshop {
         return panel.child(workshop_panel(workshop, game));
     }
@@ -373,7 +450,7 @@ fn panel(game: &Game, sprites: &mut SpriteCache, workshop: Option<&Workshop>) ->
         .child(rule())
         .child(place(game))
         .child(rule())
-        .child(combat_status(game))
+        .child(combat_status(game, move_slot))
         .child(rule())
         .child(nearby(game, sprites))
         .child(div().flex_grow())
@@ -386,12 +463,13 @@ fn panel(game: &Game, sprites: &mut SpriteCache, workshop: Option<&Workshop>) ->
                 .line_height(px(SMALL_LINE))
                 .child("Arrows / hjkl / wasd · bump = free strike")
                 .child("Shift + direction = prepared technique")
+                .child("Tab slots · Alt + direction = earned move")
                 .child("M edit · C sneak · R rest · F unleash")
                 .child("Space / . wait · Q quit"),
         )
 }
 
-fn combat_status(game: &Game) -> Div {
+fn combat_status(game: &Game, move_slot: EarnedMoveSlot) -> Div {
     let maneuver = game.maneuver();
     let tracking = game.monsters_in_view().filter(|monster| monster.alerted).count();
     div()
@@ -404,7 +482,66 @@ fn combat_status(game: &Game) -> Div {
             "Observers",
             if tracking == 0 { "none tracking you".into() } else { format!("{tracking} tracking you") },
         ))
+        .child(earned_move_status(game, move_slot))
         .child(combat_preview(game))
+}
+
+fn earned_move_status(game: &Game, slot: EarnedMoveSlot) -> Div {
+    let learned_move = earned_move_for_slot(slot, game.maneuver().weapon);
+    let status = if !learned_move.unlocked(game.wanderer()) {
+        format!("Locked · {}", learned_move.requirement())
+    } else {
+        let mut first_error = None;
+        let mut preview = None;
+        for direction in Dir::ALL {
+            match game.preview_move(learned_move, direction) {
+                Ok(move_preview) => {
+                    preview = Some((direction, move_preview));
+                    break;
+                }
+                Err(reason) => first_error.get_or_insert(reason),
+            };
+        }
+        match preview {
+            Some((direction, move_preview)) => {
+                let direction = match direction {
+                    Dir::North => "N",
+                    Dir::South => "S",
+                    Dir::East => "E",
+                    Dir::West => "W",
+                };
+                let mut message = match learned_move {
+                    LearnedMove::SlipAway => format!("Ready · Alt+{direction} · 2 steps"),
+                    LearnedMove::Sweep => format!(
+                        "Ready · Alt+direction · {} targets · {}–{} if all hit",
+                        move_preview.targets, move_preview.min_hit, move_preview.max_hit
+                    ),
+                    _ => format!(
+                        "Ready · Alt+{direction} · {} target{} · {}–{} on hit",
+                        move_preview.targets,
+                        if move_preview.targets == 1 { "" } else { "s" },
+                        move_preview.min_hit,
+                        move_preview.max_hit
+                    ),
+                };
+                if let Some((x, y)) = move_preview.destination {
+                    message.push_str(&format!(" · you→{x},{y}"));
+                }
+                if let Some((x, y)) = move_preview.push {
+                    message.push_str(&format!(" · push→{x},{y}"));
+                } else if learned_move == LearnedMove::Shove {
+                    message.push_str(" · no room to push");
+                }
+                message
+            }
+            None => format!("Unavailable · {}", first_error.unwrap_or("no valid direction")),
+        }
+    };
+    div()
+        .flex()
+        .flex_col()
+        .child(pair("Move", format!("{} · {}F", learned_move.name(), learned_move.focus_cost())))
+        .child(small_line(format!("{} · {status}", slot.name())).min_w_0().truncate())
 }
 
 fn combat_preview(game: &Game) -> Div {
@@ -810,7 +947,7 @@ fn glyph_shade(c @ [r, g, b]: [u8; 3]) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use blah_core::MAX_FOCUS;
+    use blah_core::{LearnedMove, MAX_FOCUS};
 
     #[test]
     fn workshop_blocks_all_play_actions_until_closed() {
@@ -818,7 +955,7 @@ mod tests {
         let workshop = Workshop::new(game.maneuver().clone());
         let before = game.clone();
         let mut mark = 999;
-        let actions: [fn(&mut Game); 6] = [
+        let actions: [fn(&mut Game); 7] = [
             |g| {
                 g.use_technique(Dir::East);
             },
@@ -837,12 +974,18 @@ mod tests {
             |g| {
                 g.unleash();
             },
+            |g| {
+                let _ = g.use_move(LearnedMove::Pulse, Dir::East);
+            },
         ];
         for action in actions {
             assert!(!apply_play_action(&mut game, &mut mark, Some(&workshop), action));
             assert_eq!(game, before);
             assert_eq!(mark, 999);
         }
+        let mut slot = EarnedMoveSlot::Weapon;
+        assert!(!cycle_earned_move_slot(&mut slot, true));
+        assert_eq!(slot, EarnedMoveSlot::Weapon);
         assert!(apply_play_action(&mut game, &mut mark, None, |g| {
             g.unleash();
         }));
@@ -872,6 +1015,39 @@ mod tests {
         assert_eq!(game.turn(), turn + 2);
         assert_eq!(game.wanderer().focus, MAX_FOCUS - prepared.technique.focus_cost());
         assert_eq!(game.maneuver(), &prepared);
+    }
+
+    #[test]
+    fn earned_move_slots_cycle_without_advancing_the_game() {
+        let game = Game::new(42);
+        let before = game.clone();
+        let mut slot = EarnedMoveSlot::default();
+        for expected in [EarnedMoveSlot::Stealth, EarnedMoveSlot::Focus, EarnedMoveSlot::Weapon] {
+            assert!(cycle_earned_move_slot(&mut slot, false));
+            assert_eq!(slot, expected);
+            assert_eq!(game, before);
+        }
+        assert!(!cycle_earned_move_slot(&mut slot, true));
+        assert_eq!(slot, EarnedMoveSlot::Weapon);
+        assert_eq!(game, before);
+    }
+
+    #[test]
+    fn weapon_slot_resolves_from_current_equipment() {
+        let dagger = Game::composition_trial(42, blah_core::Maneuver::default()).unwrap();
+        let staff = Game::inferno_trial(42).unwrap();
+        assert_eq!(
+            earned_move_for_slot(EarnedMoveSlot::Weapon, dagger.maneuver().weapon),
+            LearnedMove::for_weapon(dagger.maneuver().weapon)
+        );
+        assert_eq!(
+            earned_move_for_slot(EarnedMoveSlot::Weapon, staff.maneuver().weapon),
+            LearnedMove::for_weapon(staff.maneuver().weapon)
+        );
+        assert_ne!(
+            earned_move_for_slot(EarnedMoveSlot::Weapon, dagger.maneuver().weapon),
+            earned_move_for_slot(EarnedMoveSlot::Weapon, staff.maneuver().weapon)
+        );
     }
 
     #[test]

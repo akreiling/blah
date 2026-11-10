@@ -3,9 +3,19 @@
 //! These are rule invariants. Techniques can run out of Focus, but ordinary weapon strikes remain free.
 
 use blah_core::{
-    Aim, Burst, Delivery, Dir, Element, Game, Maneuver, Monster, Shape, Step, Technique, Trigger, Wanderer, Weapon,
+    Aim, Burst, Delivery, Dir, Element, Game, LearnedMove, Maneuver, Monster, MovePreview, Shape, Step, Technique,
+    Trigger, Wanderer, Weapon,
 };
 use proptest::prelude::*;
+
+const LEARNED_MOVES: [LearnedMove; 6] = [
+    LearnedMove::Withdraw,
+    LearnedMove::Reach,
+    LearnedMove::Shove,
+    LearnedMove::Sweep,
+    LearnedMove::SlipAway,
+    LearnedMove::Pulse,
+];
 
 fn legal_maneuvers() -> Vec<Maneuver> {
     let mut out = Vec::new();
@@ -44,6 +54,7 @@ enum Action {
     Recover,
     Unleash,
     PrepareBasic,
+    Learned(LearnedMove, Dir),
 }
 
 fn action() -> impl Strategy<Value = Action> {
@@ -55,6 +66,8 @@ fn action() -> impl Strategy<Value = Action> {
         1 => Just(Action::Recover),
         1 => Just(Action::Unleash),
         1 => Just(Action::PrepareBasic),
+        2 => (prop::sample::select(LEARNED_MOVES.to_vec()), prop::sample::select(Dir::ALL.to_vec()))
+            .prop_map(|(action, direction)| Action::Learned(action, direction)),
     ]
 }
 
@@ -63,6 +76,13 @@ fn maneuver() -> impl Strategy<Value = Maneuver> {
 }
 
 type State = (u64, (i64, i64), Wanderer, Vec<Monster>, Maneuver, bool, u32);
+
+#[derive(Default)]
+struct ActionPreviews {
+    attack: Option<blah_core::AttackPreview>,
+    area: Option<blah_core::AreaPreview>,
+    learned: Option<MovePreview>,
+}
 
 /// Everything an action can change except the log.
 fn state(g: &Game) -> State {
@@ -80,6 +100,7 @@ fn apply(g: &mut Game, a: Action) -> Step {
         Action::PrepareBasic => match g.prepare(Maneuver::default()) {
             Ok(()) | Err(_) => Step::Blocked,
         },
+        Action::Learned(m, d) => g.use_move(m, d),
     }
 }
 
@@ -106,6 +127,7 @@ proptest! {
                 Action::Technique(d) if g.maneuver().technique.delivery != Delivery::Ground => g.preview_attack(d).ok(),
                 _ => None,
             };
+            let learned_preview = if let Action::Learned(m, d) = a { g.preview_move(m, d).ok() } else { None };
             let ground_technique = matches!(a, Action::Technique(d) if g.maneuver().technique.delivery == Delivery::Ground
                 && {
                     let (x, y) = g.position();
@@ -113,14 +135,15 @@ proptest! {
                     g.monster_at(x + dx, y + dy).is_some()
                 });
             let area_preview = if matches!(a, Action::Unleash) || ground_technique { g.preview_area().ok() } else { None };
+            let previews = ActionPreviews { attack: attack_preview, area: area_preview, learned: learned_preview };
             if let Action::Step(d) = a {
                 let can = g.can_step(d);
                 let result = apply(&mut g, a);
                 prop_assert_eq!(can, result != Step::Blocked, "can_step disagrees with step");
-                check(&g, &before, result, deaths, focus, attack_preview, area_preview)?;
+                check(&g, &before, result, deaths, focus, previews)?;
             } else {
                 let result = apply(&mut g, a);
-                check(&g, &before, result, deaths, focus, attack_preview, area_preview)?;
+                check(&g, &before, result, deaths, focus, previews)?;
             }
         }
     }
@@ -166,8 +189,7 @@ fn check(
     result: Step,
     deaths: u32,
     focus: i32,
-    attack: Option<blah_core::AttackPreview>,
-    area: Option<blah_core::AreaPreview>,
+    previews: ActionPreviews,
 ) -> Result<(), TestCaseError> {
     let f = g.wanderer().focus;
     prop_assert!((0..=g.wanderer().max_focus()).contains(&f), "Focus {f} out of range");
@@ -180,7 +202,7 @@ fn check(
     }
     prop_assert!(g.turn() > before.0, "a non-blocked action must pass time");
     let died = g.deaths() != deaths;
-    if let (Some(p), Step::Attacked, false) = (attack, result, died)
+    if let (Some(p), Step::Attacked, false) = (previews.attack, result, died)
         && let Some(r) = g.last_attack()
     {
         if r.hit {
@@ -190,8 +212,21 @@ fn check(
         }
         prop_assert_eq!(focus - f, p.focus);
     }
-    if let (Some(p), Step::Attacked, false) = (area, result, died) {
+    if let (Some(p), Step::Attacked, false) = (previews.area, result, died) {
         prop_assert_eq!(focus - f, p.focus, "area discharge cost differs from preview");
+    }
+    if let (Some(p), Step::Attacked, false) = (previews.learned, result, died) {
+        prop_assert_eq!(focus - f, p.focus, "learned move cost differs from preview");
+        if let Some(hit) = g.last_attack() {
+            if hit.hit {
+                prop_assert!(hit.total() <= p.max_hit, "{:?} exceeds {:?}", hit, p);
+                if p.targets == 1 {
+                    prop_assert!(hit.total() >= p.min_hit, "{:?} below {:?}", hit, p);
+                }
+            } else {
+                prop_assert_eq!(hit.total(), 0);
+            }
+        }
     }
     Ok(())
 }
