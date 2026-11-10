@@ -2,3 +2,4 @@
 .env.local
 *.sqlite
 .DS_Store
+__pycache__/
