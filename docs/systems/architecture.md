@@ -109,8 +109,8 @@ in one transaction after every action, under `synchronous = FULL`. A row revisio
 session's write fail rather than overwrite. If a write fails, the in-memory action is undone and the title
 bar shows the error. A turn's snapshot is under 9 KB and the file stays near 20 KB; a test bounds both.
 
-`blah` resumes the newest `character-NNNNNN.sqlite3` in the platform data directory
-(`~/Library/Application Support/blah/saves` on macOS). `--new` creates the next numbered file and never
+`blah` resumes the newest `character-NNNNNN.sqlite3` in `$XDG_DATA_HOME/blah/saves`,
+or `~/.local/share/blah/saves` when that is unset, on every platform. `--new` creates the next numbered file and never
 replaces one; `--save PATH` names a file. An explicit seed that differs from the save's is an error.
 Developer demos are never saved. Missing, corrupt, and unsupported files are reported and left untouched.
 

@@ -101,11 +101,19 @@ pub fn commit_action(game: &mut Game, save: &mut Option<Save>, action: impl FnOn
     Ok(())
 }
 
-/// Default location, independent of the shell's working directory.
+/// Default location on every platform, XDG style: `$XDG_DATA_HOME/blah/saves`, else
+/// `~/.local/share/blah/saves`, independent of the shell's working directory.
 pub fn directory() -> Result<PathBuf, String> {
-    dirs::data_local_dir()
+    xdg_directory(std::env::var_os("XDG_DATA_HOME").map(PathBuf::from), dirs::home_dir())
+}
+
+fn xdg_directory(data_home: Option<PathBuf>, home: Option<PathBuf>) -> Result<PathBuf, String> {
+    // The XDG spec says a relative XDG_DATA_HOME is invalid and must be ignored.
+    data_home
+        .filter(|p| p.is_absolute())
+        .or_else(|| home.map(|h| h.join(".local").join("share")))
         .map(|p| p.join("blah").join("saves"))
-        .ok_or_else(|| "Cannot locate the application data directory; use --save PATH.".into())
+        .ok_or_else(|| "Cannot locate the home directory; use --save PATH.".into())
 }
 
 /// Resume the latest automatically named character, or create a separate one for `--new`.
@@ -246,6 +254,18 @@ mod tests {
         eprintln!("largest snapshot {largest} bytes, file {file} bytes, {per_turn:?} per saved turn");
         assert!(largest < 64 * 1024, "snapshot is {largest} bytes");
         assert!(file < 256 * 1024, "save file is {file} bytes");
+    }
+
+    #[test]
+    fn default_directory_follows_xdg_on_every_platform() {
+        let home = Some(PathBuf::from("/home/u"));
+        assert_eq!(xdg_directory(None, home.clone()).unwrap(), PathBuf::from("/home/u/.local/share/blah/saves"));
+        assert_eq!(xdg_directory(Some("/data".into()), home.clone()).unwrap(), PathBuf::from("/data/blah/saves"));
+        assert_eq!(
+            xdg_directory(Some("relative".into()), home).unwrap(),
+            PathBuf::from("/home/u/.local/share/blah/saves")
+        );
+        assert!(xdg_directory(None, None).is_err());
     }
 
     #[test]
