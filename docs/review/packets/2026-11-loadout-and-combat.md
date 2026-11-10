@@ -10,6 +10,21 @@ written critique. `scripts/jev_loadout_review.py` turns the questions below into
 sends the rules as `state`, and combines the answers in code. A repeat run of all 246 answers changed by
 0.02 on average (largest 0.14); 7 answers near the 0.6 cutoff flipped. The prose below remains the
 human-readable version of the questions, and is suitable for a text-generating reviewer.
+**Second run** ([`../jev/loadout-review-2026-11-10-2.md`](../jev/loadout-review-2026-11-10-2.md)), after
+revising the loadout doc: added reach and point, graded sneaking, a gear-combining rule, gear changes,
+a precise metal casting cost, magic's role, death-time consequences, and three environments. Two pattern
+questions were reworded to stop describing the old rules, so those two are not directly comparable.
+
+| Pattern | First | Second |
+| --- | ---: | ---: |
+| Sneaking is all-or-nothing | 0.85 | 0.07 |
+| Free strike makes magic a side feature | 0.77 | 0.65 |
+| Gear mixing or swapping is exploitable (reworded) | 0.72 | 0.68 |
+| Dying on purpose pays off (reworded) | 0.71 | 0.82 |
+| Rules too vague to implement | 0.89 | 0.85 |
+
+The spear gained an upside (armored foes) and the greatsword a third. Plate is still lopsided against
+the listed situations. The most important missing rule moved from gear swapping to the Focus economy.
 ## Instructions for the reviewer
 
 You are reviewing a proposed design and a small executable prototype for a turn-based, ecology-driven

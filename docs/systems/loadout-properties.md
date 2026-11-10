@@ -53,10 +53,13 @@ Start with the first three. Add the rest only when an action needs them.
 | **Noise** | quiet / normal / loud | Sneaking, ambushes, avoiding notice | Drawing enemies onto yourself to protect someone, scaring off weak creatures |
 | **Material** | cloth, leather, wood, metal | Metal: fire heats it and burns you, lightning arcs through it | Metal holds inscribed wards; wood carries channeled magic well |
 | **Rigidity** (later) | flexible / stiff | Martial arts, acrobatics, fine movement | Blades glance off; only blunt force and piercing get through |
+| **Reach** | short / long | Long: useless in tight spaces (tunnels, dense brush) and against an enemy already beside you | Long: strike two tiles away, and hit first when something closes in |
+| **Point** | edged / pointed / blunt | Pointed and blunt weapons lack an edge's bite against unarmored flesh | Points and blunt force get through stiff armor; edges glance off it |
 | **Size** (later) | small / large | A small weapon has little reach or force | Concealable; works close and quiet; suits backstabs |
 
-A loadout's value for a property is mostly its loudest, heaviest, or stiffest piece. One plate gauntlet
-on a robe makes you somewhat louder, not fully plated.
+**Combining pieces.** Armor sets your base mass and noise. Each other heavy or loud piece you wear raises
+noise one step, up to loud. One plate gauntlet on a robe takes you from quiet to normal, not to fully
+plated. Carried but unworn gear still counts its mass for travel and swimming, but not its noise.
 
 ## Items
 
@@ -66,8 +69,8 @@ Illustrative values, one example of each family:
 | --- | --- | --- | --- | --- | --- | --- |
 | Dagger | light | quiet | metal | — | small | Quiet kills from hiding |
 | Staff | medium | normal | wood | — | large | Magic focus **or** a martial weapon |
-| Spear | medium | normal | wood + metal | — | large | Reach and piercing |
-| Greatsword | heavy | loud | metal | — | large | Straight fights, several enemies at once |
+| Spear | medium | normal | wood + metal | — | large | Reach and piercing: long reach, pointed |
+| Greatsword | heavy | loud | metal | — | large | Straight fights, several enemies at once; heavy enough to count as blunt force against stiff armor |
 | Robe | light | quiet | cloth | flexible | — | Freedom of movement and casting |
 | Leather | light | quiet | leather | flexible | — | Some protection without giving up stealth |
 | Plate | heavy | loud | metal | stiff | — | Maximum protection and mass |
@@ -79,15 +82,32 @@ These are the rules. Builds come from them, not from item lists.
 | Action or effect | Reads | Rule |
 | --- | --- | --- |
 | **Basic strike** | weapon | Always available, never costs Focus. Every weapon can win by beating an enemy down. |
-| **Sneak** | noise, mass | Only with a quiet, not-heavy loadout. Loud gear cannot sneak at all. |
+| **Sneak** | noise, mass | Graded. Sneaking shrinks the distance at which creatures notice you: quiet gear shrinks it most, normal gear a little, loud gear not at all. Keen hearing widens it again. Heavy gear cannot sneak. |
 | **Backstab** | size, sneaking, facing | A small weapon, while sneaking, from behind an unaware creature: a large hit. |
 | **Martial arts** | rigidity, weapon | Staff or empty hands, flexible armor: sweeps, trips, parries. |
 | **Cleave** | weapon mass | A heavy weapon hits every adjacent enemy. |
+| **Reach strike** | reach | A long weapon hits a creature two tiles away in a straight line. A creature stepping into reach takes a free hit first. Not in a tight space. |
+| **Pierce** | point | Pointed and blunt hits ignore most of a stiff armor's protection; edged hits do not. |
 | **Charge** | mass | Moving into an enemy hits harder the heavier you are; heavy targets resist being moved. |
-| **Casting** | material | Wood and cloth carry magic freely; metal resists channeling unless warded. |
+| **Casting** | material | Wood and cloth carry magic freely. Channeling through metal, worn or held, costs half again as much Focus. Warding magic is the exception: it costs no extra in metal. |
 | **Ward inscription** | material | Metal holds wards well; cloth holds them poorly. |
 | **Fire** | material | Burns cloth; heats metal and hurts its wearer over a few turns. |
 | **Lightning** (later) | material | Arcs to and through metal. |
+
+### Gear changes
+
+Changing gear takes time, so a loadout is a commitment for a fight:
+
+- **Weapons:** swapping takes one turn, but you can only carry what your mass allows.
+- **Armor:** putting it on or taking it off takes many turns, and is impossible with a creature in view.
+- **Mid-fight:** you fight with what you walked in wearing. Planning the loadout is part of the approach.
+
+### What magic is for
+
+A basic strike always works, so magic must do what a strike cannot: reach beyond the adjacent tile, hit
+several creatures, exploit a weakness (fire against cold-adapted creatures), get past armor from inside,
+or protect, distract, and heal. A strike decides whether you can win; magic changes how fast, from
+where, and at what risk.
 
 ### Backstab and facing
 
@@ -130,9 +150,19 @@ Creatures and places read the same properties:
 | Fire-breathing creature | Metal armor becomes a liability |
 | Clawed or biting creature | Rigid armor shines |
 | Creature with keen hearing | Even normal noise gives you away |
+| Strong river current or high wind | Heavy gear keeps its footing; light gear is swept or knocked down |
+| Thorny brush | Plate and leather pass through; robes tear and cost a little Health |
+| Tunnels and tight spaces | Long weapons and greatswords cannot swing freely; daggers and fists can |
 
 Creature traits already vary by region ([ecology](ecology.md)), so this ties loadout choices to the
 ecology.
+
+### Death and time
+
+Dying is a legitimate way out, so its cost has to be real. The world keeps going during the 1,000 turns
+you are gone: wounded creatures recover, populations regrow and move, anything you dropped stays where
+you fell, and sites carry on without you. Dying on purpose to refill Focus near a fight hands that fight
+back to a rested enemy.
 
 ## How builds fall out
 
@@ -145,7 +175,8 @@ None of these is a class or a recipe. They are what the rules permit:
 | Monk | staff + robe | Flexible armor and a staff permit martial arts |
 | Fire mage | staff + robe | Wood and cloth carry fire magic without burning the caster |
 | Subtle swordmage (Gandalf) | sword + light armor | Quiet enough to be subtle, with magic on top |
-| Battlemage | spear + plate + wards | Metal holds wards, the spear keeps reach; gives up stealth and fire |
+| Battlemage | spear + plate + wards | Metal holds wards at no extra cost, the spear keeps reach; gives up stealth, fire, and cheap spells |
+| Skirmisher | spear + leather | Quiet enough to sneak a little, with reach to hit first. Not in the table originally; Jev's review rated it solid |
 
 A test for the design: someone should find a loadout this table does not list that works for a reason
 the rules explain.
@@ -182,5 +213,6 @@ greatsword is the most reliable in a straight fight.
 - Cleave, knockback, or stagger as the greatsword's verb?
 - How strongly does metal resist channeling: a cost, a weaker effect, or only for some magic?
 - Martial arts verbs: which of sweep, trip, and parry come first?
-- Mixed loadouts: does one heavy piece override everything, or is it graded?
+- How many turns does armor take to change, and is a half-worn state possible?
+- What does magic cost in metal beyond Focus, if anything (range, accuracy)?
 - How visible are facing and noise on screen, so a failed sneak feels fair?

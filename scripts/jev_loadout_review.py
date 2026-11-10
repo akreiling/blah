@@ -37,28 +37,43 @@ RULES = {
         "through it; metal holds inscribed wards well; metal resists channeling unless warded. "
         "Wood carries channeled magic well. Fire burns cloth.",
         "rigidity": "flexible/stiff. Stiff: blocks martial arts and acrobatics, but blades glance off.",
+        "reach": "short/long weapons. Long: strike two tiles away and hit first when something closes in; "
+        "useless in tight spaces and against an enemy already adjacent.",
+        "point": "edged/pointed/blunt. Points and blunt force get through stiff armor; edges glance off it. "
+        "Pointed and blunt weapons lack an edge's bite against unarmored flesh.",
         "size": "small/large weapons. Small: little reach or force, but concealable and suits backstabs.",
-        "combining": "A loadout's property value is mostly its loudest, heaviest, or stiffest piece.",
+        "combining": "Armor sets base mass and noise. Each other heavy or loud worn piece raises noise one step, "
+        "up to loud. Carried but unworn gear counts its mass for travel and swimming, not its noise.",
     },
     "items": {
         "dagger": "weapon; light, quiet, metal, small. Intended: quiet kills from hiding.",
         "staff": "weapon; medium, normal noise, wood, large. Magic focus or martial weapon.",
-        "spear": "weapon; medium, normal noise, wood and metal, large. Reach and piercing.",
-        "greatsword": "weapon; heavy, loud, metal, large. Straight fights, several enemies.",
+        "spear": "weapon; medium, normal noise, wood and metal, large, long reach, pointed. Reach and piercing.",
+        "greatsword": "weapon; heavy, loud, metal, large, edged but heavy enough to count as blunt force "
+        "against stiff armor. Straight fights, several enemies.",
         "robe": "armor; light, quiet, cloth, flexible. Movement and casting.",
         "leather": "armor; light, quiet, leather, flexible. Some protection, keeps stealth.",
         "plate": "armor; heavy, loud, metal, stiff. Maximum protection and mass.",
     },
     "actions": {
         "basic_strike": "Always available, never costs Focus. Every weapon can win by beating an enemy down.",
-        "sneak": "Only with a quiet, not-heavy loadout.",
+        "sneak": "Graded: sneaking shrinks the distance at which creatures notice you; quiet gear shrinks it most, "
+        "normal gear a little, loud gear not at all. Keen hearing widens it. Heavy gear cannot sneak.",
         "backstab": "Small weapon, while sneaking, from behind an unaware creature: a large hit. Creatures face "
         "the way they last moved, or toward you once they notice you.",
         "martial_arts": "Staff or empty hands with flexible armor: sweeps, trips, parries.",
         "cleave": "A heavy weapon hits every adjacent enemy.",
+        "reach_strike": "A long weapon hits a creature two tiles away in a straight line; a creature stepping into "
+        "reach takes a free hit first. Not in tight spaces.",
+        "pierce": "Pointed and blunt hits ignore most of a stiff armor's protection; edged hits do not.",
         "charge": "Moving into an enemy hits harder the heavier you are; heavy targets resist being moved.",
-        "casting": "Wood and cloth carry magic freely; metal resists channeling unless warded. "
-        "Magic costs Focus. Focus is restored at a safe home or by death.",
+        "casting": "Wood and cloth carry magic freely. Channeling through metal, worn or held, costs half again "
+        "as much Focus; warding magic costs no extra in metal. Magic costs Focus, restored at a safe home or "
+        "by death.",
+        "magic_role": "A basic strike always works, so magic does what strikes cannot: reach beyond the adjacent "
+        "tile, hit several creatures, exploit weaknesses, get past armor from inside, protect, distract, heal.",
+        "gear_changes": "Swapping weapons takes one turn; you carry only what your mass allows. Changing armor "
+        "takes many turns and is impossible with a creature in view.",
         "wards": "Protective magic inscribed into gear; holds best in metal.",
     },
     "world": [
@@ -68,7 +83,11 @@ RULES = {
         "Fire-breathing creatures punish metal armor.",
         "Clawed or biting creatures reward rigid armor.",
         "Keen-eared creatures hear even normal noise.",
-        "Death returns you home with full Health and Focus after a 1,000-turn time penalty.",
+        "Strong river current or high wind: heavy gear keeps its footing; light gear is swept or knocked down.",
+        "Thorny brush: plate and leather pass; robes tear and cost a little Health.",
+        "Tunnels and tight spaces: long weapons and greatswords cannot swing freely; daggers and fists can.",
+        "Death returns you home with full Health and Focus after 1,000 turns. The world keeps going meanwhile: "
+        "wounded creatures recover, populations regrow and move, dropped items stay where you fell.",
     ],
 }
 
@@ -89,6 +108,8 @@ SITUATIONS = {
     "knockback": "being shoved toward a cliff or into water",
     "armored_foe": "fighting a heavily armored creature",
     "long_fight": "a long fight where Focus runs out",
+    "tight_tunnel": "fighting in a narrow tunnel",
+    "river_current": "wading through a strong river current",
 }
 
 
@@ -131,13 +152,13 @@ PATTERNS = {
     "among the listed rules and environments?",
     "staff_strictly_better": "Does the staff's dual use (magic focus and martial weapon) make it strictly better than "
     "every other weapon for any character in a robe?",
-    "heaviest_piece_exploit": "Does the rule that a loadout's value is mostly its loudest, heaviest, or stiffest piece "
-    "invite strange or exploitable mixes, such as one plate piece or swapping gear mid-fight?",
+    "heaviest_piece_exploit": "Do the rules for combining gear pieces and changing gear invite strange or "
+    "exploitable mixes, such as one plate piece on a robe or swapping gear mid-fight?",
     "backstab_trivial": "With facing defined as the last move direction, or toward you once noticed, can a player "
     "reliably get behind creatures with a simple routine, making backstabs trivial?",
     "backstab_too_rare": "Could backstabs become so hard that the dagger has no useful role?",
-    "death_exploit": "Can a player profit from dying on purpose (spend everything, die, return restored), given the "
-    "1,000-turn penalty and nothing stated about the world changing with time?",
+    "death_exploit": "Under the stated death rules, can a player profit from dying on purpose (spend everything, "
+    "die, return restored)?",
     "focus_optional": "With a free basic strike always available, does spending Focus on magic become optional to "
     "the point that magic is a side feature?",
     "sneak_binary": "Is sneaking described as all-or-nothing, so normal-noise gear can never sneak at all?",
@@ -200,6 +221,9 @@ def main() -> None:
     cost = sum(r.get("usage", {}).get("cost", 0) for r in raw.values())
     OUT.mkdir(parents=True, exist_ok=True)
     stamp = datetime.date.today().isoformat()
+    base, n = stamp, 2
+    while (OUT / f"loadout-review-{stamp}.json").exists():
+        stamp, n = f"{base}-{n}", n + 1
     (OUT / f"loadout-review-{stamp}.json").write_text(json.dumps(raw, indent=2) + "\n")
     (OUT / f"loadout-review-{stamp}.md").write_text(summarize(raw, model, cost, stamp))
     print(f"wrote {OUT}/loadout-review-{stamp}.{{json,md}}; total ${cost:.6f}", file=sys.stderr)

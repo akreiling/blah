@@ -1,0 +1,1411 @@
+{
+  "matrix_dagger": {
+    "model": "typesafe/jev-1.14-20261014",
+    "answers": {
+      "ambush_unaware__worse": {
+        "type": "noul",
+        "noul": 0.07
+      },
+      "ambush_unaware__better": {
+        "type": "noul",
+        "noul": 0.9
+      },
+      "straight_fight_clawed__worse": {
+        "type": "noul",
+        "noul": 0.76
+      },
+      "straight_fight_clawed__better": {
+        "type": "noul",
+        "noul": 0.16
+      },
+      "surrounded__worse": {
+        "type": "noul",
+        "noul": 0.77
+      },
+      "surrounded__better": {
+        "type": "noul",
+        "noul": 0.13
+      },
+      "fire_breather__worse": {
+        "type": "noul",
+        "noul": 0.32
+      },
+      "fire_breather__better": {
+        "type": "noul",
+        "noul": 0.46
+      },
+      "deep_water__worse": {
+        "type": "noul",
+        "noul": 0.11
+      },
+      "deep_water__better": {
+        "type": "noul",
+        "noul": 0.46
+      },
+      "desert_travel__worse": {
+        "type": "noul",
+        "noul": 0.2
+      },
+      "desert_travel__better": {
+        "type": "noul",
+        "noul": 0.49
+      },
+      "tundra__worse": {
+        "type": "noul",
+        "noul": 0.25
+      },
+      "tundra__better": {
+        "type": "noul",
+        "noul": 0.25
+      },
+      "keen_ears__worse": {
+        "type": "noul",
+        "noul": 0.09
+      },
+      "keen_ears__better": {
+        "type": "noul",
+        "noul": 0.82
+      },
+      "protect_ally__worse": {
+        "type": "noul",
+        "noul": 0.73
+      },
+      "protect_ally__better": {
+        "type": "noul",
+        "noul": 0.09
+      },
+      "flee_pursuer__worse": {
+        "type": "noul",
+        "noul": 0.18
+      },
+      "flee_pursuer__better": {
+        "type": "noul",
+        "noul": 0.45
+      },
+      "cast_fire__worse": {
+        "type": "noul",
+        "noul": 0.67
+      },
+      "cast_fire__better": {
+        "type": "noul",
+        "noul": 0.13
+      },
+      "cast_wards__worse": {
+        "type": "noul",
+        "noul": 0.35
+      },
+      "cast_wards__better": {
+        "type": "noul",
+        "noul": 0.34
+      },
+      "lightning__worse": {
+        "type": "noul",
+        "noul": 0.65
+      },
+      "lightning__better": {
+        "type": "noul",
+        "noul": 0.15
+      },
+      "knockback__worse": {
+        "type": "noul",
+        "noul": 0.18
+      },
+      "knockback__better": {
+        "type": "noul",
+        "noul": 0.24
+      },
+      "armored_foe__worse": {
+        "type": "noul",
+        "noul": 0.68
+      },
+      "armored_foe__better": {
+        "type": "noul",
+        "noul": 0.16
+      },
+      "long_fight__worse": {
+        "type": "noul",
+        "noul": 0.19
+      },
+      "long_fight__better": {
+        "type": "noul",
+        "noul": 0.24
+      },
+      "tight_tunnel__worse": {
+        "type": "noul",
+        "noul": 0.1
+      },
+      "tight_tunnel__better": {
+        "type": "noul",
+        "noul": 0.73
+      },
+      "river_current__worse": {
+        "type": "noul",
+        "noul": 0.33
+      },
+      "river_current__better": {
+        "type": "noul",
+        "noul": 0.16
+      }
+    },
+    "usage": {
+      "input_tokens": 4610,
+      "output_tokens": 758,
+      "cost": 0.00019362,
+      "is_byok": false,
+      "cost_details": {
+        "upstream_inference_cost": 0.00019362,
+        "upstream_inference_prompt_cost": 0.00019362,
+        "upstream_inference_completions_cost": 0
+      }
+    },
+    "id": "gen-dec-1794329508-mR2WLU8D52uqElcUGnIk",
+    "provider": "TypeSafe"
+  },
+  "matrix_staff": {
+    "model": "typesafe/jev-1.14-20261014",
+    "answers": {
+      "ambush_unaware__worse": {
+        "type": "noul",
+        "noul": 0.72
+      },
+      "ambush_unaware__better": {
+        "type": "noul",
+        "noul": 0.13
+      },
+      "straight_fight_clawed__worse": {
+        "type": "noul",
+        "noul": 0.53
+      },
+      "straight_fight_clawed__better": {
+        "type": "noul",
+        "noul": 0.26
+      },
+      "surrounded__worse": {
+        "type": "noul",
+        "noul": 0.39
+      },
+      "surrounded__better": {
+        "type": "noul",
+        "noul": 0.29
+      },
+      "fire_breather__worse": {
+        "type": "noul",
+        "noul": 0.11
+      },
+      "fire_breather__better": {
+        "type": "noul",
+        "noul": 0.65
+      },
+      "deep_water__worse": {
+        "type": "noul",
+        "noul": 0.21
+      },
+      "deep_water__better": {
+        "type": "noul",
+        "noul": 0.27
+      },
+      "desert_travel__worse": {
+        "type": "noul",
+        "noul": 0.21
+      },
+      "desert_travel__better": {
+        "type": "noul",
+        "noul": 0.48
+      },
+      "tundra__worse": {
+        "type": "noul",
+        "noul": 0.13
+      },
+      "tundra__better": {
+        "type": "noul",
+        "noul": 0.39
+      },
+      "keen_ears__worse": {
+        "type": "noul",
+        "noul": 0.6
+      },
+      "keen_ears__better": {
+        "type": "noul",
+        "noul": 0.16
+      },
+      "protect_ally__worse": {
+        "type": "noul",
+        "noul": 0.23
+      },
+      "protect_ally__better": {
+        "type": "noul",
+        "noul": 0.25
+      },
+      "flee_pursuer__worse": {
+        "type": "noul",
+        "noul": 0.35
+      },
+      "flee_pursuer__better": {
+        "type": "noul",
+        "noul": 0.24
+      },
+      "cast_fire__worse": {
+        "type": "noul",
+        "noul": 0.12
+      },
+      "cast_fire__better": {
+        "type": "noul",
+        "noul": 0.65
+      },
+      "cast_wards__worse": {
+        "type": "noul",
+        "noul": 0.12
+      },
+      "cast_wards__better": {
+        "type": "noul",
+        "noul": 0.5
+      },
+      "lightning__worse": {
+        "type": "noul",
+        "noul": 0.11
+      },
+      "lightning__better": {
+        "type": "noul",
+        "noul": 0.48
+      },
+      "knockback__worse": {
+        "type": "noul",
+        "noul": 0.21
+      },
+      "knockback__better": {
+        "type": "noul",
+        "noul": 0.29
+      },
+      "armored_foe__worse": {
+        "type": "noul",
+        "noul": 0.46
+      },
+      "armored_foe__better": {
+        "type": "noul",
+        "noul": 0.22
+      },
+      "long_fight__worse": {
+        "type": "noul",
+        "noul": 0.18
+      },
+      "long_fight__better": {
+        "type": "noul",
+        "noul": 0.3
+      },
+      "tight_tunnel__worse": {
+        "type": "noul",
+        "noul": 0.32
+      },
+      "tight_tunnel__better": {
+        "type": "noul",
+        "noul": 0.18
+      },
+      "river_current__worse": {
+        "type": "noul",
+        "noul": 0.2
+      },
+      "river_current__better": {
+        "type": "noul",
+        "noul": 0.19
+      }
+    },
+    "usage": {
+      "input_tokens": 4609,
+      "output_tokens": 758,
+      "cost": 0.000193578,
+      "is_byok": false,
+      "cost_details": {
+        "upstream_inference_cost": 0.000193578,
+        "upstream_inference_prompt_cost": 0.000193578,
+        "upstream_inference_completions_cost": 0
+      }
+    },
+    "id": "gen-dec-1794329508-pgq30k1zu1DwJFNUaLFJ",
+    "provider": "TypeSafe"
+  },
+  "matrix_spear": {
+    "model": "typesafe/jev-1.14-20261014",
+    "answers": {
+      "ambush_unaware__worse": {
+        "type": "noul",
+        "noul": 0.59
+      },
+      "ambush_unaware__better": {
+        "type": "noul",
+        "noul": 0.3
+      },
+      "straight_fight_clawed__worse": {
+        "type": "noul",
+        "noul": 0.51
+      },
+      "straight_fight_clawed__better": {
+        "type": "noul",
+        "noul": 0.43
+      },
+      "surrounded__worse": {
+        "type": "noul",
+        "noul": 0.62
+      },
+      "surrounded__better": {
+        "type": "noul",
+        "noul": 0.26
+      },
+      "fire_breather__worse": {
+        "type": "noul",
+        "noul": 0.3
+      },
+      "fire_breather__better": {
+        "type": "noul",
+        "noul": 0.39
+      },
+      "deep_water__worse": {
+        "type": "noul",
+        "noul": 0.19
+      },
+      "deep_water__better": {
+        "type": "noul",
+        "noul": 0.23
+      },
+      "desert_travel__worse": {
+        "type": "noul",
+        "noul": 0.35
+      },
+      "desert_travel__better": {
+        "type": "noul",
+        "noul": 0.29
+      },
+      "tundra__worse": {
+        "type": "noul",
+        "noul": 0.34
+      },
+      "tundra__better": {
+        "type": "noul",
+        "noul": 0.23
+      },
+      "keen_ears__worse": {
+        "type": "noul",
+        "noul": 0.65
+      },
+      "keen_ears__better": {
+        "type": "noul",
+        "noul": 0.18
+      },
+      "protect_ally__worse": {
+        "type": "noul",
+        "noul": 0.33
+      },
+      "protect_ally__better": {
+        "type": "noul",
+        "noul": 0.36
+      },
+      "flee_pursuer__worse": {
+        "type": "noul",
+        "noul": 0.45
+      },
+      "flee_pursuer__better": {
+        "type": "noul",
+        "noul": 0.44
+      },
+      "cast_fire__worse": {
+        "type": "noul",
+        "noul": 0.65
+      },
+      "cast_fire__better": {
+        "type": "noul",
+        "noul": 0.23
+      },
+      "cast_wards__worse": {
+        "type": "noul",
+        "noul": 0.56
+      },
+      "cast_wards__better": {
+        "type": "noul",
+        "noul": 0.25
+      },
+      "lightning__worse": {
+        "type": "noul",
+        "noul": 0.73
+      },
+      "lightning__better": {
+        "type": "noul",
+        "noul": 0.16
+      },
+      "knockback__worse": {
+        "type": "noul",
+        "noul": 0.34
+      },
+      "knockback__better": {
+        "type": "noul",
+        "noul": 0.4
+      },
+      "armored_foe__worse": {
+        "type": "noul",
+        "noul": 0.14
+      },
+      "armored_foe__better": {
+        "type": "noul",
+        "noul": 0.8
+      },
+      "long_fight__worse": {
+        "type": "noul",
+        "noul": 0.21
+      },
+      "long_fight__better": {
+        "type": "noul",
+        "noul": 0.56
+      },
+      "tight_tunnel__worse": {
+        "type": "noul",
+        "noul": 0.88
+      },
+      "tight_tunnel__better": {
+        "type": "noul",
+        "noul": 0.06
+      },
+      "river_current__worse": {
+        "type": "noul",
+        "noul": 0.17
+      },
+      "river_current__better": {
+        "type": "noul",
+        "noul": 0.26
+      }
+    },
+    "usage": {
+      "input_tokens": 4614,
+      "output_tokens": 758,
+      "cost": 0.000193788,
+      "is_byok": false,
+      "cost_details": {
+        "upstream_inference_cost": 0.000193788,
+        "upstream_inference_prompt_cost": 0.000193788,
+        "upstream_inference_completions_cost": 0
+      }
+    },
+    "id": "gen-dec-1794329509-DZAnaUcXUDrtV0KYMDnv",
+    "provider": "TypeSafe"
+  },
+  "matrix_greatsword": {
+    "model": "typesafe/jev-1.14-20261014",
+    "answers": {
+      "ambush_unaware__worse": {
+        "type": "noul",
+        "noul": 0.9
+      },
+      "ambush_unaware__better": {
+        "type": "noul",
+        "noul": 0.08
+      },
+      "straight_fight_clawed__worse": {
+        "type": "noul",
+        "noul": 0.64
+      },
+      "straight_fight_clawed__better": {
+        "type": "noul",
+        "noul": 0.27
+      },
+      "surrounded__worse": {
+        "type": "noul",
+        "noul": 0.15
+      },
+      "surrounded__better": {
+        "type": "noul",
+        "noul": 0.89
+      },
+      "fire_breather__worse": {
+        "type": "noul",
+        "noul": 0.55
+      },
+      "fire_breather__better": {
+        "type": "noul",
+        "noul": 0.1
+      },
+      "deep_water__worse": {
+        "type": "noul",
+        "noul": 0.61
+      },
+      "deep_water__better": {
+        "type": "noul",
+        "noul": 0.12
+      },
+      "desert_travel__worse": {
+        "type": "noul",
+        "noul": 0.78
+      },
+      "desert_travel__better": {
+        "type": "noul",
+        "noul": 0.09
+      },
+      "tundra__worse": {
+        "type": "noul",
+        "noul": 0.55
+      },
+      "tundra__better": {
+        "type": "noul",
+        "noul": 0.13
+      },
+      "keen_ears__worse": {
+        "type": "noul",
+        "noul": 0.73
+      },
+      "keen_ears__better": {
+        "type": "noul",
+        "noul": 0.06
+      },
+      "protect_ally__worse": {
+        "type": "noul",
+        "noul": 0.24
+      },
+      "protect_ally__better": {
+        "type": "noul",
+        "noul": 0.66
+      },
+      "flee_pursuer__worse": {
+        "type": "noul",
+        "noul": 0.82
+      },
+      "flee_pursuer__better": {
+        "type": "noul",
+        "noul": 0.15
+      },
+      "cast_fire__worse": {
+        "type": "noul",
+        "noul": 0.76
+      },
+      "cast_fire__better": {
+        "type": "noul",
+        "noul": 0.11
+      },
+      "cast_wards__worse": {
+        "type": "noul",
+        "noul": 0.41
+      },
+      "cast_wards__better": {
+        "type": "noul",
+        "noul": 0.31
+      },
+      "lightning__worse": {
+        "type": "noul",
+        "noul": 0.69
+      },
+      "lightning__better": {
+        "type": "noul",
+        "noul": 0.15
+      },
+      "knockback__worse": {
+        "type": "noul",
+        "noul": 0.46
+      },
+      "knockback__better": {
+        "type": "noul",
+        "noul": 0.53
+      },
+      "armored_foe__worse": {
+        "type": "noul",
+        "noul": 0.27
+      },
+      "armored_foe__better": {
+        "type": "noul",
+        "noul": 0.75
+      },
+      "long_fight__worse": {
+        "type": "noul",
+        "noul": 0.2
+      },
+      "long_fight__better": {
+        "type": "noul",
+        "noul": 0.43
+      },
+      "tight_tunnel__worse": {
+        "type": "noul",
+        "noul": 0.94
+      },
+      "tight_tunnel__better": {
+        "type": "noul",
+        "noul": 0.05
+      },
+      "river_current__worse": {
+        "type": "noul",
+        "noul": 0.19
+      },
+      "river_current__better": {
+        "type": "noul",
+        "noul": 0.31
+      }
+    },
+    "usage": {
+      "input_tokens": 4945,
+      "output_tokens": 758,
+      "cost": 0.00020769,
+      "is_byok": false,
+      "cost_details": {
+        "upstream_inference_cost": 0.00020769,
+        "upstream_inference_prompt_cost": 0.00020769,
+        "upstream_inference_completions_cost": 0
+      }
+    },
+    "id": "gen-dec-1794329509-QMxMWomcc4xx9u79dbHV",
+    "provider": "TypeSafe"
+  },
+  "matrix_robe": {
+    "model": "typesafe/jev-1.14-20261014",
+    "answers": {
+      "ambush_unaware__worse": {
+        "type": "noul",
+        "noul": 0.12
+      },
+      "ambush_unaware__better": {
+        "type": "noul",
+        "noul": 0.45
+      },
+      "straight_fight_clawed__worse": {
+        "type": "noul",
+        "noul": 0.85
+      },
+      "straight_fight_clawed__better": {
+        "type": "noul",
+        "noul": 0.12
+      },
+      "surrounded__worse": {
+        "type": "noul",
+        "noul": 0.54
+      },
+      "surrounded__better": {
+        "type": "noul",
+        "noul": 0.26
+      },
+      "fire_breather__worse": {
+        "type": "noul",
+        "noul": 0.18
+      },
+      "fire_breather__better": {
+        "type": "noul",
+        "noul": 0.8
+      },
+      "deep_water__worse": {
+        "type": "noul",
+        "noul": 0.14
+      },
+      "deep_water__better": {
+        "type": "noul",
+        "noul": 0.8
+      },
+      "desert_travel__worse": {
+        "type": "noul",
+        "noul": 0.12
+      },
+      "desert_travel__better": {
+        "type": "noul",
+        "noul": 0.82
+      },
+      "tundra__worse": {
+        "type": "noul",
+        "noul": 0.8
+      },
+      "tundra__better": {
+        "type": "noul",
+        "noul": 0.14
+      },
+      "keen_ears__worse": {
+        "type": "noul",
+        "noul": 0.06
+      },
+      "keen_ears__better": {
+        "type": "noul",
+        "noul": 0.74
+      },
+      "protect_ally__worse": {
+        "type": "noul",
+        "noul": 0.81
+      },
+      "protect_ally__better": {
+        "type": "noul",
+        "noul": 0.13
+      },
+      "flee_pursuer__worse": {
+        "type": "noul",
+        "noul": 0.31
+      },
+      "flee_pursuer__better": {
+        "type": "noul",
+        "noul": 0.61
+      },
+      "cast_fire__worse": {
+        "type": "noul",
+        "noul": 0.19
+      },
+      "cast_fire__better": {
+        "type": "noul",
+        "noul": 0.72
+      },
+      "cast_wards__worse": {
+        "type": "noul",
+        "noul": 0.18
+      },
+      "cast_wards__better": {
+        "type": "noul",
+        "noul": 0.54
+      },
+      "lightning__worse": {
+        "type": "noul",
+        "noul": 0.12
+      },
+      "lightning__better": {
+        "type": "noul",
+        "noul": 0.63
+      },
+      "knockback__worse": {
+        "type": "noul",
+        "noul": 0.78
+      },
+      "knockback__better": {
+        "type": "noul",
+        "noul": 0.29
+      },
+      "armored_foe__worse": {
+        "type": "noul",
+        "noul": 0.52
+      },
+      "armored_foe__better": {
+        "type": "noul",
+        "noul": 0.25
+      },
+      "long_fight__worse": {
+        "type": "noul",
+        "noul": 0.18
+      },
+      "long_fight__better": {
+        "type": "noul",
+        "noul": 0.31
+      },
+      "tight_tunnel__worse": {
+        "type": "noul",
+        "noul": 0.17
+      },
+      "tight_tunnel__better": {
+        "type": "noul",
+        "noul": 0.34
+      },
+      "river_current__worse": {
+        "type": "noul",
+        "noul": 0.9
+      },
+      "river_current__better": {
+        "type": "noul",
+        "noul": 0.12
+      }
+    },
+    "usage": {
+      "input_tokens": 4606,
+      "output_tokens": 758,
+      "cost": 0.000193452,
+      "is_byok": false,
+      "cost_details": {
+        "upstream_inference_cost": 0.000193452,
+        "upstream_inference_prompt_cost": 0.000193452,
+        "upstream_inference_completions_cost": 0
+      }
+    },
+    "id": "gen-dec-1794329509-W8z291gB6ViNvMVB3mqp",
+    "provider": "TypeSafe"
+  },
+  "matrix_leather": {
+    "model": "typesafe/jev-1.14-20261014",
+    "answers": {
+      "ambush_unaware__worse": {
+        "type": "noul",
+        "noul": 0.09
+      },
+      "ambush_unaware__better": {
+        "type": "noul",
+        "noul": 0.43
+      },
+      "straight_fight_clawed__worse": {
+        "type": "noul",
+        "noul": 0.7
+      },
+      "straight_fight_clawed__better": {
+        "type": "noul",
+        "noul": 0.18
+      },
+      "surrounded__worse": {
+        "type": "noul",
+        "noul": 0.34
+      },
+      "surrounded__better": {
+        "type": "noul",
+        "noul": 0.24
+      },
+      "fire_breather__worse": {
+        "type": "noul",
+        "noul": 0.14
+      },
+      "fire_breather__better": {
+        "type": "noul",
+        "noul": 0.65
+      },
+      "deep_water__worse": {
+        "type": "noul",
+        "noul": 0.1
+      },
+      "deep_water__better": {
+        "type": "noul",
+        "noul": 0.61
+      },
+      "desert_travel__worse": {
+        "type": "noul",
+        "noul": 0.1
+      },
+      "desert_travel__better": {
+        "type": "noul",
+        "noul": 0.72
+      },
+      "tundra__worse": {
+        "type": "noul",
+        "noul": 0.48
+      },
+      "tundra__better": {
+        "type": "noul",
+        "noul": 0.21
+      },
+      "keen_ears__worse": {
+        "type": "noul",
+        "noul": 0.06
+      },
+      "keen_ears__better": {
+        "type": "noul",
+        "noul": 0.76
+      },
+      "protect_ally__worse": {
+        "type": "noul",
+        "noul": 0.73
+      },
+      "protect_ally__better": {
+        "type": "noul",
+        "noul": 0.12
+      },
+      "flee_pursuer__worse": {
+        "type": "noul",
+        "noul": 0.15
+      },
+      "flee_pursuer__better": {
+        "type": "noul",
+        "noul": 0.64
+      },
+      "cast_fire__worse": {
+        "type": "noul",
+        "noul": 0.11
+      },
+      "cast_fire__better": {
+        "type": "noul",
+        "noul": 0.21
+      },
+      "cast_wards__worse": {
+        "type": "noul",
+        "noul": 0.32
+      },
+      "cast_wards__better": {
+        "type": "noul",
+        "noul": 0.15
+      },
+      "lightning__worse": {
+        "type": "noul",
+        "noul": 0.1
+      },
+      "lightning__better": {
+        "type": "noul",
+        "noul": 0.53
+      },
+      "knockback__worse": {
+        "type": "noul",
+        "noul": 0.54
+      },
+      "knockback__better": {
+        "type": "noul",
+        "noul": 0.27
+      },
+      "armored_foe__worse": {
+        "type": "noul",
+        "noul": 0.45
+      },
+      "armored_foe__better": {
+        "type": "noul",
+        "noul": 0.25
+      },
+      "long_fight__worse": {
+        "type": "noul",
+        "noul": 0.14
+      },
+      "long_fight__better": {
+        "type": "noul",
+        "noul": 0.34
+      },
+      "tight_tunnel__worse": {
+        "type": "noul",
+        "noul": 0.11
+      },
+      "tight_tunnel__better": {
+        "type": "noul",
+        "noul": 0.28
+      },
+      "river_current__worse": {
+        "type": "noul",
+        "noul": 0.74
+      },
+      "river_current__better": {
+        "type": "noul",
+        "noul": 0.12
+      }
+    },
+    "usage": {
+      "input_tokens": 4608,
+      "output_tokens": 758,
+      "cost": 0.000193536,
+      "is_byok": false,
+      "cost_details": {
+        "upstream_inference_cost": 0.000193536,
+        "upstream_inference_prompt_cost": 0.000193536,
+        "upstream_inference_completions_cost": 0
+      }
+    },
+    "id": "gen-dec-1794329510-x2G4JJ6KiAGzHcVqk2lW",
+    "provider": "TypeSafe"
+  },
+  "matrix_plate": {
+    "model": "typesafe/jev-1.14-20261014",
+    "answers": {
+      "ambush_unaware__worse": {
+        "type": "noul",
+        "noul": 0.94
+      },
+      "ambush_unaware__better": {
+        "type": "noul",
+        "noul": 0.06
+      },
+      "straight_fight_clawed__worse": {
+        "type": "noul",
+        "noul": 0.15
+      },
+      "straight_fight_clawed__better": {
+        "type": "noul",
+        "noul": 0.8
+      },
+      "surrounded__worse": {
+        "type": "noul",
+        "noul": 0.35
+      },
+      "surrounded__better": {
+        "type": "noul",
+        "noul": 0.47
+      },
+      "fire_breather__worse": {
+        "type": "noul",
+        "noul": 0.95
+      },
+      "fire_breather__better": {
+        "type": "noul",
+        "noul": 0.05
+      },
+      "deep_water__worse": {
+        "type": "noul",
+        "noul": 0.97
+      },
+      "deep_water__better": {
+        "type": "noul",
+        "noul": 0.04
+      },
+      "desert_travel__worse": {
+        "type": "noul",
+        "noul": 0.96
+      },
+      "desert_travel__better": {
+        "type": "noul",
+        "noul": 0.05
+      },
+      "tundra__worse": {
+        "type": "noul",
+        "noul": 0.63
+      },
+      "tundra__better": {
+        "type": "noul",
+        "noul": 0.22
+      },
+      "keen_ears__worse": {
+        "type": "noul",
+        "noul": 0.96
+      },
+      "keen_ears__better": {
+        "type": "noul",
+        "noul": 0.05
+      },
+      "protect_ally__worse": {
+        "type": "noul",
+        "noul": 0.22
+      },
+      "protect_ally__better": {
+        "type": "noul",
+        "noul": 0.62
+      },
+      "flee_pursuer__worse": {
+        "type": "noul",
+        "noul": 0.79
+      },
+      "flee_pursuer__better": {
+        "type": "noul",
+        "noul": 0.11
+      },
+      "cast_fire__worse": {
+        "type": "noul",
+        "noul": 0.71
+      },
+      "cast_fire__better": {
+        "type": "noul",
+        "noul": 0.16
+      },
+      "cast_wards__worse": {
+        "type": "noul",
+        "noul": 0.13
+      },
+      "cast_wards__better": {
+        "type": "noul",
+        "noul": 0.62
+      },
+      "lightning__worse": {
+        "type": "noul",
+        "noul": 0.85
+      },
+      "lightning__better": {
+        "type": "noul",
+        "noul": 0.12
+      },
+      "knockback__worse": {
+        "type": "noul",
+        "noul": 0.65
+      },
+      "knockback__better": {
+        "type": "noul",
+        "noul": 0.51
+      },
+      "armored_foe__worse": {
+        "type": "noul",
+        "noul": 0.31
+      },
+      "armored_foe__better": {
+        "type": "noul",
+        "noul": 0.41
+      },
+      "long_fight__worse": {
+        "type": "noul",
+        "noul": 0.51
+      },
+      "long_fight__better": {
+        "type": "noul",
+        "noul": 0.39
+      },
+      "tight_tunnel__worse": {
+        "type": "noul",
+        "noul": 0.49
+      },
+      "tight_tunnel__better": {
+        "type": "noul",
+        "noul": 0.31
+      },
+      "river_current__worse": {
+        "type": "noul",
+        "noul": 0.19
+      },
+      "river_current__better": {
+        "type": "noul",
+        "noul": 0.86
+      }
+    },
+    "usage": {
+      "input_tokens": 4607,
+      "output_tokens": 758,
+      "cost": 0.000193494,
+      "is_byok": false,
+      "cost_details": {
+        "upstream_inference_cost": 0.000193494,
+        "upstream_inference_prompt_cost": 0.000193494,
+        "upstream_inference_completions_cost": 0
+      }
+    },
+    "id": "gen-dec-1794329510-mGloXDQUyF7R8TnbeWIS",
+    "provider": "TypeSafe"
+  },
+  "review": {
+    "model": "typesafe/jev-1.14-20261014",
+    "answers": {
+      "viability__dagger_leather": {
+        "type": "score",
+        "score": 1.39,
+        "legend": {
+          "0": "Not viable",
+          "1": "Narrow niche",
+          "2": "Solid",
+          "3": "Dominant everywhere"
+        },
+        "probabilities": {
+          "0": 0,
+          "1": 0.62,
+          "2": 0.38,
+          "3": 0
+        },
+        "confidence": 0.62
+      },
+      "viability__greatsword_plate": {
+        "type": "score",
+        "score": 1.09,
+        "legend": {
+          "0": "Not viable",
+          "1": "Narrow niche",
+          "2": "Solid",
+          "3": "Dominant everywhere"
+        },
+        "probabilities": {
+          "0": 0.02,
+          "1": 0.87,
+          "2": 0.11,
+          "3": 0
+        },
+        "confidence": 0.87
+      },
+      "viability__staff_robe_martial": {
+        "type": "score",
+        "score": 1.72,
+        "legend": {
+          "0": "Not viable",
+          "1": "Narrow niche",
+          "2": "Solid",
+          "3": "Dominant everywhere"
+        },
+        "probabilities": {
+          "0": 0,
+          "1": 0.29,
+          "2": 0.7,
+          "3": 0.01
+        },
+        "confidence": 0.7
+      },
+      "viability__staff_robe_fire": {
+        "type": "score",
+        "score": 1.79,
+        "legend": {
+          "0": "Not viable",
+          "1": "Narrow niche",
+          "2": "Solid",
+          "3": "Dominant everywhere"
+        },
+        "probabilities": {
+          "0": 0.01,
+          "1": 0.24,
+          "2": 0.69,
+          "3": 0.06
+        },
+        "confidence": 0.68
+      },
+      "viability__sword_leather_magic": {
+        "type": "score",
+        "score": 1.39,
+        "legend": {
+          "0": "Not viable",
+          "1": "Narrow niche",
+          "2": "Solid",
+          "3": "Dominant everywhere"
+        },
+        "probabilities": {
+          "0": 0.1,
+          "1": 0.43,
+          "2": 0.46,
+          "3": 0.01
+        },
+        "confidence": 0.36
+      },
+      "viability__spear_plate_wards": {
+        "type": "score",
+        "score": 1.25,
+        "legend": {
+          "0": "Not viable",
+          "1": "Narrow niche",
+          "2": "Solid",
+          "3": "Dominant everywhere"
+        },
+        "probabilities": {
+          "0": 0.03,
+          "1": 0.7,
+          "2": 0.26,
+          "3": 0.01
+        },
+        "confidence": 0.69
+      },
+      "viability__plate_wards_force_charge": {
+        "type": "score",
+        "score": 1.12,
+        "legend": {
+          "0": "Not viable",
+          "1": "Narrow niche",
+          "2": "Solid",
+          "3": "Dominant everywhere"
+        },
+        "probabilities": {
+          "0": 0.01,
+          "1": 0.86,
+          "2": 0.13,
+          "3": 0
+        },
+        "confidence": 0.86
+      },
+      "viability__dagger_plate": {
+        "type": "score",
+        "score": 0.79,
+        "legend": {
+          "0": "Not viable",
+          "1": "Narrow niche",
+          "2": "Solid",
+          "3": "Dominant everywhere"
+        },
+        "probabilities": {
+          "0": 0.24,
+          "1": 0.73,
+          "2": 0.03,
+          "3": 0
+        },
+        "confidence": 0.73
+      },
+      "viability__greatsword_robe": {
+        "type": "score",
+        "score": 1.16,
+        "legend": {
+          "0": "Not viable",
+          "1": "Narrow niche",
+          "2": "Solid",
+          "3": "Dominant everywhere"
+        },
+        "probabilities": {
+          "0": 0.05,
+          "1": 0.75,
+          "2": 0.2,
+          "3": 0
+        },
+        "confidence": 0.75
+      },
+      "viability__staff_plate_wards": {
+        "type": "score",
+        "score": 1.21,
+        "legend": {
+          "0": "Not viable",
+          "1": "Narrow niche",
+          "2": "Solid",
+          "3": "Dominant everywhere"
+        },
+        "probabilities": {
+          "0": 0.03,
+          "1": 0.73,
+          "2": 0.23,
+          "3": 0.01
+        },
+        "confidence": 0.72
+      },
+      "viability__spear_leather": {
+        "type": "score",
+        "score": 1.82,
+        "legend": {
+          "0": "Not viable",
+          "1": "Narrow niche",
+          "2": "Solid",
+          "3": "Dominant everywhere"
+        },
+        "probabilities": {
+          "0": 0,
+          "1": 0.18,
+          "2": 0.81,
+          "3": 0.01
+        },
+        "confidence": 0.81
+      },
+      "viability__empty_hands_robe": {
+        "type": "score",
+        "score": 1.26,
+        "legend": {
+          "0": "Not viable",
+          "1": "Narrow niche",
+          "2": "Solid",
+          "3": "Dominant everywhere"
+        },
+        "probabilities": {
+          "0": 0.01,
+          "1": 0.72,
+          "2": 0.27,
+          "3": 0
+        },
+        "confidence": 0.72
+      },
+      "pattern__wards_cancel_metal": {
+        "type": "noul",
+        "noul": 0.08
+      },
+      "pattern__plate_force_uncountered": {
+        "type": "noul",
+        "noul": 0.17
+      },
+      "pattern__staff_strictly_better": {
+        "type": "noul",
+        "noul": 0.08
+      },
+      "pattern__heaviest_piece_exploit": {
+        "type": "noul",
+        "noul": 0.68
+      },
+      "pattern__backstab_trivial": {
+        "type": "noul",
+        "noul": 0.3
+      },
+      "pattern__backstab_too_rare": {
+        "type": "noul",
+        "noul": 0.59
+      },
+      "pattern__death_exploit": {
+        "type": "noul",
+        "noul": 0.82
+      },
+      "pattern__focus_optional": {
+        "type": "noul",
+        "noul": 0.65
+      },
+      "pattern__sneak_binary": {
+        "type": "noul",
+        "noul": 0.07
+      },
+      "pattern__rules_ambiguous": {
+        "type": "noul",
+        "noul": 0.85
+      },
+      "missing_rule": {
+        "type": "choice",
+        "choice": "focus_economy",
+        "probabilities": {
+          "time_pressure": 0.02,
+          "gear_swapping": 0.3,
+          "magic_counters": 0.07,
+          "detection": 0.03,
+          "focus_economy": 0.41,
+          "ranged": 0.17
+        },
+        "confidence": 0.29
+      }
+    },
+    "usage": {
+      "input_tokens": 3213,
+      "output_tokens": 539,
+      "cost": 0.000134946,
+      "is_byok": false,
+      "cost_details": {
+        "upstream_inference_cost": 0.000134946,
+        "upstream_inference_prompt_cost": 0.000134946,
+        "upstream_inference_completions_cost": 0
+      }
+    },
+    "id": "gen-dec-1794329510-7lDFaYQxCgaGLA2pBsyh",
+    "provider": "TypeSafe"
+  }
+}
