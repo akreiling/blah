@@ -1,7 +1,7 @@
 # Isle world art
 
-PixelLab-generated 32×32 terrain tilesets and object icons for Isle. Creature bodies remain genome-generated,
-and the player and fixed-table creatures keep their readable text markers.
+PixelLab-generated 32×32 terrain tilesets and object icons for Isle. Creature bodies remain genome-generated.
+The player is a code-drawn figure shaped by practice and current gear; fixed-table creatures keep text markers.
 
 - `terrain_<set>.png`: a corner-matched (Wang) tileset joining two terrains, packed 4×4 by corner mask
   (NW = 8, NE = 4, SW = 2, SE = 1, set where the corner is the set's terrain `b`). The game draws each cell as
@@ -29,6 +29,26 @@ hard boundary. Preview the runtime warp offline with
 `mise exec -- cargo test -p isle contact_sheet -- --ignored`
 (`target/isle-world-art/noise-contact.png`). Measure CPU raster/cache costs with
 `mise exec -- cargo test -p isle ground_render_cost -- --ignored --nocapture`.
+
+The player's 32×32 figure is drawn locally in `src/hero.rs`, with no generated assets. The highest weapon,
+magic, or stealth practice rank chooses the clothing and headgear; ties favor the held weapon, then the
+earlier practice in the skills list. Novices remain wanderers, and Skilled or better adds gold trim.
+Equipped weapons, bows, armor, and rings layer onto the body. A yellow ring at the feet marks the player;
+a translucent shadow inside it and a dark rim around it ground the figure and keep the ring legible on pale
+sand and stone. The figure keeps its colors under every sky and stone. Preview the callings and gear, then
+the same figures on grass under each sky, sand, dirt, rock, water, and each Deep stone, with
+`mise exec -- cargo test -p isle hero_contact_sheet -- --ignored`
+(`target/isle-world-art/hero-contact.png`).
+
+Presentation-only weather grades ground and scenery in world-space patches. The round drives slow
+overcast/clear/mist changes; a separate 180 ms visual timer cycles eight cached grass-sway frames.
+Deep geology comes in seeded three-floor bands, with broad stone veins, damp slate patches, and narrow
+basalt seams. Seam heat and visible living cave light pulse through GPU opacity; remembered ground does
+not animate. Heroes and dropped items keep their original colors. Animation never changes rules or saves.
+Only visible cells retain their sway frames; unused images and display-scale variants are released.
+Preview palettes with `mise exec -- cargo test -p isle mood_contact_sheet -- --ignored`
+(`target/isle-world-art/mood-contact.png`), or launch with `--sky overcast|clear|mist` and
+`--stone limestone|slate|basalt`. The cost test above includes cold, sway-fill, cached, and scrolling frames.
 
 ## Growing the library
 

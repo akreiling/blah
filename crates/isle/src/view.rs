@@ -16,7 +16,9 @@ use isle_core::{
 };
 
 use crate::art::{ArtCache, GroundCell, Object, TerrainArt, item_art, terrain_art};
+use crate::hero::Look;
 use crate::input::{CommandLine, InputAction};
+use crate::mood::{self, FRAME_MS, FRAMES};
 use crate::sprites::SpriteCache;
 
 /// Cells along each side of the map.
@@ -78,6 +80,12 @@ pub struct IsleView {
     /// Log total before the latest round: lines past it are news.
     mark: u64,
     _ticker: Option<Task<()>>,
+    /// Animation time starts with the window; it never touches the game.
+    born: Clock,
+    /// Whether the last frame showed anything that moves, so idle maps cost nothing.
+    animated: bool,
+    forced_mood: mood::Override,
+    _animator: Task<()>,
     control: Option<crate::control::Server>,
     _control: Option<(Task<()>, Subscription)>,
 }
@@ -103,6 +111,19 @@ impl IsleView {
                 }
             })
         });
+        let animator = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(FRAME_MS)).await;
+                let next = this.update(cx, |view, cx| {
+                    if view.animated {
+                        cx.notify();
+                    }
+                });
+                if next.is_err() {
+                    break;
+                }
+            }
+        });
         let mark = game.log_total().saturating_sub(1);
         let sprites = SpriteCache::new(game.seed());
         let art = ArtCache::new(game.seed());
@@ -121,9 +142,18 @@ impl IsleView {
             art,
             mark,
             _ticker: ticker,
+            born: Clock::now(),
+            animated: false,
+            forced_mood: mood::Override::default(),
+            _animator: animator,
             control: None,
             _control: None,
         }
+    }
+
+    /// Preview a sky or stone regardless of the round or floor.
+    pub fn force_mood(&mut self, forced: mood::Override) {
+        self.forced_mood = forced;
     }
 
     fn save(&mut self) {
@@ -405,8 +435,11 @@ impl Focusable for IsleView {
 impl Render for IsleView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<IsleView>) -> impl IntoElement {
         self.sprites.begin(window);
-        self.art.begin(window);
-        let map = map(&self.game, &mut self.sprites, &mut self.art);
+        self.art.begin(window, mood::of(&self.game, self.forced_mood));
+        let elapsed = self.born.elapsed();
+        let frame = ((elapsed.as_millis() as u64 / FRAME_MS) % u64::from(FRAMES)) as u8;
+        let (map, animated) = map(&self.game, &mut self.sprites, &mut self.art, frame, elapsed.as_secs_f32());
+        self.animated = animated;
         self.sprites.end(window);
         self.art.end(window);
         let title = self.save_error.clone().unwrap_or_else(|| {
@@ -880,8 +913,10 @@ fn map_cell_art<'a>(game: &'a Game, pos: Pos, labels: &[(Pos, char)]) -> Option<
     Some(MapCellArt { terrain, ground, remembered, lit: visible && game.illuminated(pos), actor })
 }
 
-fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache) -> Div {
+/// The map, and whether anything in it moves. `step` advances the grass sway; `elapsed` seconds drive glows.
+fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache, step: u8, elapsed: f32) -> (Div, bool) {
     let me = game.player().pos;
+    let mut animated = false;
     let labels: Vec<(Pos, char)> = game.sighted().iter().map(|s| (s.creature.pos, s.label)).collect();
     let rows = (-SIGHT..=SIGHT).map(|dy| {
         let cells = (-SIGHT..=SIGHT).map(|dx| {
@@ -892,6 +927,24 @@ fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache) -> Div {
                 let image_size = art.display_size();
                 let ground = art.ground(cell_art.ground, cell_art.remembered, cell_art.lit);
                 base = base.child(img(ground).size(px(image_size)).absolute().top_0().left_0());
+                let visible = !cell_art.remembered;
+                if let Some(tufts) = art.tufts(cell_art.ground, step, cell_art.remembered, cell_art.lit) {
+                    animated |= visible;
+                    base = base.child(img(tufts).size(px(image_size)).absolute().top_0().left_0());
+                }
+                if let Some(heat) = visible.then(|| art.heat(cell_art.ground, cell_art.lit)).flatten() {
+                    animated = true;
+                    let glow = 0.35 + 0.65 * mood::pulse(elapsed, 2.6);
+                    base = base.child(img(heat).size(px(image_size)).absolute().top_0().left_0().opacity(glow));
+                }
+                if cell_art.lit {
+                    // Living light breathes; every lit cell shares the phase, so the glow has no seams.
+                    animated = true;
+                    let alpha = (10.0 + 26.0 * mood::pulse(elapsed, 1.9)) as u32;
+                    base = base.child(
+                        div().absolute().top_0().left_0().w(px(CELL_W)).h(px(CELL_H)).bg(rgba(0xa8_f0_d0_00 | alpha)),
+                    );
+                }
                 if let Some(object) = cell_art.terrain.object {
                     let image = art.object(object, cell_art.terrain.mirrored, cell_art.remembered, cell_art.lit);
                     base = base.child(img(image).size(px(image_size)).absolute().top_0().left_0());
@@ -919,21 +972,8 @@ fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache) -> Div {
                 }
                 match cell_art.actor {
                     Some(MapActor::Player) => {
-                        base = base.child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .w(px(CELL_W))
-                                .h(px(CELL_H))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_size(px(GLYPH))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(rgb(YOU))
-                                .child(div().px(px(3.0)).bg(rgba(0x00100dcc)).child("@")),
-                        );
+                        let image = art.hero(Look::of(game.player()), cell_art.lit);
+                        base = base.child(img(image).size(px(image_size)).absolute().top_0().left_0());
                     }
                     Some(MapActor::Creature { creature, label }) if sprite_creature(game, pos).is_some() => {
                         let color = creature_color(creature.kind, creature.hunting);
@@ -964,7 +1004,7 @@ fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache) -> Div {
                         base = creature_glyph(base, creature, label);
                     }
                     Some(MapActor::Item(object)) => {
-                        let image = art.object(object, false, false, false);
+                        let image = art.item(object);
                         base = base.child(img(image).size(px(image_size)).absolute().top_0().left_0());
                     }
                     None => {}
@@ -974,7 +1014,8 @@ fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache) -> Div {
         });
         div().flex().flex_row().children(cells.collect::<Vec<_>>())
     });
-    frame().w(px(MAP_W)).h(px(MAP_H)).flex().flex_col().children(rows.collect::<Vec<_>>())
+    let column = frame().w(px(MAP_W)).h(px(MAP_H)).flex().flex_col().children(rows.collect::<Vec<_>>());
+    (column, animated)
 }
 
 fn creature_glyph(base: Div, creature: &Creature, label: char) -> Div {

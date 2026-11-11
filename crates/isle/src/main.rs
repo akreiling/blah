@@ -1,14 +1,17 @@
 //! Isle: a solo island adventure in the manner of *Island of Kesmai*, in one window.
 //!
-//! Usage: `isle [--new] [--save PATH] [--round SECONDS] [--seed N] [--control PATH]`.
+//! Usage: `isle [--new] [--save PATH] [--round SECONDS] [--seed N] [--control PATH] [--sky NAME] [--stone NAME]`.
 //!
 //! A bare launch resumes the saved character, or starts a new one. `--new` starts over and keeps the old
 //! save beside the new one. Play is turn-based: each command is a round. `--round` puts rounds on a clock
-//! instead, the way the original ticked every ten seconds.
+//! instead, the way the original ticked every ten seconds. `--sky overcast|clear|mist` and
+//! `--stone limestone|slate|basalt` hold the map's look for previewing; they never change the game.
 
 mod art;
 mod control;
+mod hero;
 mod input;
+mod mood;
 mod save;
 mod sprites;
 mod view;
@@ -25,7 +28,8 @@ use isle_core::Game;
 
 use crate::view::IsleView;
 
-const USAGE: &str = "usage: isle [--new] [--save PATH] [--round SECONDS] [--seed N] [--control PATH]";
+const USAGE: &str =
+    "usage: isle [--new] [--save PATH] [--round SECONDS] [--seed N] [--control PATH] [--sky NAME] [--stone NAME]";
 
 actions!(
     isle,
@@ -43,10 +47,12 @@ struct Args {
     round: Option<f32>,
     seed: Option<u64>,
     control: Option<PathBuf>,
+    mood: mood::Override,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
-    let mut parsed = Args { fresh: false, save: None, round: None, seed: None, control: None };
+    let mut parsed =
+        Args { fresh: false, save: None, round: None, seed: None, control: None, mood: mood::Override::default() };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -64,6 +70,16 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--seed" => {
                 let n = args.next().ok_or("--seed needs a number")?;
                 parsed.seed = Some(n.parse().map_err(|_| format!("--seed takes a whole number, not {n:?}"))?);
+            }
+            "--sky" => {
+                let n = args.next().ok_or("--sky needs overcast, clear, or mist")?;
+                parsed.mood.sky =
+                    Some(mood::parse_sky(&n).ok_or(format!("--sky takes overcast, clear, or mist, not {n:?}"))?);
+            }
+            "--stone" => {
+                let n = args.next().ok_or("--stone needs limestone, slate, or basalt")?;
+                parsed.mood.stone =
+                    Some(mood::parse_stone(&n).ok_or(format!("--stone takes limestone, slate, or basalt, not {n:?}"))?);
             }
             other => return Err(format!("unknown argument {other:?}")),
         }
@@ -110,6 +126,7 @@ fn main() {
     let round = args.round.map(Duration::from_secs_f32);
     // A controlled window must not take the keyboard from whoever launched it.
     let foreground = control.is_none();
+    let forced_mood = args.mood;
 
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
@@ -136,6 +153,7 @@ fn main() {
         cx.open_window(options, |window, cx| {
             cx.new(|cx| {
                 let mut view = IsleView::new(game, path, round, window, cx);
+                view.force_mood(forced_mood);
                 if let Some(server) = control {
                     view.control(server, cx);
                 }
@@ -173,6 +191,9 @@ mod tests {
         assert_eq!(args(&["--control", "/tmp/isle.sock"]).unwrap().control, Some("/tmp/isle.sock".into()));
         assert!(args(&["--control"]).is_err());
         assert!(args(&["7"]).is_err());
+        let a = args(&["--sky", "mist", "--stone", "basalt"]).unwrap();
+        assert_eq!(a.mood, mood::Override { sky: mood::parse_sky("mist"), stone: Some(mood::Stone::Basalt) });
+        assert!(args(&["--sky", "rain"]).is_err() && args(&["--stone"]).is_err());
     }
 
     #[test]

@@ -17,8 +17,18 @@ do not repeat in a grid. Broad meadow patches and sparse grass tufts, sand rippl
 vary natural ground; streets and Deep masonry stay straighter. Neighboring cells sample the same warped world;
 terrain pairs without a joining tileset still meet at a hard edge. Trees, boulders, doors, stairs, services,
 and ground items are objects over the ground; trees and boulders also vary by mirroring. Unknown neighbors
-never shape a visible edge. Your `@` and fixed-table creatures keep their text glyphs. `crates/isle/assets/world/README.md` describes the art
-library and how to grow it.
+never shape a visible edge. Your character is a code-drawn figure: your highest weapon, magic, or stealth
+practice rank shapes its clothing and headgear, while your current weapon, bow, armor, and ring appear
+on the body. Skilled practice adds gold trim; a shadowed yellow ring marks your feet. Fixed-table creatures keep
+their text glyphs, and the text map still represents you as `@`.
+`crates/isle/assets/world/README.md` describes the art library and how to grow it.
+
+The sky shifts slowly with the round between overcast, clear spells, and mist; sunlight and mist vary
+in broad patches across the land. Grass tufts sway while you think. Deep floors have seeded bands of
+limestone, damp slate, and basalt, with broad veins; basalt cracks and living cave light gently pulse.
+Remembered ground stays still. These are visual effects only: animation never advances a round or changes
+the save. Preview a fixed look with `just isle --sky overcast|clear|mist` or
+`just isle --stone limestone|slate|basalt` (the stone override applies underground).
 
 - `crates/isle-core`: the rules. Pure and deterministic; the whole `Game` serializes, dice included.
 - `crates/isle`: the GPUI window. Run it with `just isle`.

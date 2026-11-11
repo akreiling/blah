@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::rng::Rng;
 
 /// A hand weapon.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Weapon {
     /// Quick and light.
     Dagger,
@@ -54,7 +54,7 @@ impl Weapon {
 }
 
 /// A bow, fired one nocked arrow at a time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Bow {
     /// Light, short range.
     Shortbow,
@@ -89,7 +89,7 @@ impl Bow {
 }
 
 /// Body armor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Armor {
     /// Light hide.
     Leather,
