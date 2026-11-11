@@ -10,8 +10,8 @@ dirs = "5"
 gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
 isle-core = { path = "../isle-core" }
 blah-core = { path = "../core" }
-# The frame type GPUI uses for in-memory sprite images.
-image = { version = "0.25", default-features = false }
+# The frame type GPUI uses for in-memory sprite images and the embedded PNG art.
+image = { version = "0.25", default-features = false, features = ["png"] }
 serde_json = "1"
 
 [lints]

@@ -9,8 +9,13 @@ Evolved creatures now appear as genome-generated pixel sprites in the map. Their
 body plan; individual genes determine size, limbs, covering, and color. Surface life keeps its home
 biome's tint; Deep life takes a stone tint, except luminous bodies shine pale green. Each sprite carries
 its target letter, matching IN SIGHT and commands such as `attack a`. Sprites stay crisp at display scale
-and disappear when the creature leaves sight. Terrain, your `@`, treasure, and fixed-table creatures
-retain their text glyphs for now.
+and disappear when the creature leaves sight.
+
+The map draws terrain from 32×32 PixelLab tilesets whose edges join neighboring terrain on cell edges:
+grass, sand, water, rock, town streets and stone, and Deep floors and walls. Trees, boulders, doors, stairs,
+services, and ground items are drawn as objects over it. Unknown neighbors never shape a visible edge. Your
+`@` and fixed-table creatures keep their text glyphs. `crates/isle/assets/world/README.md` describes the art
+library and how to grow it.
 
 - `crates/isle-core`: the rules. Pure and deterministic; the whole `Game` serializes, dice included.
 - `crates/isle`: the GPUI window. Run it with `just isle`.

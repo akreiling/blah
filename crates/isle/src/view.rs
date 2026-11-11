@@ -1,4 +1,4 @@
-//! The window: the map on the left drawn two characters to a cell, the character panel on the right, the
+//! The window: the map on the left drawn as layered pixel tiles, the character panel on the right, the
 //! log beneath, and the command line at the bottom. Commands resolve rounds, unless a clock is requested.
 
 use std::collections::VecDeque;
@@ -7,7 +7,7 @@ use std::time::{Duration, Instant as Clock};
 
 use gpui::{
     App, Context, Div, FocusHandle, Focusable, FontWeight, KeyDownEvent, Keystroke, Pixels, SharedString, Subscription,
-    Task, Window, div, img, prelude::*, px, rgb,
+    Task, Window, div, img, prelude::*, px, rgb, rgba,
 };
 
 use isle_core::{
@@ -15,14 +15,15 @@ use isle_core::{
     distance,
 };
 
+use crate::art::{ArtCache, Object, Quarter, TerrainArt, ground_quarters, item_art, terrain_art};
 use crate::input::{CommandLine, InputAction};
 use crate::sprites::SpriteCache;
 
 /// Cells along each side of the map.
 const VIEW: i32 = 2 * SIGHT + 1;
-const CELL_W: f32 = 40.0;
-const CELL_H: f32 = 36.0;
-const GLYPH: f32 = 22.0;
+const CELL_W: f32 = 32.0;
+const CELL_H: f32 = 32.0;
+const GLYPH: f32 = 20.0;
 const TITLE: f32 = 28.0;
 const GAP: f32 = 12.0;
 const BORDER: f32 = 2.0;
@@ -73,6 +74,7 @@ pub struct IsleView {
     paused: bool,
     show_skills: bool,
     sprites: SpriteCache,
+    art: ArtCache,
     /// Log total before the latest round: lines past it are news.
     mark: u64,
     _ticker: Option<Task<()>>,
@@ -103,6 +105,7 @@ impl IsleView {
         });
         let mark = game.log_total().saturating_sub(1);
         let sprites = SpriteCache::new(game.seed());
+        let art = ArtCache::new();
         IsleView {
             game,
             path,
@@ -115,6 +118,7 @@ impl IsleView {
             paused: false,
             show_skills: false,
             sprites,
+            art,
             mark,
             _ticker: ticker,
             control: None,
@@ -401,8 +405,10 @@ impl Focusable for IsleView {
 impl Render for IsleView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<IsleView>) -> impl IntoElement {
         self.sprites.begin(window);
-        let map = map(&self.game, &mut self.sprites);
+        self.art.begin(window);
+        let map = map(&self.game, &mut self.sprites, &mut self.art);
         self.sprites.end(window);
+        self.art.end(window);
         let title = self.save_error.clone().unwrap_or_else(|| {
             let file = self.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
             format!("Isle · seed {} · {file}", self.game.seed())
@@ -820,48 +826,176 @@ fn dimmed(color: u32) -> u32 {
     scale(16) | scale(8) | scale(0)
 }
 
-fn map(game: &Game, sprites: &mut SpriteCache) -> Div {
+#[derive(Clone, Copy)]
+enum MapActor<'a> {
+    Player,
+    Creature { creature: &'a Creature, label: char },
+    Item(Object),
+}
+
+struct MapCellArt<'a> {
+    terrain: TerrainArt,
+    quarters: [Quarter; 4],
+    remembered: bool,
+    lit: bool,
+    actor: Option<MapActor<'a>>,
+}
+
+/// The visual map's shared selection helper. Unknown cells are blank; memory carries terrain only.
+fn map_cell_art<'a>(game: &'a Game, pos: Pos, labels: &[(Pos, char)]) -> Option<MapCellArt<'a>> {
+    let visible = game.sees(pos);
+    let remembered = !visible;
+    if remembered && !game.remembers(pos) {
+        return None;
+    }
+    let level = game.level();
+    let actor = if pos == game.player().pos {
+        Some(MapActor::Player)
+    } else if visible {
+        if let Some(creature) = game.creature_at(pos) {
+            let label = labels.iter().find(|(at, _)| *at == pos).map_or('?', |&(_, label)| label);
+            Some(MapActor::Creature { creature, label })
+        } else {
+            game.pile_at(pos).and_then(|pile| item_art(&pile.items)).map(MapActor::Item)
+        }
+    } else {
+        None
+    };
+    let deep = level.deep().is_some();
+    let terrain = terrain_art(level.tile(pos), level.ground(pos), deep, pos);
+    // Unknown neighbors take this cell's own ground, so tile edges never reveal unexplored terrain.
+    let around = [-1, 0, 1].map(|dy| {
+        [-1, 0, 1].map(|dx| {
+            let at = (pos.0 + dx, pos.1 + dy);
+            if (dx, dy) == (0, 0) || !(game.sees(at) || game.remembers(at)) {
+                terrain.ground
+            } else {
+                terrain_art(level.tile(at), level.ground(at), deep, at).ground
+            }
+        })
+    });
+    Some(MapCellArt {
+        terrain,
+        quarters: ground_quarters(around),
+        remembered,
+        lit: visible && game.illuminated(pos),
+        actor,
+    })
+}
+
+fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache) -> Div {
     let me = game.player().pos;
     let labels: Vec<(Pos, char)> = game.sighted().iter().map(|s| (s.creature.pos, s.label)).collect();
     let rows = (-SIGHT..=SIGHT).map(|dy| {
         let cells = (-SIGHT..=SIGHT).map(|dx| {
             let pos = (me.0 + dx, me.1 + dy);
-            let (glyph, color, back) = cell(game, pos, &labels);
-            let base = div()
-                .w(px(CELL_W))
-                .h(px(CELL_H))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(GLYPH))
-                .text_color(rgb(color))
-                .when_some(back, |d, b| d.bg(rgb(b)))
-                .when(dx == 0 && dy == 0, |d| d.font_weight(FontWeight::BOLD));
-            if let Some(creature) = sprite_creature(game, pos)
-                && let Some(image) = sprites.get(creature)
-            {
-                let label = labels.iter().find(|(at, _)| *at == pos).map_or('?', |&(_, label)| label);
-                return base.relative().child(img(image).size(px(sprites.display_size()))).child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .w(px(12.0))
-                        .h(px(14.0))
-                        .bg(rgb(SCREEN))
-                        .text_color(rgb(color))
-                        .text_size(px(12.0))
-                        .line_height(px(14.0))
-                        .font_weight(FontWeight::BOLD)
-                        .child(label.to_string()),
-                );
+            let cell_art = map_cell_art(game, pos, &labels);
+            let mut base = div().w(px(CELL_W)).h(px(CELL_H)).flex_none().relative().bg(rgb(SCREEN));
+            if let Some(cell_art) = cell_art {
+                let image_size = art.display_size();
+                let ground = art.ground(cell_art.quarters, cell_art.terrain.tint, cell_art.remembered, cell_art.lit);
+                base = base.child(img(ground).size(px(image_size)).absolute().top_0().left_0());
+                if let Some(object) = cell_art.terrain.object {
+                    let image = art.object(object, cell_art.remembered, cell_art.lit);
+                    base = base.child(img(image).size(px(image_size)).absolute().top_0().left_0());
+                    let marker = match object {
+                        Object::StairsUp => Some("<"),
+                        Object::StairsDown => Some(">"),
+                        _ => None,
+                    };
+                    if let Some(marker) = marker {
+                        base = base.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .w(px(12.0))
+                                .h(px(14.0))
+                                .bg(rgba(0x071013d0))
+                                .text_color(rgb(0xff_ff_ff))
+                                .text_size(px(11.0))
+                                .line_height(px(14.0))
+                                .font_weight(FontWeight::BOLD)
+                                .child(marker),
+                        );
+                    }
+                }
+                match cell_art.actor {
+                    Some(MapActor::Player) => {
+                        base = base.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .w(px(CELL_W))
+                                .h(px(CELL_H))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(px(GLYPH))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb(YOU))
+                                .child(div().px(px(3.0)).bg(rgba(0x00100dcc)).child("@")),
+                        );
+                    }
+                    Some(MapActor::Creature { creature, label }) if sprite_creature(game, pos).is_some() => {
+                        let color = creature_color(creature.kind, creature.hunting);
+                        if let Some(image) = sprites.get(creature) {
+                            let display_size = sprites.display_size();
+                            let inset = (CELL_W - display_size) / 2.0;
+                            base =
+                                base.child(img(image).size(px(display_size)).absolute().top(px(inset)).left(px(inset)));
+                            base = base.child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .w(px(12.0))
+                                    .h(px(14.0))
+                                    .bg(rgb(SCREEN))
+                                    .text_color(rgb(color))
+                                    .text_size(px(12.0))
+                                    .line_height(px(14.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(label.to_string()),
+                            );
+                        } else {
+                            base = creature_glyph(base, creature, label);
+                        }
+                    }
+                    Some(MapActor::Creature { creature, label }) => {
+                        base = creature_glyph(base, creature, label);
+                    }
+                    Some(MapActor::Item(object)) => {
+                        let image = art.object(object, false, false);
+                        base = base.child(img(image).size(px(image_size)).absolute().top_0().left_0());
+                    }
+                    None => {}
+                }
             }
-            base.child(glyph)
+            if dx == 0 && dy == 0 { base.font_weight(FontWeight::BOLD) } else { base }
         });
         div().flex().flex_row().children(cells.collect::<Vec<_>>())
     });
     frame().w(px(MAP_W)).h(px(MAP_H)).flex().flex_col().children(rows.collect::<Vec<_>>())
+}
+
+fn creature_glyph(base: Div, creature: &Creature, label: char) -> Div {
+    let color = creature_color(creature.kind, creature.hunting);
+    base.child(
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .w(px(CELL_W))
+            .h(px(CELL_H))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(GLYPH))
+            .text_color(rgb(color))
+            .child(format!("{label}{}", initial(creature.kind))),
+    )
 }
 
 /// Match the text map's visibility and player priority; remembered creatures never become ghost sprites.
@@ -1225,7 +1359,60 @@ mod tests {
         let me = game.player().pos;
         assert_eq!(cell(&game, me, &[]).0, "@ ");
         assert_eq!(cell(&game, (me.0 + 40, me.1 + 40), &[]).0, "  ");
+        assert!(map_cell_art(&game, (me.0 + 40, me.1 + 40), &[]).is_none());
         assert_eq!(dimmed(0xff_ff_ff), 0x59_59_59);
+    }
+
+    #[test]
+    fn visual_layers_keep_actor_priority_and_never_reveal_remembered_contents() {
+        let mut game = encounter(7, Kind::Rat, 1, 20);
+        let me = game.player().pos;
+        let fixed_at = (me.0 + 1, me.1);
+        let item_at = (me.0 + 2, me.1);
+        let labels = vec![(fixed_at, 'A')];
+        assert!(matches!(map_cell_art(&game, me, &labels).unwrap().actor, Some(MapActor::Player)));
+        assert!(matches!(
+            map_cell_art(&game, fixed_at, &labels).unwrap().actor,
+            Some(MapActor::Creature { creature, label: 'A' }) if creature.wild.is_none()
+        ));
+
+        let mut save = serde_json::to_value(&game).unwrap();
+        save["piles"] = serde_json::to_value([
+            isle_core::Pile { at: isle_core::LevelId::Surface, pos: fixed_at, items: vec![Item::Gold(2)] },
+            isle_core::Pile { at: isle_core::LevelId::Surface, pos: item_at, items: vec![Item::Potion] },
+            isle_core::Pile { at: isle_core::LevelId::Surface, pos: me, items: vec![Item::Ring] },
+        ])
+        .unwrap();
+        game = serde_json::from_value(save.clone()).unwrap();
+        assert!(matches!(map_cell_art(&game, fixed_at, &labels).unwrap().actor, Some(MapActor::Creature { .. })));
+        assert!(matches!(map_cell_art(&game, item_at, &labels).unwrap().actor, Some(MapActor::Item(Object::Potion))));
+        assert!(matches!(map_cell_art(&game, me, &labels).unwrap().actor, Some(MapActor::Player)));
+
+        let clade = blah_core::clades(7)[0].clone();
+        let wild = isle_core::Wildlife {
+            lineage: isle_core::Lineage::Region(blah_core::SpeciesId {
+                region: blah_core::World::new(7).region_at(0, 0),
+                clade: clade.id,
+            }),
+            name: "Test beast".into(),
+            genome: clade.base,
+        };
+        save["creatures"][0]["kind"] = serde_json::json!(Kind::Wild);
+        save["creatures"][0]["wild"] = serde_json::to_value(wild).unwrap();
+        game = serde_json::from_value(save.clone()).unwrap();
+        assert!(matches!(
+            map_cell_art(&game, fixed_at, &[(fixed_at, 'A')]).unwrap().actor,
+            Some(MapActor::Creature { creature, .. }) if creature.wild.is_some()
+        ));
+
+        let remembered_at = item_at;
+        assert!(game.remembers(remembered_at));
+        save["player"]["pos"] = serde_json::json!((me.0 + 40, me.1 + 40));
+        game = serde_json::from_value(save).unwrap();
+        assert!(!game.sees(remembered_at));
+        let remembered = map_cell_art(&game, remembered_at, &[]).unwrap();
+        assert!(remembered.remembered);
+        assert!(remembered.actor.is_none(), "remembered terrain must not ghost creatures or items");
     }
 
     #[test]
@@ -1310,11 +1497,13 @@ mod tests {
         assert_eq!(states_text(&glowing).as_deref(), Some("lit · no hiding"));
         assert_eq!(cell(&glowing, glowing.player().pos, &[]).2, Some(CAVE_LIGHT));
         assert_eq!(cell(&glowing, c.pos, &[(c.pos, 'A')]).2, Some(CAVE_LIGHT));
+        assert!(map_cell_art(&glowing, c.pos, &[(c.pos, 'A')]).unwrap().lit);
         let listener = cave_encounter(0.5);
         let c = &listener.creatures()[0];
         assert!(wild_sight_lines(listener.player(), c).iter().any(|l| l.contains("tremorsense · quiet steps help")));
         assert_eq!(states_text(&listener), None);
         assert_eq!(cell(&listener, listener.player().pos, &[]).2, None);
+        assert!(!map_cell_art(&listener, c.pos, &[(c.pos, 'A')]).unwrap().lit);
         for game in [&glowing, &listener] {
             for line in wild_sight_lines(game.player(), &game.creatures()[0]) {
                 assert!(line.chars().count() <= 40, "trait cues fit the panel at 12pt");
