@@ -8,7 +8,7 @@ use crate::hash::Rng;
 use crate::life::SpeciesId;
 use crate::phenotype::{Phenotype, Stats};
 use crate::sprite::Sprite;
-use crate::{Skill, Temperament, Training, Weapon, WeaponSkills};
+use crate::{Adaptation, Adaptations, Skill, Temperament, Training, Weapon, WeaponSkills};
 
 /// A monster's stable id within one game, in order of appearance.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -119,6 +119,9 @@ pub struct Wanderer {
     pub focus_skill: Skill,
     /// Practice evading real threats, which conceals better, sneaks cheaper, and strikes openings harder.
     pub stealth: Skill,
+    /// Permanent developments and the history that earns their offers.
+    #[serde(default)]
+    pub adaptations: Adaptations,
 }
 
 impl Wanderer {
@@ -132,19 +135,26 @@ impl Wanderer {
             weapons: WeaponSkills::default(),
             focus_skill: Skill::default(),
             stealth: Skill::default(),
+            adaptations: Adaptations::default(),
         }
     }
 
     /// Most Focus the wanderer can hold: [`MAX_FOCUS`] plus earned Focus practice.
     #[must_use]
-    pub const fn max_focus(&self) -> i32 {
-        self.focus_skill.focus_capacity()
+    pub fn max_focus(&self) -> i32 {
+        self.focus_skill.focus_capacity() + if self.adaptations.has(Adaptation::DeepReserves) { 6 } else { 0 }
     }
 
     /// Weapon and stealth practice for an attack with `weapon`.
     #[must_use]
-    pub const fn training(&self, weapon: Weapon) -> Training {
-        Training { weapon: self.weapons.get(weapon), stealth: self.stealth }
+    pub fn training(&self, weapon: Weapon) -> Training {
+        Training {
+            weapon: self.weapons.get(weapon),
+            stealth: self.stealth,
+            disciplined: self.adaptations.has(Adaptation::Discipline(weapon)),
+            veiled: self.adaptations.has(Adaptation::VeiledMovement),
+            concentrated: self.adaptations.has(Adaptation::ConcentratedChanneling),
+        }
     }
 
     /// Hit points when unhurt.

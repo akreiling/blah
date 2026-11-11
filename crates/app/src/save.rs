@@ -282,6 +282,64 @@ mod tests {
     }
 
     #[test]
+    fn commitments_survive_sqlite_resume_and_failed_commit_rolls_back_capacity_and_log() {
+        let scratch = Scratch::new();
+        let path = scratch.file();
+        let mut state = serde_json::to_value(Game::new(42).snapshot()).unwrap();
+        state["wanderer"]["focus_skill"]["practice"] = 4_000.into();
+        state["wanderer"]["stealth"]["practice"] = 4_000.into();
+        let mut game = Game::from_snapshot(serde_json::from_value(state).unwrap()).unwrap();
+        let mut save = Some(Save::create(&path, &game).unwrap());
+        commit_action(&mut game, &mut save, |g| {
+            g.commit_adaptation(blah_core::Adaptation::DeepReserves).unwrap();
+        })
+        .unwrap();
+        assert_eq!(game.turn(), 0);
+        assert_eq!(Save::load(&path).unwrap().1, game);
+        let before = game.clone();
+        save.as_ref()
+            .unwrap()
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER fail_save BEFORE UPDATE ON state BEGIN SELECT RAISE(ABORT, 'test failure'); END;",
+            )
+            .unwrap();
+        assert!(
+            commit_action(&mut game, &mut save, |g| {
+                g.commit_adaptation(blah_core::Adaptation::VeiledMovement).unwrap();
+            })
+            .is_err()
+        );
+        assert_eq!(game, before);
+        assert_eq!(game.wanderer().adaptations.free(), 1);
+        assert_eq!(Save::load(&path).unwrap().1, before);
+    }
+
+    #[test]
+    fn legacy_sqlite_payload_migrates_without_writing_until_next_action() {
+        let scratch = Scratch::new();
+        let path = scratch.file();
+        let game = Game::new(42);
+        let save = Save::create(&path, &game).unwrap();
+        let mut legacy = serde_json::to_value(game.snapshot()).unwrap();
+        legacy["snapshot_version"] = 1.into();
+        legacy["wanderer"].as_object_mut().unwrap().remove("adaptations");
+        let payload = serde_json::to_vec(&legacy).unwrap();
+        save.connection.execute("UPDATE state SET snapshot = ?1", [&payload]).unwrap();
+        drop(save);
+        let (save, mut resumed) = Save::load(&path).unwrap();
+        assert_eq!(resumed, game);
+        let stored: Vec<u8> = save.connection.query_row("SELECT snapshot FROM state", [], |r| r.get(0)).unwrap();
+        assert_eq!(stored, payload, "opening does not rewrite the old save");
+        let mut save = Some(save);
+        commit_action(&mut resumed, &mut save, |g| _ = g.wait()).unwrap();
+        assert_eq!(Save::load(&path).unwrap().1, resumed);
+        let stored: Vec<u8> =
+            save.as_ref().unwrap().connection.query_row("SELECT snapshot FROM state", [], |r| r.get(0)).unwrap();
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&stored).unwrap()["snapshot_version"], 2);
+    }
+
+    #[test]
     fn separate_characters_resume_latest_and_never_overwrite_existing_files() {
         let scratch = Scratch::new();
         let (mut a, mut first) = automatic(&scratch.0, false, 7).unwrap();

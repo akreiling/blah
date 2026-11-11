@@ -8,7 +8,11 @@ Proposed design. See the decisions document for committed direction versus proto
 
 Stage 1 of skill growth is in [`skills.rs`](../../crates/core/src/skills.rs). Stage 2 adds Focus and
 stealth, and stage 4 adds first-rank move unlocks. Stage 3 measured pacing and tuned stealth evidence.
-Moves are implemented; saving is not.
+Moves and SQLite saves are implemented. The first CP3
+[adaptation commitments](character.md#implemented-cp3-commitment-slice) now follow skilled practice:
+weapon disciplines, Veiled movement, Deep reserves, and Concentrated channeling. Offers are derived
+from practice and remaining capacity; no separate currency or offer ledger is saved. Burst-release
+history is saved because concentration requires a real release into a creature.
 
 - **What trains:** physical damage from weapon delivery (a free strike or a weapon technique) that actually
   lands. Misses, waiting, moving, resting, sneaking, dying, refitting, and elapsed turns teach nothing.

@@ -4,6 +4,27 @@
 
 Proposed design. See the decisions document for committed direction versus prototype rules.
 
+## Implemented CP3 commitment slice
+
+Practice earns offers at **skilled**; it never commits silently. Each character has **two** permanent
+adaptation slots. Press **B** away from visible creatures to inspect earned options, their benefit, cost,
+and exclusions. Select an option, press Enter to review the irreversible choice, then Enter again to
+commit. Escape defers. Inspecting, deferring, and committing pass no time. There is no respec.
+
+| Adaptation | Earned by | Benefit | Cost / exclusion |
+| --- | --- | --- | --- |
+| Weapon discipline (one per family) | Skilled with that family | +1 physical damage and 2 percentage points fewer misses with that family | Other families cannot gain practice past practiced; excludes other disciplines |
+| Veiled movement | Skilled stealth | +2 concealment while sneaking; every other sneaking move costs no Focus | Free weapon strikes deal 1 less physical damage, down to zero; paid weapon moves are unaffected |
+| Deep reserves | Skilled Focus | +6 maximum Focus, not an immediate refill | Home rest restores 1 less Focus; excludes Concentrated channeling |
+| Concentrated channeling | Skilled Focus and a burst released into a creature | +2 damage per released burst, including Pulse, each area target, and the caster | Ground areas have maximum radius 2; excludes Deep reserves |
+
+Weapon ceilings do not erase earlier practice. Commitments survive refitting, death, and save/load.
+If concentration makes a previously prepared radius-3 area illegal, it stays prepared but cannot be
+discharged until the player prepares a legal composition. No automatic rewrite or free replacement.
+
+These are prototype numbers and a small catalog, not the full foundation and integration system below.
+Fresh-start commitment pacing and human playtesting remain open.
+
 ## Five distinct concepts
 
 | Concept | Meaning | Changes through | Limit |

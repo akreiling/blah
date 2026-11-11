@@ -1,6 +1,41 @@
 //! Earn the first weapon ranks through public actions, without injected practice or resources.
 
-use blah_core::{Dir, Game, LearnedMove, LogKind, MAX_FOCUS, Maneuver, Rank, Skill, Step, Weapon};
+use blah_core::{Adaptation, Dir, Game, LearnedMove, LogKind, MAX_FOCUS, Maneuver, Rank, Skill, Step, Weapon};
+
+#[test]
+fn fresh_action_histories_earn_offers_but_never_commit_them_automatically() {
+    let mut fighter = Game::new(42);
+    let mut sheltered = fighter.clone();
+    for _ in 0..1_200 {
+        let (x, y) = fighter.position();
+        let target = fighter
+            .monsters_in_view()
+            .min_by_key(|m| ((m.position.0 - x).abs() + (m.position.1 - y).abs(), m.position.1, m.position.0));
+        let mut wanted = Vec::new();
+        if let Some(m) = target {
+            let dx = m.position.0 - x;
+            let dy = m.position.1 - y;
+            let horizontal = if dx > 0 { Dir::East } else { Dir::West };
+            let vertical = if dy > 0 { Dir::South } else { Dir::North };
+            let axes = if dx.abs() >= dy.abs() {
+                [(horizontal, dx), (vertical, dy)]
+            } else {
+                [(vertical, dy), (horizontal, dx)]
+            };
+            wanted.extend(axes.into_iter().filter(|&(_, distance)| distance != 0).map(|(dir, _)| dir));
+        }
+        wanted.extend([Dir::East, Dir::South, Dir::North, Dir::West]);
+        match wanted.into_iter().find(|&dir| fighter.can_step(dir)) {
+            Some(dir) => _ = fighter.step(dir),
+            None => _ = fighter.wait(),
+        }
+        sheltered.recover_focus();
+    }
+    assert!(fighter.adaptation_offers().any(|a| a == Adaptation::Discipline(Weapon::Dagger)));
+    assert_eq!(sheltered.adaptation_offers().count(), 0);
+    assert_eq!(fighter.wanderer().adaptations.held().count(), 0);
+    assert_eq!(sheltered.wanderer().adaptations.held().count(), 0);
+}
 
 #[test]
 fn every_weapon_earns_its_own_rank_through_ordinary_strikes() {
@@ -47,6 +82,12 @@ fn every_weapon_earns_its_own_rank_through_ordinary_strikes() {
             assert_eq!(game.wanderer().weapons.get(weapon), expected);
             assert!(expected.rank() >= Rank::Practiced);
             assert!(LearnedMove::for_weapon(weapon).unlocked(game.wanderer()));
+            assert_eq!(
+                game.adaptation_offers().any(|a| a == Adaptation::Discipline(weapon)),
+                expected.rank() >= Rank::Skilled,
+                "real weapon histories, not equipped gear, decide breakthrough offers"
+            );
+            assert_eq!(game.wanderer().adaptations.held().count(), 0, "practice never commits silently");
             let learned = format!("Learned {}.", LearnedMove::for_weapon(weapon).name());
             assert_eq!(game.log().lines().filter(|line| line.starts_with(&learned)).count(), 1);
             assert!(game.log().entries().any(|entry| entry.kind == LogKind::Learning));

@@ -133,6 +133,12 @@ pub struct Training {
     pub weapon: Skill,
     /// Stealth practice, which strengthens a strike only at a real unguarded opening.
     pub stealth: Skill,
+    /// A committed discipline with the weapon being used.
+    pub disciplined: bool,
+    /// Veiled movement's cost to free strikes.
+    pub veiled: bool,
+    /// Concentrated channeling's bonus to released bursts.
+    pub concentrated: bool,
 }
 
 /// Character-owned practice for the four current weapon families.
@@ -158,7 +164,11 @@ impl WeaponSkills {
     }
 
     pub(crate) fn learn(&mut self, weapon: Weapon, damage: u32, threat: u32) -> bool {
-        self.skills[Self::index(weapon)].learn(damage.saturating_mul(threat), Rank::ceiling(threat))
+        self.learn_capped(weapon, damage, threat, Rank::Expert)
+    }
+
+    pub(crate) fn learn_capped(&mut self, weapon: Weapon, damage: u32, threat: u32, ceiling: Rank) -> bool {
+        self.skills[Self::index(weapon)].learn(damage.saturating_mul(threat), Rank::ceiling(threat).min(ceiling))
     }
 }
 

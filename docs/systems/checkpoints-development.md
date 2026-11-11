@@ -8,6 +8,11 @@ Proposed design. See the decisions document for committed direction versus proto
 
 **Goal:** replace developer-assigned identity with earned, visible development.
 
+**Implemented slice:** bounded weapon, Focus, and stealth practice, six practiced-rank moves, and
+[skilled-rank adaptation commitments](character.md#implemented-cp3-commitment-slice) with two permanent
+slots, exclusions, deferral, confirmation, and save migration. Foundations, integration developments,
+and fresh-start human commitment pacing are not complete. Checklists remain unchecked by convention.
+
 **Work**
 
 - [ ] Emit and consume meaningful practice evidence.

@@ -99,10 +99,16 @@ An overall package version alone is not a sufficient compatibility contract.
 ## Implemented first slice
 
 `blah-core` exposes `Game::snapshot` and `Game::from_snapshot`. A `GameSnapshot` carries snapshot, terrain,
-and rules versions (all 1), the seed, turn, position, home, visited regions, log, the wanderer's Health,
-Focus, and practice, each nearby creature's genome, phenotype, Health, remaining lessons, and awareness,
+and rules versions (snapshot 2, terrain and rules 1), the seed, turn, position, home, visited regions, log,
+the wanderer's Health, Focus, practice, permanent adaptations and burst-release history,
+each nearby creature's genome, phenotype, Health, remaining lessons, and awareness,
 and the prepared composition. Region lives, region labels, clades, and sprites are not saved; loading
 regrows them from the seed. Loading checks versions and value ranges and rejects anything else.
+
+Version-1 snapshots migrate to version 2 with no adaptations and no recorded burst-release history.
+Existing practice is preserved and can immediately qualify for offers. Version 2 validates capacity,
+slot order, exclusions, and the history required by each held adaptation. Commitment is a no-time
+action through the same transactional save path; a failed write rolls it back.
 
 The app stores the snapshot as JSON in a single-row SQLite table (`PRAGMA user_version = 1`) and rewrites it
 in one transaction after every action, under `synchronous = FULL`. A row revision makes a second running

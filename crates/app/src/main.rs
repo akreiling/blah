@@ -10,6 +10,7 @@
 //! opens (see [`autoplay`]), so a seed and a count always put the same scene on screen, monsters and a
 //! fight included, for checking a change or taking a screenshot.
 
+mod commitment;
 mod save;
 mod sprites;
 mod view;
@@ -63,9 +64,11 @@ actions!(
         Wait,
         /// Open the composition workshop.
         OpenWorkshop,
-        /// Cancel the composition workshop.
+        /// Open the adaptation commitment panel.
+        OpenCommitment,
+        /// Cancel the open panel.
         CancelWorkshop,
-        /// Prepare the current workshop draft.
+        /// Confirm a commitment or prepare the workshop draft.
         PrepareWorkshop,
         /// Cycle the draft weapon.
         WorkshopWeapon,
@@ -132,6 +135,7 @@ fn keymap() -> Vec<KeyBinding> {
     bindings.extend([
         KeyBinding::new("tab", CycleEarnedMove, None),
         KeyBinding::new("m", OpenWorkshop, None),
+        KeyBinding::new("b", OpenCommitment, None),
         KeyBinding::new("escape", CancelWorkshop, None),
         KeyBinding::new("enter", PrepareWorkshop, None),
         KeyBinding::new("c", ToggleSneak, None),
@@ -466,6 +470,10 @@ mod tests {
         assert!(
             bindings.iter().any(|binding| binding.contains("CycleEarnedMove") && binding.contains("key: \"tab\"")),
             "missing Tab slot-cycle binding: {bindings:#?}"
+        );
+        assert!(
+            bindings.iter().any(|binding| { binding.contains("OpenCommitment") && binding.contains("key: \"b\"") }),
+            "missing B breakthrough binding: {bindings:#?}"
         );
     }
 }

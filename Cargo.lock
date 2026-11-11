@@ -634,6 +634,7 @@ dependencies = [
  "png 0.18.1",
  "proptest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

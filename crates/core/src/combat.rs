@@ -330,12 +330,15 @@ impl Maneuver {
         if self.technique.delivery == Delivery::Ground {
             return Err("Ground areas use area resolution, not a single-target attack.");
         }
-        let miss =
-            if self.technique.delivery == Delivery::Weapon { training.weapon.miss_chance() } else { MISS_CHANCE };
+        let miss = if self.technique.delivery == Delivery::Weapon {
+            training.weapon.miss_chance() - if training.disciplined { 0.02 } else { 0.0 }
+        } else {
+            MISS_CHANCE
+        };
         if rng.chance(miss) {
             return Ok(AttackResult::default());
         }
-        Ok(self.on_hit(self.trained_context(context, training), rng.below(3) as i32 - 1))
+        Ok(self.trained_hit(context, training, rng.below(3) as i32 - 1))
     }
 
     /// Exact range across successful-hit rolls; a miss can still do zero damage.
@@ -349,9 +352,8 @@ impl Maneuver {
         if self.technique.delivery == Delivery::Ground {
             return Err("Use the area preview for a ground delivery.");
         }
-        let context = self.trained_context(context, training);
-        let low = self.on_hit(context, -1);
-        let high = self.on_hit(context, 1);
+        let low = self.trained_hit(context, training, -1);
+        let high = self.trained_hit(context, training, 1);
         Ok(AttackPreview {
             focus: self.technique.focus_cost(),
             min_hit: low.total(),
@@ -369,6 +371,20 @@ impl Maneuver {
             }
         }
         context
+    }
+
+    fn trained_hit(&self, context: AttackContext, training: Training, roll: i32) -> AttackResult {
+        let mut result = self.on_hit(self.trained_context(context, training), roll);
+        if training.disciplined && self.technique.delivery == Delivery::Weapon {
+            result.physical = result.physical.saturating_add(1);
+        }
+        if training.veiled && self.technique.focus_cost() == 0 {
+            result.physical = (result.physical - 1).max(0);
+        }
+        if training.concentrated && result.burst_released {
+            result.burst += 2;
+        }
+        result
     }
 
     /// Whether precise weapon placement exploits an actual unguarded opening.
@@ -481,6 +497,49 @@ mod tests {
     use super::*;
 
     const GUARDED: AttackContext = AttackContext { attack: 4, defense: 3, unguarded: false, fire_resistance: 0 };
+
+    #[test]
+    fn discipline_and_concentration_match_previews_without_releasing_failed_triggers() {
+        let discipline = Training { disciplined: true, ..Training::default() };
+        let concentration = Training { concentrated: true, ..Training::default() };
+        let plain = Maneuver::default();
+        let p = plain.preview_trained(GUARDED, discipline).unwrap();
+        let base = plain.preview(GUARDED).unwrap();
+        assert_eq!((p.min_hit, p.max_hit), (base.min_hit + 1, base.max_hit + 1));
+        let mut rescued = 0;
+        for seed in 0..2_000 {
+            let base = plain.resolve(GUARDED, &mut Rng::new(seed)).unwrap();
+            let trained = plain.resolve_trained(GUARDED, discipline, &mut Rng::new(seed)).unwrap();
+            assert!(!base.hit || trained.hit);
+            rescued += usize::from(!base.hit && trained.hit);
+            assert!(!trained.hit || (p.min_hit..=p.max_hit).contains(&trained.total()));
+        }
+        assert!(rescued > 0);
+        let mut burst = Maneuver::backstab_burst();
+        for delivery in [Delivery::Weapon, Delivery::Touch] {
+            burst.technique.delivery = delivery;
+            if delivery == Delivery::Touch {
+                burst.technique.burst.as_mut().unwrap().trigger = Trigger::Contact;
+            }
+            for context in [GUARDED, AttackContext { defense: 100, ..GUARDED }] {
+                let preview = burst.preview_trained(context, concentration).unwrap();
+                for seed in 0..100 {
+                    let base = burst.resolve(context, &mut Rng::new(seed)).unwrap();
+                    let result = burst.resolve_trained(context, concentration, &mut Rng::new(seed)).unwrap();
+                    assert_eq!(result.physical, base.physical);
+                    assert_eq!(result.burst, base.burst + if base.burst_released { 2 } else { 0 });
+                    assert!(!result.hit || (preview.min_hit..=preview.max_hit).contains(&result.total()));
+                }
+            }
+            if delivery == Delivery::Touch {
+                assert_eq!(
+                    burst.preview(GUARDED),
+                    burst.preview_trained(GUARDED, discipline),
+                    "touch gets no weapon discipline bonus"
+                );
+            }
+        }
+    }
 
     #[test]
     fn three_parts_amplify_through_placement_not_recipe_names() {

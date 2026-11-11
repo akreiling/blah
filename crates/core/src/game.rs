@@ -14,6 +14,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use crate::Adaptation;
 use crate::biome::Biome;
 use crate::clade::{Clade, CladeId, clades};
 use crate::combat::{AreaPreview, AttackContext, AttackPreview, AttackResult, Delivery, Maneuver};
@@ -27,6 +28,8 @@ use crate::skills::Rank;
 use crate::sprite::Sprite;
 use crate::world::{Tile, World};
 
+#[cfg(test)]
+mod commitment_tests;
 mod learned;
 mod snapshot;
 
@@ -574,11 +577,50 @@ impl Game {
         self.monsters_in_view().next().is_none()
     }
 
+    /// Earned developments that still fit. Looking at or deferring offers changes nothing.
+    pub fn adaptation_offers(&self) -> impl Iterator<Item = Adaptation> + '_ {
+        Adaptation::ALL.into_iter().filter(|&a| a.earned(&self.wanderer) && self.wanderer.adaptations.fits(a))
+    }
+
+    /// Make one irreversible commitment without passing time. Rejection changes nothing.
+    pub fn commit_adaptation(&mut self, adaptation: Adaptation) -> Result<(), &'static str> {
+        if !self.can_prepare() {
+            return Err("Commit away from nearby creatures.");
+        }
+        if !self.adaptation_offers().any(|a| a == adaptation) {
+            return Err("This adaptation has not been earned or does not fit.");
+        }
+        self.wanderer.adaptations.add(adaptation);
+        self.log.push(LogKind::Attack, format!("Committed to {}. This cannot be undone.", adaptation.name()));
+        Ok(())
+    }
+
+    /// Validate a composition against both its grammar and this character's commitments.
+    pub fn validate_maneuver(&self, maneuver: &Maneuver) -> Result<(), &'static str> {
+        maneuver.validate()?;
+        if self.wanderer.adaptations.has(Adaptation::ConcentratedChanneling)
+            && matches!(maneuver.technique.burst, Some(crate::Burst { shape: crate::Shape::Area(3..), .. }))
+        {
+            return Err("Concentrated channeling limits ground areas to radius 2.");
+        }
+        Ok(())
+    }
+
+    /// Draft self-damage with this character's commitments, for the workshop safety preview.
+    pub fn maneuver_backlash(&self, maneuver: &Maneuver) -> Result<i32, &'static str> {
+        self.validate_maneuver(maneuver)?;
+        Ok(maneuver.backlash()? + self.burst_bonus())
+    }
+
+    fn burst_bonus(&self) -> i32 {
+        if self.wanderer.adaptations.has(Adaptation::ConcentratedChanneling) { 2 } else { 0 }
+    }
+
     /// Prepare a validated composition at a safe point. Invalid edits change nothing.
     ///
     /// Preparation and previews pass no time and grant no learning. No AI verdict is required.
     pub fn prepare(&mut self, maneuver: Maneuver) -> Result<(), &'static str> {
-        maneuver.validate()?;
+        self.validate_maneuver(&maneuver)?;
         if !self.can_prepare() {
             return Err("Prepare away from nearby creatures.");
         }
@@ -634,20 +676,23 @@ impl Game {
     }
 
     fn area_plan(&self) -> Result<AreaPlan, &'static str> {
+        self.validate_maneuver(&self.maneuver)?;
         let (radius, burst) = self.maneuver.area_payload()?;
         let hits: Vec<_> = self
             .monsters
             .iter()
             .enumerate()
             .filter(|(_, m)| chebyshev(m.position, self.position) <= i64::from(radius))
-            .map(|(i, m)| (i, burst.damage(m.phenotype.stats.defense, m.fire_resistance(), false, false)))
+            .map(|(i, m)| {
+                (i, burst.damage(m.phenotype.stats.defense, m.fire_resistance(), false, false) + self.burst_bonus())
+            })
             .collect();
         let preview = AreaPreview {
             radius,
             focus: self.maneuver.technique.focus_cost(),
             targets: hits.len(),
             damage: hits.iter().map(|(_, damage)| damage).sum(),
-            self_damage: burst.damage(self.wanderer.stats.defense, 0, false, false),
+            self_damage: burst.damage(self.wanderer.stats.defense, 0, false, false) + self.burst_bonus(),
         };
         Ok(AreaPlan { preview, hits })
     }
@@ -685,6 +730,7 @@ impl Game {
             ),
         );
         let mut threat = 0;
+        self.wanderer.adaptations.channeled |= !hits.is_empty();
         for (i, damage) in hits {
             if self.monsters[i].spend_practice(damage) > 0 {
                 threat = threat.max(self.monsters[i].weapon_threat(&self.wanderer, self.maneuver.weapon));
@@ -759,7 +805,7 @@ impl Game {
         }
         self.turn += 1;
         self.sneaking = false;
-        w.focus = (w.focus + REST_FOCUS).min(most);
+        w.focus = (w.focus + REST_FOCUS - i32::from(w.adaptations.has(Adaptation::DeepReserves))).min(most);
         w.hp = (w.hp + REST_HEALTH).min(w.max_hp());
         let line = if w.focus == most && w.hp == w.max_hp() {
             "You rest sheltered at home. You are fully recovered.".to_owned()
@@ -897,13 +943,23 @@ impl Game {
 
     /// Focus the next sneaking move costs: one, except for practiced stealth's periodic free move.
     fn sneak_cost(&self) -> i32 {
-        let free = self.wanderer.stealth.free_sneak_every().is_some_and(|n| (self.sneak_moves + 1).is_multiple_of(n));
+        let every = if self.wanderer.adaptations.has(Adaptation::VeiledMovement) {
+            Some(2)
+        } else {
+            self.wanderer.stealth.free_sneak_every()
+        };
+        let free = every.is_some_and(|n| self.sneak_moves.wrapping_add(1).is_multiple_of(n));
         i32::from(!free)
     }
 
     /// How many tiles sneaking currently takes off an unalerted observer's initial sensing range.
     fn concealment(&self) -> i64 {
-        if self.sneaking { self.wanderer.stealth.sneak_reduction() } else { 0 }
+        if self.sneaking {
+            self.wanderer.stealth.sneak_reduction()
+                + if self.wanderer.adaptations.has(Adaptation::VeiledMovement) { 2 } else { 0 }
+        } else {
+            0
+        }
     }
 
     /// Log a newly reached rank.
@@ -1103,7 +1159,14 @@ impl Game {
         let threat = self.monsters[index].weapon_threat(&self.wanderer, weapon);
         let opportunity = self.monsters[index].spend_practice(result.total());
         let physical = opportunity.min(result.physical.max(0) as u32);
-        let improved = source.is_weapon() && self.wanderer.weapons.learn(weapon, physical, threat);
+        let ceiling = self.wanderer.adaptations.weapon_ceiling(weapon);
+        let improved = source.is_weapon()
+            && if ceiling == Rank::Expert {
+                self.wanderer.weapons.learn(weapon, physical, threat)
+            } else {
+                self.wanderer.weapons.learn_capped(weapon, physical, threat, ceiling)
+            };
+        self.wanderer.adaptations.channeled |= result.burst_released;
         let stealthier = if result.opening { self.stealth_lesson(index, OPENING_LESSON) } else { None };
         self.last_attack = Some(result);
         // Even a miss reveals the attempt. No repeated surprise by toggling sneak.

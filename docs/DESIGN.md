@@ -9,6 +9,8 @@ This is a design document, not a claim that every feature below exists. See [Fir
 for the original implemented slice and the [code-inspected baseline](systems/baseline.md) for its historical
 limits. The later [composition proof](systems/composition-poc.md) adds playable technique mixing, stealth,
 Focus, and costly staff fire without claiming the full progression system is complete.
+The current slice also saves characters and supports
+[earned permanent adaptation commitments](systems/character.md#implemented-cp3-commitment-slice).
 
 A top-down, tile-based, turn-based wanderer in the spirit of early-80s overworld RPGs, set in an endless
 procedural world. The twist is that the monsters aren't authored. They are populations with genomes that are

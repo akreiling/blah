@@ -43,7 +43,9 @@ impl Game {
         }
 
         let maneuver = self.maneuver.basic_strike();
-        let training = self.wanderer.training(maneuver.weapon);
+        let mut training = self.wanderer.training(maneuver.weapon);
+        // These strikes are paid learned moves, not the free bump strike Veiled movement weakens.
+        training.veiled = false;
         let mut rng = Rng::keyed(self.world.seed(), b"wanderer", &[self.turn]);
         // Resolve all hits against the same pre-action training/context as the preview. A rank
         // earned by the first sweep hit cannot silently strengthen later hits above that preview.
@@ -56,7 +58,12 @@ impl Game {
                     if rng.chance(crate::MISS_CHANCE) {
                         AttackResult::default()
                     } else {
-                        AttackResult { hit: true, burst: 1, burst_released: true, ..AttackResult::default() }
+                        AttackResult {
+                            hit: true,
+                            burst: 1 + self.burst_bonus(),
+                            burst_released: true,
+                            ..AttackResult::default()
+                        }
                     }
                 } else {
                     maneuver.resolve_trained(self.attack_context(target), training, &mut rng).expect("basic strike")
@@ -181,12 +188,11 @@ impl Game {
         for &id in &targets {
             let target = self.monsters.iter().find(|m| m.id == id).expect("preview target");
             let (min, max) = if action == LearnedMove::Pulse {
-                (1, 1)
+                (1 + self.burst_bonus(), 1 + self.burst_bonus())
             } else {
-                let p = self
-                    .maneuver
-                    .basic_strike()
-                    .preview_trained(self.attack_context(target), self.wanderer.training(self.maneuver.weapon))?;
+                let mut training = self.wanderer.training(self.maneuver.weapon);
+                training.veiled = false;
+                let p = self.maneuver.basic_strike().preview_trained(self.attack_context(target), training)?;
                 (p.min_hit, p.max_hit)
             };
             preview.min_hit = preview.min_hit.saturating_add(min);

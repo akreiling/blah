@@ -35,6 +35,7 @@
 //! println!("in {}, {} tiles", region.name, region.tiles);
 //! ```
 
+mod adaptation;
 mod biome;
 mod chunk;
 mod clade;
@@ -54,6 +55,7 @@ mod skills;
 mod sprite;
 mod world;
 
+pub use adaptation::{ADAPTATION_CAPACITY, Adaptation, Adaptations, BREAKTHROUGH_RANK};
 pub use biome::{BIOMES, Band, Biome, BiomeId, Fitness, SEA_LEVEL, classify};
 pub use chunk::{CHUNK_AREA, CHUNK_SIZE, Chunk, chunk_of, chunk_origin, local_of};
 pub use clade::{BodyPlan, CLADES, Clade, CladeId, Family, Pattern, clades};

@@ -4,7 +4,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 /// Snapshot layout. Bump when serialized fields or their meaning change.
-pub const SNAPSHOT_VERSION: u32 = 1;
+pub const SNAPSHOT_VERSION: u32 = 2;
 /// Terrain, biome table, region, and naming compatibility. Bump for incompatible generation changes.
 pub const TERRAIN_VERSION: u32 = 1;
 /// Simulation, evolution, clade, and technique-catalog compatibility.
@@ -119,7 +119,12 @@ impl Game {
 
     /// Restore without taking an action or granting practice. Derived state is regenerated.
     /// Unsupported versions and invalid state are rejected, never repaired silently.
-    pub fn from_snapshot(s: GameSnapshot) -> Result<Self, &'static str> {
+    pub fn from_snapshot(mut s: GameSnapshot) -> Result<Self, &'static str> {
+        // Version 1 predates commitments and did not record burst-release history.
+        if s.snapshot_version == 1 {
+            s.wanderer.adaptations = crate::Adaptations::default();
+            s.snapshot_version = SNAPSHOT_VERSION;
+        }
         if s.snapshot_version != SNAPSHOT_VERSION {
             return Err("Unsupported core snapshot version; this save needs a compatible game or migration.");
         }
@@ -141,6 +146,8 @@ impl Game {
             || w.stats != crate::WANDERER_STATS
             || !(1..=w.max_hp()).contains(&w.hp)
             || !(0..=w.max_focus()).contains(&w.focus)
+            || !w.adaptations.consistent()
+            || w.adaptations.held().any(|a| !a.earned(w))
             || s.log.len() > LOG_LIMIT
             || s.log.total < s.log.len() as u64
             || s.turn > u64::MAX - DEATH_TURNS - 2
@@ -273,5 +280,41 @@ mod tests {
         let mut s = Game::new(42).snapshot();
         s.wanderer.hp = 0;
         assert!(Game::from_snapshot(s).is_err());
+    }
+
+    #[test]
+    fn migrates_serialized_v1_without_commitments_and_writes_v2() {
+        let mut game = Game::new(42);
+        game.wanderer.focus_skill.learn(4_000, Rank::Expert);
+        let mut legacy = serde_json::to_value(game.snapshot()).unwrap();
+        legacy["snapshot_version"] = 1.into();
+        legacy["wanderer"].as_object_mut().unwrap().remove("adaptations");
+        let bytes = serde_json::to_vec(&legacy).unwrap();
+        let snapshot = serde_json::from_slice(&bytes).unwrap();
+        let mut loaded = Game::from_snapshot(snapshot).unwrap();
+        assert_eq!(loaded, game);
+        assert_eq!(loaded.wanderer.adaptations, crate::Adaptations::default());
+        loaded.monsters.clear();
+        loaded.commit_adaptation(crate::Adaptation::DeepReserves).unwrap();
+        let saved = serde_json::to_value(loaded.snapshot()).unwrap();
+        assert_eq!(saved["snapshot_version"], 2);
+        assert_eq!(saved["wanderer"]["adaptations"]["taken"][0], "DeepReserves");
+        let round_trip = Game::from_snapshot(serde_json::from_value(saved).unwrap()).unwrap();
+        assert_eq!(round_trip, loaded);
+    }
+
+    #[test]
+    fn rejects_inconsistent_or_unearned_commitments_in_v2() {
+        for taken in [
+            serde_json::json!(["DeepReserves", "ConcentratedChanneling"]),
+            serde_json::json!(["DeepReserves", "DeepReserves"]),
+            serde_json::json!([null, "DeepReserves"]),
+            serde_json::json!(["VeiledMovement", null]),
+        ] {
+            let mut state = serde_json::to_value(Game::new(42).snapshot()).unwrap();
+            state["wanderer"]["adaptations"]["taken"] = taken;
+            let snapshot = serde_json::from_value(state).unwrap();
+            assert!(Game::from_snapshot(snapshot).is_err());
+        }
     }
 }

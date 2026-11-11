@@ -81,7 +81,9 @@ Implement CP0, CP1, and CP2 first, not the entire design:
 
 **Status, revision after `4c67b0b`:** the composition proof, practiced weapon, Focus, and stealth skills, six
 practiced-rank moves, and the pacing and paired-branch probes exist. The first CP4 save slice now resumes a
-character from SQLite after every turn ([details](systems/architecture.md#implemented-first-slice)). The
+character from SQLite after every turn ([details](systems/architecture.md#implemented-first-slice)).
+The first CP3 [commitment slice](systems/character.md#implemented-cp3-commitment-slice) adds skilled-rank
+offers, two permanent adaptation slots, explicit confirmation, and version-1 save migration. The
 checklists stay unchecked by convention.
 
 Then grow those identities through practice and commitment, preserve them in saves, and give them a

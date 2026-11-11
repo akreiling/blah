@@ -1,8 +1,8 @@
 //! The game window: a title strip, the map viewport on the left, the status panel on the right, and the
 //! message log along the bottom.
 //!
-//! Everything is drawn from the [`Game`] and optional workshop draft on each render. The view remembers
-//! the draft until prepared or cancelled, where the log stood before the latest action, and cached sprites.
+//! Everything is drawn from the [`Game`] and optional workshop or commitment panel on each render. The view
+//! remembers draft/selection state until prepared, committed, or cancelled, the log mark, and cached sprites.
 
 use gpui::{
     App, Context, Div, FocusHandle, Focusable, FontWeight, Pixels, Rgba, SharedString, Window, div, img, prelude::*,
@@ -10,18 +10,20 @@ use gpui::{
 };
 
 use blah_core::{
-    Aim, Comparison, Delivery, Dir, Element, Game, Gene, LearnedMove, LogKind, MAX_AREA_RADIUS, MAX_BURST_POWER,
-    Monster, MovePreview, Shape, SpeciesId, Tile, Trigger, VIEW_RADIUS, Weapon, hash_point,
+    ADAPTATION_CAPACITY, Adaptation, Aim, Comparison, Delivery, Dir, Element, Game, Gene, LearnedMove, LogKind,
+    MAX_AREA_RADIUS, MAX_BURST_POWER, Monster, MovePreview, Shape, SpeciesId, Tile, Trigger, VIEW_RADIUS, Weapon,
+    hash_point,
 };
 
+use crate::commitment::{self, CommitmentPanel, Enter as CommitmentEnter};
 use crate::sprites::{Key, SPRITE_PX, SpriteCache};
 use crate::workshop::{Edit, Workshop};
 use crate::{
     CancelWorkshop, CycleEarnedMove, EarnedMoveEast, EarnedMoveNorth, EarnedMoveSouth, EarnedMoveWest, MoveEast,
-    MoveNorth, MoveSouth, MoveWest, OpenWorkshop, PrepareWorkshop, RecoverFocus, TechniqueEast, TechniqueNorth,
-    TechniqueSouth, TechniqueWest, ToggleSneak, Unleash, Wait, WorkshopAim, WorkshopDaggerExample, WorkshopDelivery,
-    WorkshopElement, WorkshopPayload, WorkshopPowerDown, WorkshopPowerUp, WorkshopShape, WorkshopStaffExample,
-    WorkshopTrigger, WorkshopWeapon,
+    MoveNorth, MoveSouth, MoveWest, OpenCommitment, OpenWorkshop, PrepareWorkshop, RecoverFocus, TechniqueEast,
+    TechniqueNorth, TechniqueSouth, TechniqueWest, ToggleSneak, Unleash, Wait, WorkshopAim, WorkshopDaggerExample,
+    WorkshopDelivery, WorkshopElement, WorkshopPayload, WorkshopPowerDown, WorkshopPowerUp, WorkshopShape,
+    WorkshopStaffExample, WorkshopTrigger, WorkshopWeapon,
 };
 
 /// Tiles along each side of the viewport. Odd, so the wanderer sits on the center tile.
@@ -91,8 +93,8 @@ fn earned_move_for_slot(slot: EarnedMoveSlot, weapon: Weapon) -> LearnedMove {
     }
 }
 
-fn cycle_earned_move_slot(slot: &mut EarnedMoveSlot, workshop_open: bool) -> bool {
-    if workshop_open {
+fn cycle_earned_move_slot(slot: &mut EarnedMoveSlot, modal_open: bool) -> bool {
+    if modal_open {
         return false;
     }
     *slot = slot.next();
@@ -164,6 +166,7 @@ pub struct GameView {
     mark: u64,
     sprites: SpriteCache,
     workshop: Option<Workshop>,
+    commitment: Option<CommitmentPanel>,
     move_slot: EarnedMoveSlot,
 }
 
@@ -187,13 +190,15 @@ impl GameView {
             mark,
             sprites: SpriteCache::default(),
             workshop: None,
+            commitment: None,
             move_slot: EarnedMoveSlot::default(),
         }
     }
 
     fn act(&mut self, action: impl FnOnce(&mut Game), cx: &mut Context<GameView>) {
         let mut result = Ok(());
-        if apply_play_action(&mut self.game, &mut self.mark, self.workshop.as_ref(), |game| {
+        let modal_open = self.workshop.is_some() || self.commitment.is_some();
+        if apply_play_action(&mut self.game, &mut self.mark, modal_open, |game| {
             result = crate::save::commit_action(game, &mut self.save, action);
         }) {
             self.save_error = result.err();
@@ -234,6 +239,61 @@ impl GameView {
         cx.notify();
     }
 
+    fn open_commitment(&mut self, cx: &mut Context<GameView>) {
+        if self.workshop.is_some()
+            || self.commitment.is_some()
+            || self.game.monsters_in_view().next().is_some()
+            || self.game.adaptation_offers().next().is_none()
+        {
+            return;
+        }
+        self.commitment = Some(CommitmentPanel::default());
+        cx.notify();
+    }
+
+    fn navigate_commitment(&mut self, direction: isize, cx: &mut Context<GameView>) {
+        let offers = self.game.adaptation_offers().count();
+        if let Some(commitment) = &mut self.commitment {
+            commitment.navigate(direction, offers);
+            cx.notify();
+        }
+    }
+
+    fn enter_panel(&mut self, cx: &mut Context<GameView>) {
+        let Some(commitment) = &mut self.commitment else {
+            self.prepare_workshop(cx);
+            return;
+        };
+        let enter = commitment.enter(self.game.adaptation_offers().count());
+        match enter {
+            CommitmentEnter::Empty | CommitmentEnter::Confirmed => cx.notify(),
+            CommitmentEnter::Commit(index) => self.commit_adaptation(index, cx),
+        }
+    }
+
+    fn commit_adaptation(&mut self, index: usize, cx: &mut Context<GameView>) {
+        let Some(adaptation) = self.game.adaptation_offers().nth(index) else {
+            self.commitment = None;
+            cx.notify();
+            return;
+        };
+
+        self.mark = self.game.log().total();
+        let mut committed = false;
+        let mut game_error = None;
+        let save_result = crate::save::commit_action(&mut self.game, &mut self.save, |game| {
+            match game.commit_adaptation(adaptation) {
+                Ok(()) => committed = true,
+                Err(error) => game_error = Some(error),
+            }
+        });
+        self.save_error = save_result.as_ref().err().cloned().or_else(|| game_error.map(str::to_owned));
+        if save_result.is_ok() && committed {
+            self.commitment = None;
+        }
+        cx.notify();
+    }
+
     /// The kinds of the lines the latest action added.
     fn news(&self) -> impl Iterator<Item = LogKind> {
         let log = self.game.log();
@@ -242,14 +302,9 @@ impl GameView {
     }
 }
 
-/// Shared by every gameplay key. Draft editing must not advance the world behind the workshop.
-fn apply_play_action(
-    game: &mut Game,
-    mark: &mut u64,
-    workshop: Option<&Workshop>,
-    action: impl FnOnce(&mut Game),
-) -> bool {
-    if workshop.is_some() {
+/// Shared by every gameplay key. Open panels must not advance the world behind them.
+fn apply_play_action(game: &mut Game, mark: &mut u64, modal_open: bool, action: impl FnOnce(&mut Game)) -> bool {
+    if modal_open {
         return false;
     }
     *mark = game.log().total();
@@ -268,7 +323,8 @@ impl Render for GameView {
         let hurt = self.news().any(|k| matches!(k, LogKind::Hurt | LogKind::Death));
         self.sprites.begin(window);
         let map = map(&self.game, &mut self.sprites, hurt);
-        let panel = panel(&self.game, &mut self.sprites, self.workshop.as_ref(), self.move_slot);
+        let panel =
+            panel(&self.game, &mut self.sprites, self.workshop.as_ref(), self.commitment.as_ref(), self.move_slot);
         self.sprites.end(window);
         let title = self.save_error.clone().unwrap_or_else(|| {
             let slot = self
@@ -282,8 +338,20 @@ impl Render for GameView {
 
         div()
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &MoveNorth, _, cx| this.act(|g| _ = g.step(Dir::North), cx)))
-            .on_action(cx.listener(|this, _: &MoveSouth, _, cx| this.act(|g| _ = g.step(Dir::South), cx)))
+            .on_action(cx.listener(|this, _: &MoveNorth, _, cx| {
+                if this.commitment.is_some() {
+                    this.navigate_commitment(-1, cx);
+                } else {
+                    this.act(|g| _ = g.step(Dir::North), cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &MoveSouth, _, cx| {
+                if this.commitment.is_some() {
+                    this.navigate_commitment(1, cx);
+                } else {
+                    this.act(|g| _ = g.step(Dir::South), cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &MoveEast, _, cx| this.act(|g| _ = g.step(Dir::East), cx)))
             .on_action(cx.listener(|this, _: &MoveWest, _, cx| this.act(|g| _ = g.step(Dir::West), cx)))
             .on_action(cx.listener(|this, _: &TechniqueNorth, _, cx| this.act(|g| _ = g.use_technique(Dir::North), cx)))
@@ -295,7 +363,7 @@ impl Render for GameView {
             .on_action(cx.listener(|this, _: &EarnedMoveEast, _, cx| this.use_earned_move(Dir::East, cx)))
             .on_action(cx.listener(|this, _: &EarnedMoveWest, _, cx| this.use_earned_move(Dir::West, cx)))
             .on_action(cx.listener(|this, _: &CycleEarnedMove, _, cx| {
-                if cycle_earned_move_slot(&mut this.move_slot, this.workshop.is_some()) {
+                if cycle_earned_move_slot(&mut this.move_slot, this.workshop.is_some() || this.commitment.is_some()) {
                     cx.notify();
                 }
             }))
@@ -304,17 +372,19 @@ impl Render for GameView {
             .on_action(cx.listener(|this, _: &RecoverFocus, _, cx| this.act(|g| _ = g.recover_focus(), cx)))
             .on_action(cx.listener(|this, _: &Unleash, _, cx| this.act(|g| _ = g.unleash(), cx)))
             .on_action(cx.listener(|this, _: &OpenWorkshop, _, cx| {
-                if this.workshop.is_none() {
+                if this.workshop.is_none() && this.commitment.is_none() {
                     this.workshop = Some(Workshop::new(this.game.maneuver().clone()));
                     cx.notify();
                 }
             }))
+            .on_action(cx.listener(|this, _: &OpenCommitment, _, cx| this.open_commitment(cx)))
             .on_action(cx.listener(|this, _: &CancelWorkshop, _, cx| {
-                if this.workshop.take().is_some() {
+                let cancelled_commitment = commitment::cancel(&mut this.commitment);
+                if this.workshop.take().is_some() || cancelled_commitment {
                     cx.notify();
                 }
             }))
-            .on_action(cx.listener(|this, _: &PrepareWorkshop, _, cx| this.prepare_workshop(cx)))
+            .on_action(cx.listener(|this, _: &PrepareWorkshop, _, cx| this.enter_panel(cx)))
             .on_action(cx.listener(|this, _: &WorkshopWeapon, _, cx| this.edit_workshop(Edit::Weapon, cx)))
             .on_action(cx.listener(|this, _: &WorkshopDelivery, _, cx| this.edit_workshop(Edit::Delivery, cx)))
             .on_action(cx.listener(|this, _: &WorkshopAim, _, cx| this.edit_workshop(Edit::Aim, cx)))
@@ -474,14 +544,20 @@ fn panel(
     game: &Game,
     sprites: &mut SpriteCache,
     workshop: Option<&Workshop>,
+    commitment: Option<&CommitmentPanel>,
     move_slot: EarnedMoveSlot,
 ) -> impl IntoElement + use<> {
     let panel = frame().id("status-panel").w(px(PANEL)).h(px(MAP)).p(px(INSET)).flex().flex_col().overflow_y_scroll();
     if let Some(workshop) = workshop {
         return panel.child(workshop_panel(workshop, game));
     }
+    if let Some(commitment) = commitment {
+        return panel.child(commitment_panel(commitment, game));
+    }
     panel
         .child(wanderer(game))
+        .child(rule())
+        .child(adaptations(game))
         .child(rule())
         .child(place(game))
         .child(rule())
@@ -502,6 +578,95 @@ fn panel(
                 .child("M edit · C sneak · R rest · F unleash")
                 .child("Space / . wait · Q quit"),
         )
+}
+
+fn adaptations(game: &Game) -> Div {
+    let held: Vec<_> = game.wanderer().adaptations.held().collect();
+    let offers = game.adaptation_offers().next().is_some();
+    let ready = if game.monsters_in_view().next().is_some() {
+        "Breakthrough ready (B) · return when clear"
+    } else {
+        "Breakthrough ready (B)"
+    };
+    let mut section = div()
+        .flex()
+        .flex_col()
+        .child(heading("ADAPTATIONS"))
+        .child(pair("Capacity", format!("{}/{} held", held.len(), ADAPTATION_CAPACITY)));
+    if held.is_empty() {
+        section = section.child(small_line("none committed"));
+    } else {
+        for adaptation in held {
+            section = section.child(small_line(format!("· {}", adaptation.name())));
+        }
+    }
+    if offers {
+        section.children(wrap(ready, PANEL_CHARS).into_iter().map(|line| colored_small_line(line, HEADING)))
+    } else {
+        section
+    }
+}
+
+fn commitment_panel(commitment: &CommitmentPanel, game: &Game) -> Div {
+    let offers: Vec<Adaptation> = game.adaptation_offers().collect();
+    let selected = commitment.selected(offers.len());
+    let held: Vec<_> = game.wanderer().adaptations.held().collect();
+    let mut panel = div()
+        .flex()
+        .flex_col()
+        .child(heading("BREAKTHROUGH · PAUSED"))
+        .child(pair("Capacity", format!("{}/{} held", held.len(), ADAPTATION_CAPACITY)));
+    if held.is_empty() {
+        panel = panel.child(small_line("Held: none"));
+    } else {
+        panel = panel.child(small_line("Held:"));
+        for adaptation in held {
+            panel = panel.child(small_line(format!("· {}", adaptation.name())));
+        }
+    }
+    if offers.is_empty() {
+        panel = panel.child(colored_small_line("No earned adaptations fit.", HP));
+    } else {
+        for (index, adaptation) in offers.iter().copied().enumerate() {
+            let active = selected == Some(index);
+            panel = panel.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .mt(px(6.0))
+                    .child(
+                        div()
+                            .text_color(rgb(if active { HEADING } else { TEXT }))
+                            .font_weight(FontWeight::BOLD)
+                            .child(format!("{} {}", if active { "›" } else { " " }, adaptation.name())),
+                    )
+                    .children(
+                        [
+                            format!("Benefit: {}", adaptation.benefit()),
+                            format!("Cost: {}", adaptation.cost()),
+                            format!("Rules out: {}", adaptation.rules_out()),
+                        ]
+                        .into_iter()
+                        .flat_map(|detail| wrap(&detail, PANEL_CHARS))
+                        .map(small_line)
+                        .collect::<Vec<_>>(),
+                    ),
+            );
+        }
+    }
+    let instructions = match (selected, commitment.is_confirmed()) {
+        (Some(index), true) => format!("Enter again to commit {}.", offers[index].name()),
+        (Some(_), false) => "Enter to confirm; Enter again commits.".into(),
+        (None, _) => "No available option.".into(),
+    };
+    panel
+        .child(div().h(px(8.0)))
+        .children(
+            wrap(&instructions, PANEL_CHARS)
+                .into_iter()
+                .map(|line| colored_small_line(line, if commitment.is_confirmed() { HEADING } else { DIM })),
+        )
+        .children(wrap("↑ / ↓ choose · Esc defers without advancing time", PANEL_CHARS).into_iter().map(small_line))
 }
 
 fn combat_status(game: &Game, move_slot: EarnedMoveSlot) -> Div {
@@ -691,7 +856,11 @@ fn combat_preview(game: &Game) -> Div {
 fn workshop_panel(workshop: &Workshop, game: &Game) -> Div {
     let maneuver = workshop.draft();
     let technique = maneuver.technique;
-    let reason = workshop.reason().or_else(|| (!game.can_prepare()).then_some("Nearby creatures prevent preparation."));
+    let reason = game
+        .validate_maneuver(maneuver)
+        .err()
+        .or(workshop.reason())
+        .or_else(|| (!game.can_prepare()).then_some("Nearby creatures prevent preparation."));
     let validation_message = match reason {
         Some(reason) => format!("Cannot prepare: {reason}"),
         None => "Core validates; safe to prepare when alone.".into(),
@@ -716,7 +885,7 @@ fn workshop_panel(workshop: &Workshop, game: &Game) -> Div {
     panel = panel
         .child(pair("Focus cost", format!("{} per use", technique.focus_cost())))
         .child(colored_small_line(validation_message, validation_color));
-    if let Ok(damage) = maneuver.backlash() {
+    if let Ok(damage) = game.maneuver_backlash(maneuver) {
         panel = panel
             .child(colored_small_line(format!("Area also hits you: up to {damage} Health."), HP))
             .child(small_line("No safe center. This can kill you."));
@@ -1057,9 +1226,8 @@ mod tests {
     use blah_core::{LearnedMove, MAX_FOCUS};
 
     #[test]
-    fn workshop_blocks_all_play_actions_until_closed() {
+    fn a_modal_blocks_all_play_actions_until_closed() {
         let mut game = Game::inferno_trial(42).unwrap();
-        let workshop = Workshop::new(game.maneuver().clone());
         let before = game.clone();
         let mut mark = 999;
         let actions: [fn(&mut Game); 7] = [
@@ -1086,18 +1254,36 @@ mod tests {
             },
         ];
         for action in actions {
-            assert!(!apply_play_action(&mut game, &mut mark, Some(&workshop), action));
+            assert!(!apply_play_action(&mut game, &mut mark, true, action));
             assert_eq!(game, before);
             assert_eq!(mark, 999);
         }
         let mut slot = EarnedMoveSlot::Weapon;
         assert!(!cycle_earned_move_slot(&mut slot, true));
         assert_eq!(slot, EarnedMoveSlot::Weapon);
-        assert!(apply_play_action(&mut game, &mut mark, None, |g| {
+        assert!(apply_play_action(&mut game, &mut mark, false, |g| {
             g.unleash();
         }));
         assert_eq!(game.turn(), before.turn() + 1);
         assert_eq!(mark, before.log().total());
+    }
+
+    #[test]
+    fn commitment_panel_blocks_play_and_escape_defers_without_changing_time() {
+        let mut game = Game::new(42);
+        let before = game.clone();
+        let mut mark = 999;
+        assert!(!apply_play_action(&mut game, &mut mark, true, |g| {
+            g.wait();
+        }));
+        assert_eq!(game, before);
+        assert_eq!(mark, 999);
+
+        let mut commitment = Some(CommitmentPanel::default());
+        assert!(commitment::cancel(&mut commitment));
+        assert_eq!(commitment, None);
+        assert_eq!(game, before);
+        assert_eq!(game.turn(), before.turn());
     }
 
     #[test]
@@ -1106,7 +1292,7 @@ mod tests {
         let prepared = game.maneuver().clone();
         let mut mark = 0;
         let turn = game.turn();
-        assert!(apply_play_action(&mut game, &mut mark, None, |g| {
+        assert!(apply_play_action(&mut game, &mut mark, false, |g| {
             assert_eq!(g.step(Dir::East), blah_core::Step::Attacked);
         }));
         assert_eq!(game.turn(), turn + 1);
@@ -1115,7 +1301,7 @@ mod tests {
         assert_eq!(game.last_attack().unwrap().burst, 0);
         assert!(!game.sneaking());
         let previous_log = game.log().total();
-        assert!(apply_play_action(&mut game, &mut mark, None, |g| {
+        assert!(apply_play_action(&mut game, &mut mark, false, |g| {
             assert_eq!(g.use_technique(Dir::East), blah_core::Step::Attacked);
         }));
         assert_eq!(mark, previous_log);
