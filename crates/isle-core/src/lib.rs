@@ -16,4 +16,4 @@ mod tests;
 pub use command::{Command, Dir, HELP, Instant, MAX_STEPS, Parsed, Target, parse};
 pub use data::{Armor, Bow, Class, Item, Kind, LEVELS, SHOP, Spell, Stats, Weapon, sale_price};
 pub use game::{Creature, Game, Line, Phase, Pile, Player, SACK, SIGHT, Sighted, Tone, modifier};
-pub use map::{Level, LevelId, Pos, SpawnKind, Tile, Zone, distance, line};
+pub use map::{Level, LevelId, Place, Pos, SpawnKind, Terrain, Tile, Zone, distance, line};

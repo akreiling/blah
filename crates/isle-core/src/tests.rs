@@ -257,3 +257,95 @@ fn get_all_takes_gold_arrows_and_items() {
     }
     assert!(!game.player().sack.contains(&Item::Gold(0)));
 }
+
+#[test]
+fn you_can_walk_from_the_town_square_into_the_wilderness_and_back() {
+    use crate::Dir;
+    use std::collections::{BTreeMap, VecDeque};
+
+    let mut game = made("fighter");
+    game.clear_creatures();
+    let start = game.player().pos;
+    let mut queue = VecDeque::from([start]);
+    let mut previous = BTreeMap::from([(start, None)]);
+    let exit = loop {
+        let pos = queue.pop_front().expect("the town has an exit onto generated ground");
+        if !game.level().authored(pos) {
+            break pos;
+        }
+        for dir in [Dir::N, Dir::S, Dir::E, Dir::W] {
+            let (dx, dy) = dir.delta();
+            let next = (pos.0 + dx, pos.1 + dy);
+            if game.level().tile(next).walkable() && !previous.contains_key(&next) {
+                previous.insert(next, Some((pos, dir)));
+                queue.push_back(next);
+            }
+        }
+    };
+    let mut path = Vec::new();
+    let mut pos = exit;
+    while let Some((from, dir)) = previous[&pos] {
+        path.push(dir);
+        pos = from;
+    }
+    path.reverse();
+    for dir in &path {
+        game.round(Some(Command::Move(vec![*dir])));
+    }
+    assert_eq!(game.player().pos, exit);
+    assert!(game.remembers(exit));
+    round(&mut game, "look");
+    assert!(said(&game, game.level().name_at(exit)));
+    for dir in path.into_iter().rev() {
+        let (dx, dy) = dir.delta();
+        let reverse = Dir::from_delta(-dx, -dy).unwrap();
+        game.round(Some(Command::Move(vec![reverse])));
+    }
+    assert_eq!(game.player().pos, start);
+    assert!(!game.sees(exit));
+    assert!(game.remembers(exit));
+}
+
+#[test]
+fn wilderness_memory_spans_signed_chunks_and_survives_saving_and_level_changes() {
+    let mut game = made("fighter");
+    game.clear_creatures();
+    let positions = [(-17, -17), (-16, -16), (-1, -1), (0, -1), (15, -1), (16, -1), (1_000_000, -1_000_000)];
+    for pos in positions {
+        game.player_mut().pos = pos;
+        game.round(Some(Command::Wait));
+        assert!(game.remembers(pos));
+    }
+    game.player_mut().pos = (22, 9);
+    game.round(Some(Command::Wait));
+    let json = serde_json::to_string(&game).unwrap();
+    assert!(json.len() < 50_000, "memory grows with visited cells, not the distance traveled");
+    let mut loaded: Game = serde_json::from_str(&json).unwrap();
+    assert_eq!(loaded, game);
+    for pos in positions {
+        assert!(!loaded.sees(pos));
+        assert!(loaded.remembers(pos));
+    }
+    loaded.player_mut().at = LevelId::Undercroft;
+    assert!(!loaded.remembers((-1, -1)));
+    loaded.player_mut().at = LevelId::Surface;
+    assert!(loaded.remembers((-1, -1)));
+    loaded.round(Some(Command::Wait));
+    game.round(Some(Command::Wait));
+    assert_eq!(loaded, game);
+}
+
+#[test]
+fn pre_wilderness_saves_keep_their_character_and_gain_seeded_terrain() {
+    let game = made("fighter");
+    let mut old = serde_json::to_value(&game).unwrap();
+    old.as_object_mut().unwrap().remove("terrain");
+    old.as_object_mut().unwrap().remove("explored");
+    let mut loaded: Game = serde_json::from_value(old).unwrap();
+    assert_eq!(loaded.player(), game.player());
+    assert_eq!(loaded.level().tile((-30, -30)), game.level().tile((-30, -30)));
+    loaded.round(Some(Command::Wait));
+    let mut expected = game;
+    expected.round(Some(Command::Wait));
+    assert_eq!(loaded, expected);
+}

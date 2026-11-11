@@ -1,10 +1,12 @@
 //! The game: a character, the creatures, what lies on the ground, and the round that resolves a command.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::command::{self, Command, Dir, Instant, Parsed, Target};
 use crate::data::{Armor, Bow, Class, Item, Kind, LEVELS, SHOP, Spell, Weapon, sale_price};
-use crate::map::{Level, LevelId, Pos, SpawnKind, Tile, Zone, distance};
+use crate::map::{Level, LevelId, Place, Pos, SpawnKind, Terrain, Tile, Zone, distance};
 use crate::rng::Rng;
 
 /// Cells a character or creature sees.
@@ -271,6 +273,9 @@ pub struct Sighted<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Game {
     seed: u64,
+    // Optional so saves made before the wilderness still load with the same seed.
+    #[serde(default)]
+    terrain: Option<Terrain>,
     rng: Rng,
     round: u64,
     phase: Phase,
@@ -281,6 +286,9 @@ pub struct Game {
     spawns: Vec<SpawnState>,
     /// Per level, cells ever seen.
     seen: Vec<Vec<bool>>,
+    /// Outside the authored maps, 16×16 chunks of remembered cells, including negative coordinates.
+    #[serde(default)]
+    explored: BTreeMap<i32, BTreeMap<i32, [u64; 4]>>,
     log: Vec<Line>,
     log_total: u64,
 }
@@ -299,6 +307,7 @@ impl Game {
         let seen = LevelId::ALL.iter().map(|&id| vec![false; Level::get(id).cells()]).collect();
         let mut game = Game {
             seed,
+            terrain: Some(Terrain::new(seed)),
             rng,
             round: 0,
             phase: Phase::Name,
@@ -308,6 +317,7 @@ impl Game {
             piles: Vec::new(),
             spawns,
             seen,
+            explored: BTreeMap::new(),
             log: Vec::new(),
             log_total: 0,
         };
@@ -338,8 +348,10 @@ impl Game {
     }
 
     /// The map the character is on.
-    pub fn level(&self) -> &'static Level {
-        Level::get(self.player.at)
+    pub fn level(&self) -> Place {
+        let terrain =
+            (self.player.at == LevelId::Surface).then(|| self.terrain.unwrap_or_else(|| Terrain::new(self.seed)));
+        Place::new(Level::get(self.player.at), terrain)
     }
 
     /// Every creature alive.
@@ -354,7 +366,16 @@ impl Game {
 
     /// Whether the character has ever seen `pos` on their map.
     pub fn remembers(&self, pos: Pos) -> bool {
-        self.level().cell_index(pos).is_some_and(|i| self.seen[self.player.at.index()][i])
+        if let Some(i) = self.level().cell_index(pos) {
+            return self.seen[self.player.at.index()][i];
+        }
+        let (chunk, word, bit) = memory_cell(pos);
+        self.player.at == LevelId::Surface
+            && self
+                .explored
+                .get(&chunk.0)
+                .and_then(|column| column.get(&chunk.1))
+                .is_some_and(|words| words[word] & bit != 0)
     }
 
     /// Whether the character sees `pos` now.
@@ -508,7 +529,7 @@ impl Game {
                 let place = match self.zone() {
                     Zone::Shop => "the outfitter's shop".to_owned(),
                     Zone::Temple => "the temple".to_owned(),
-                    Zone::Open => self.level().name.to_owned(),
+                    Zone::Open => self.level().name_at(self.player.pos).to_owned(),
                 };
                 let underfoot = match self.level().tile(self.player.pos) {
                     Tile::StairsDown => " Stairs lead down.",
@@ -1401,19 +1422,30 @@ impl Game {
     }
 
     fn update_seen(&mut self) {
+        // Upgrade old saves once, rather than finding their starting land on every terrain query.
+        self.terrain.get_or_insert_with(|| Terrain::new(self.seed));
         let level = self.level();
         let me = self.player.pos;
         let seen = &mut self.seen[self.player.at.index()];
         for y in me.1 - SIGHT..=me.1 + SIGHT {
             for x in me.0 - SIGHT..=me.0 + SIGHT {
-                if let Some(i) = level.cell_index((x, y))
-                    && level.sees(me, (x, y), SIGHT)
-                {
-                    seen[i] = true;
+                let pos = (x, y);
+                if level.contains(pos) && level.sees(me, pos, SIGHT) {
+                    if let Some(i) = level.cell_index(pos) {
+                        seen[i] = true;
+                    } else {
+                        let (chunk, word, bit) = memory_cell(pos);
+                        self.explored.entry(chunk.0).or_default().entry(chunk.1).or_default()[word] |= bit;
+                    }
                 }
             }
         }
     }
+}
+
+fn memory_cell((x, y): Pos) -> (Pos, usize, u64) {
+    let index = (y.rem_euclid(16) * 16 + x.rem_euclid(16)) as usize;
+    ((x.div_euclid(16), y.div_euclid(16)), index / 64, 1_u64 << (index % 64))
 }
 
 #[cfg(test)]

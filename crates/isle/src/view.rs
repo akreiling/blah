@@ -205,11 +205,18 @@ impl IsleView {
         }
         let level = game.level();
         let labels: Vec<(Pos, char)> = game.sighted().iter().map(|s| (s.creature.pos, s.label)).collect();
+        // Keep authored map coordinates stable; in the wilderness return a bounded local window.
+        let (ox, oy) = if level.authored(game.player().pos) {
+            (0, 0)
+        } else {
+            (game.player().pos.0 - level.width / 2, game.player().pos.1 - level.height / 2)
+        };
         let rows = |f: &dyn Fn(Pos) -> String| -> Vec<String> {
-            (0..level.height).map(|y| (0..level.width).map(|x| f((x, y))).collect()).collect()
+            (oy..oy + level.height).map(|y| (ox..ox + level.width).map(|x| f((x, y))).collect()).collect()
         };
         let mut map = serde_json::json!({
-            "level": level.id, "name": level.name, "width": level.width, "height": level.height,
+            "level": level.id, "name": level.name_at(game.player().pos),
+            "origin": [ox, oy], "width": level.width, "height": level.height,
             "stairs_up": level.stairs_up, "stairs_down": level.stairs_down,
         });
         match view.map {
@@ -219,9 +226,9 @@ impl IsleView {
                 map["view"] = rows(&|pos| cell(game, pos, &labels).0).into();
             }
             Map::Cells => {
-                let cells: Vec<Vec<serde_json::Value>> = (0..level.height)
+                let cells: Vec<Vec<serde_json::Value>> = (oy..oy + level.height)
                     .map(|y| {
-                        (0..level.width)
+                        (ox..ox + level.width)
                             .map(|x| {
                                 let pos = (x, y);
                                 serde_json::json!({
@@ -344,7 +351,7 @@ fn setback(game: &Game, mark: u64, before: &[u32]) -> bool {
 }
 
 /// One character per cell of raw terrain, as the map source draws it.
-const fn terrain(tile: Tile, zone: Zone) -> char {
+fn terrain(tile: Tile, zone: Zone) -> char {
     match (tile, zone) {
         (Tile::Floor, Zone::Shop) => 'S',
         (Tile::Floor, Zone::Temple) => 'H',
@@ -358,6 +365,8 @@ const fn terrain(tile: Tile, zone: Zone) -> char {
         (Tile::StairsUp, _) => '<',
         (Tile::Counter, _) => '=',
         (Tile::Altar, _) => '_',
+        (Tile::Wild(id), _) => id.biome().glyph,
+        (Tile::Rock, _) => '^',
     }
 }
 impl Focusable for IsleView {
@@ -611,6 +620,13 @@ fn cell(game: &Game, pos: Pos, labels: &[(Pos, char)]) -> (String, u32, Option<u
         Tile::StairsUp => ("<<", 0xff_ff_ff),
         Tile::Counter => ("==", 0xa0_70_40),
         Tile::Altar => ("**", 0xf0_d0_80),
+        Tile::Rock => ("##", 0x9a_9a_a8),
+        Tile::Wild(id) => {
+            let biome = id.biome();
+            let [r, g, b] = biome.color;
+            let color = u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b);
+            return (format!("{} ", biome.glyph), if visible { color } else { dimmed(color) }, back);
+        }
     };
     (glyph.into(), if visible { color } else { dimmed(color) }, back)
 }
@@ -656,7 +672,7 @@ fn place_text(game: &Game) -> String {
     match game.zone() {
         Zone::Shop => format!("{} · shop", game.level().name),
         Zone::Temple => format!("{} · temple", game.level().name),
-        Zone::Open => game.level().name.to_owned(),
+        Zone::Open => game.level().name_at(game.player().pos).to_owned(),
     }
 }
 

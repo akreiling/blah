@@ -1,8 +1,8 @@
-//! The island's two places, drawn by hand: the town of Harrowmere and the undercroft beneath its old
-//! watchtower. Each map character is one cell; the window draws each cell as two characters.
+//! Procedural wilderness around the authored town of Harrowmere and the undercroft beneath it.
 
 use std::sync::OnceLock;
 
+use blah_core::{Biome, BiomeId, Rng, World, find_land};
 use serde::{Deserialize, Serialize};
 
 /// A cell position, `(x, y)`, with `y` growing down the screen.
@@ -31,17 +31,25 @@ pub enum Tile {
     Counter,
     /// The temple altar.
     Altar,
+    /// Open ground of one of the world's biomes.
+    Wild(BiomeId),
+    /// Bare rock that blocks movement and sight.
+    Rock,
 }
 
 impl Tile {
     /// Whether a walker can stand here.
-    pub const fn walkable(self) -> bool {
-        !matches!(self, Tile::Wall | Tile::Water | Tile::Counter | Tile::Altar)
+    pub fn walkable(self) -> bool {
+        match self {
+            Tile::Wall | Tile::Water | Tile::Counter | Tile::Altar | Tile::Rock => false,
+            Tile::Wild(biome) => biome.biome().passable,
+            _ => true,
+        }
     }
 
     /// Whether this cell hides what lies beyond it.
     pub const fn opaque(self) -> bool {
-        matches!(self, Tile::Wall | Tile::Tree)
+        matches!(self, Tile::Wall | Tile::Tree | Tile::Rock)
     }
 }
 
@@ -276,6 +284,133 @@ impl Level {
     }
 }
 
+/// How much of a biome's ground is trees (passable, blocking sight) and rock (blocking both).
+fn cover(biome: &Biome) -> (f32, f32) {
+    match biome.name {
+        "Jungle" => (0.55, 0.0),
+        "Forest" => (0.45, 0.0),
+        "Taiga" => (0.40, 0.0),
+        "Swamp" => (0.12, 0.0),
+        "Savanna" => (0.04, 0.0),
+        "Grassland" => (0.03, 0.0),
+        "Hills" => (0.05, 0.08),
+        "Mountains" => (0.0, 0.25),
+        "Badlands" => (0.0, 0.12),
+        "Tundra" => (0.0, 0.03),
+        _ => (0.0, 0.0),
+    }
+}
+
+/// The endless land around Harrowmere: blah's world, shifted so the town's start sits on the land nearest
+/// the world's origin. A pure function of the seed, so only the seed and the shift are saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Terrain {
+    seed: u64,
+    offset: (i64, i64),
+}
+
+impl Terrain {
+    /// The land for `seed`.
+    ///
+    /// # Panics
+    ///
+    /// If the world has no land near its origin, which no seed tried so far comes close to.
+    pub fn new(seed: u64) -> Terrain {
+        let world = World::new(seed);
+        let start = Level::get(LevelId::Surface).start.expect("the surface has a start");
+        let (x, y) = find_land(&world, 0, 0).expect("land near the origin");
+        Terrain { seed, offset: (x - i64::from(start.0), y - i64::from(start.1)) }
+    }
+
+    /// The world coordinates of `at`.
+    pub fn world_pos(&self, (x, y): Pos) -> (i64, i64) {
+        (i64::from(x) + self.offset.0, i64::from(y) + self.offset.1)
+    }
+
+    /// The biome under `at`.
+    pub fn biome(&self, at: Pos) -> BiomeId {
+        let (x, y) = self.world_pos(at);
+        World::new(self.seed).tile(x, y).biome
+    }
+
+    /// The cell at `at`.
+    pub fn tile(&self, at: Pos) -> Tile {
+        let id = self.biome(at);
+        let biome = id.biome();
+        if !biome.passable {
+            return if biome.water { Tile::Water } else { Tile::Rock };
+        }
+        let (trees, rocks) = cover(biome);
+        if trees + rocks == 0.0 {
+            return Tile::Wild(id);
+        }
+        let (x, y) = self.world_pos(at);
+        let roll = Rng::keyed(self.seed, b"isle-cov", &[x as u64, y as u64]).unit();
+        if roll < trees {
+            Tile::Tree
+        } else if roll < trees + rocks {
+            Tile::Rock
+        } else {
+            Tile::Wild(id)
+        }
+    }
+}
+
+/// A level as play sees it: its authored cells, and on the surface the terrain beyond them.
+#[derive(Clone, Copy, Debug)]
+pub struct Place {
+    level: &'static Level,
+    terrain: Option<Terrain>,
+}
+
+impl std::ops::Deref for Place {
+    type Target = Level;
+
+    fn deref(&self) -> &Level {
+        self.level
+    }
+}
+
+impl Place {
+    pub(crate) fn new(level: &'static Level, terrain: Option<Terrain>) -> Place {
+        Place { level, terrain }
+    }
+
+    /// Whether `at` is part of this place, authored or generated.
+    pub fn contains(&self, at: Pos) -> bool {
+        self.terrain.is_some() || self.level.index(at).is_some()
+    }
+
+    /// Whether `at` is one of the level's authored cells.
+    pub fn authored(&self, at: Pos) -> bool {
+        self.level.index(at).is_some()
+    }
+
+    /// The cell at `at`; outside an authored level with no terrain is wall.
+    pub fn tile(&self, at: Pos) -> Tile {
+        match (self.level.index(at), self.terrain) {
+            (Some(i), _) => self.level.tiles[i],
+            (None, Some(terrain)) => terrain.tile(at),
+            (None, None) => Tile::Wall,
+        }
+    }
+
+    /// The name of where `at` lies: the level's, or the biome's out in the wild.
+    pub fn name_at(&self, at: Pos) -> &'static str {
+        match (self.level.index(at), self.terrain) {
+            (None, Some(terrain)) => terrain.biome(at).biome().name,
+            _ => self.level.name,
+        }
+    }
+
+    /// Whether `from` can see `to` within `radius` cells: no opaque cell strictly between them.
+    pub fn sees(&self, from: Pos, to: Pos, radius: i32) -> bool {
+        if distance(from, to) > radius {
+            return false;
+        }
+        line(from, to).iter().skip(1).take_while(|&&p| p != to).all(|&p| !self.tile(p).opaque())
+    }
+}
 /// Steps between two cells when diagonal steps count as one.
 pub fn distance(a: Pos, b: Pos) -> i32 {
     (a.0 - b.0).abs().max((a.1 - b.1).abs())
@@ -360,5 +495,42 @@ mod tests {
         assert_eq!(line((0, 0), (3, 1)), vec![(0, 0), (1, 0), (2, 1), (3, 1)]);
         assert_eq!(line((2, 2), (2, 2)), vec![(2, 2)]);
         assert_eq!(distance((0, 0), (3, -5)), 5);
+    }
+
+    #[test]
+    fn wilderness_uses_the_seeded_world_and_keeps_the_town_intact() {
+        let town = Level::get(LevelId::Surface);
+        for seed in [0, 1, 7, 42, u64::MAX] {
+            let terrain = Terrain::new(seed);
+            let place = Place::new(town, Some(terrain));
+            let world = World::new(seed);
+            let start = terrain.world_pos(town.start.unwrap());
+            assert_eq!(Some(start), find_land(&world, 0, 0));
+            for y in 0..town.height {
+                for x in 0..town.width {
+                    assert_eq!(place.tile((x, y)), town.tile((x, y)));
+                }
+            }
+            for y in [-1000, -16, -1, 100, 1000] {
+                for x in [-1000, -16, -1, 100, 1000] {
+                    let pos = (x, y);
+                    let (wx, wy) = terrain.world_pos(pos);
+                    let biome = world.tile(wx, wy).biome;
+                    assert_eq!(terrain.biome(pos), biome);
+                    assert_eq!(place.name_at(pos), biome.biome().name);
+                    assert_eq!(place.tile(pos), Terrain::new(seed).tile(pos));
+                    if !biome.biome().passable {
+                        assert!(!place.tile(pos).walkable());
+                    } else if let Tile::Wild(id) = place.tile(pos) {
+                        assert_eq!(id, biome);
+                        assert!(place.tile(pos).walkable());
+                    }
+                    assert_eq!(place.zone(pos), Zone::Open);
+                }
+            }
+        }
+        let under = Place::new(Level::get(LevelId::Undercroft), None);
+        assert!(!under.contains((-1, -1)));
+        assert_eq!(under.tile((-1, -1)), Tile::Wall);
     }
 }

@@ -1,7 +1,8 @@
 # Isle
 
-Isle is a second, separate game in this workspace: a solo island adventure in the manner of *Island of
-Kesmai* (Kesmai, 1985). It shares no rules with blah. Its maps, creatures, and text are original.
+Isle is a solo island adventure in the manner of *Island of Kesmai* (Kesmai, 1985), being merged with
+blah one system at a time. Its wilderness now uses blah's seeded procedural terrain; its town, dungeon,
+creatures, and callings are still Isle's original systems.
 
 - `crates/isle-core`: the rules. Pure and deterministic; the whole `Game` serializes, dice included.
 - `crates/isle`: the GPUI window. Run it with `just isle`.
@@ -62,6 +63,11 @@ Kesmai's martial artist and knight are not in yet.
 
 ## The island
 
+Beyond Harrowmere's edges, the surface continues into blah's seeded biomes, with trees that hide what
+lies beyond and rocks that block movement and sight. Deep water and snow peaks are impassable; shallow
+water can be waded. Explored wilderness stays remembered across saves, including west and north of town.
+Harrowmere remains stamped at the starting point while procedural towns are being integrated.
+
 Harrowmere holds the outfitter (`buy`, `sell`, `list`) and the temple (`heal` for five gold a level;
 the fallen wake here, leaving their gold where they fell). Woods beasts keep within seven cells of their
 lairs, so the town square is safe. South of town the old watchtower's stairs lead to the Undercroft:
@@ -101,7 +107,10 @@ Every reply says what the request did: `steps` (keystrokes delivered), `interrup
   `view` as two-character cells, the `panel` lines, the last ten `log` lines, and the `prompt` text and
   cursor. About 1 KB.
 - `"map": "rows"` adds the current level's `terrain` (one character per cell, as in `map.rs`) and `view`
-  (whole level as drawn, blank where unseen), with size and stair positions. `"map": "cells"` gives every
+  (blank where unseen), with size, `origin: [x, y]`, and stair positions. In town and underground this is
+  the authored map at origin `[0, 0]`; outside town it is a 50×28 window centered on the character.
+  Row/column indices are relative to `origin`, while stair positions remain level coordinates.
+  `"map": "cells"` gives every
   cell's tile, zone, walkability, visibility, and memory instead (~150 KB).
 - `"game": true` adds the whole serializable game, as saved.
 
@@ -113,6 +122,8 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
 `cargo build -p isle`:
 
 - `python3 crates/isle/scripts/smoke.py` checks the protocol against a real window in both pacing modes.
+- `python3 crates/isle/scripts/wilderness.py` checks leaving town, biome rendering, local map origins,
+  wilderness memory, and save/reload.
 - `python3 crates/isle/scripts/seed7.py` plays seed 7 from what the window shows. It walks to the stairs,
   fights from them, and retreats to the temple to heal. Games are deterministic per seed and input, so its
   output repeats exactly.
