@@ -12,6 +12,8 @@ use gpui::{
 
 use isle_core::{Command, Game, Item, Kind, Parsed, Phase, Pos, SIGHT, Tile, Tone, Zone, distance};
 
+use crate::input::{CommandLine, InputAction};
+
 /// Cells along each side of the map.
 const VIEW: i32 = 2 * SIGHT + 1;
 const CELL_W: f32 = 40.0;
@@ -58,9 +60,8 @@ pub struct IsleView {
     path: PathBuf,
     save_error: Option<String>,
     focus: FocusHandle,
-    input: String,
+    input: CommandLine,
     queue: VecDeque<(String, Command)>,
-    last_line: String,
     /// The round clock; without one, each command is a round and the world waits.
     round: Option<Duration>,
     started: Clock,
@@ -97,9 +98,8 @@ impl IsleView {
             path,
             save_error: None,
             focus,
-            input: String::new(),
+            input: CommandLine::default(),
             queue: VecDeque::new(),
-            last_line: String::new(),
             round,
             started: Clock::now(),
             paused: false,
@@ -129,34 +129,17 @@ impl IsleView {
     }
 
     fn key(&mut self, event: &KeyDownEvent, cx: &mut Context<IsleView>) {
-        let stroke = &event.keystroke;
-        if stroke.modifiers.platform || stroke.modifiers.control {
-            return;
-        }
-        match stroke.key.as_str() {
-            "enter" => self.submit(cx),
-            "backspace" => _ = self.input.pop(),
-            "escape" => self.input.clear(),
-            "up" => self.input = self.last_line.clone(),
-            _ => {
-                if let Some(typed) = &stroke.key_char
-                    && typed.chars().all(|c| !c.is_control())
-                    && self.input.chars().count() < 64
-                {
-                    self.input.push_str(typed);
-                }
-            }
+        match self.input.key(&event.keystroke, self.game.phase() == &Phase::Play) {
+            InputAction::Submit => self.submit(cx),
+            InputAction::Move(dir) => self.play_line(dir.short(), cx),
+            InputAction::Edit => {}
+            InputAction::Ignore => return,
         }
         cx.notify();
     }
 
     fn submit(&mut self, cx: &mut Context<IsleView>) {
-        let typed = std::mem::take(&mut self.input).trim().to_owned();
-        let line = if typed.is_empty() { self.last_line.clone() } else { typed };
-        if line.is_empty() {
-            return;
-        }
-        self.last_line = line.clone();
+        let Some(line) = self.input.submit() else { return };
         if self.game.phase() != &Phase::Play {
             self.mark = self.game.log_total();
             self.game.answer(&line);
@@ -164,11 +147,15 @@ impl IsleView {
             self.save();
             return;
         }
+        self.play_line(&line, cx);
+    }
+
+    fn play_line(&mut self, line: &str, cx: &mut Context<IsleView>) {
         let turn_based = self.round.is_none();
         if turn_based {
             self.mark = self.game.log_total();
         }
-        let quit = submit_commands(&mut self.game, &mut self.queue, &mut self.paused, turn_based, &line);
+        let quit = submit_commands(&mut self.game, &mut self.queue, &mut self.paused, turn_based, line);
         self.save();
         if quit {
             cx.quit();
@@ -408,7 +395,8 @@ impl IsleView {
     fn prompt(&self) -> Div {
         let creating = self.game.phase() != &Phase::Play;
         let hint = if creating { "your answer" } else { "type a command (help lists them)" };
-        let cursor = div().w(px(9.0)).h(px(18.0)).bg(rgb(HEADING));
+        let (before, after) = self.input.halves();
+        let cursor = div().flex_none().w(px(2.0)).h(px(18.0)).bg(rgb(HEADING));
         frame()
             .w_full()
             .h(px(PROMPT))
@@ -419,10 +407,16 @@ impl IsleView {
             .gap(px(8.0))
             .text_size(px(16.0))
             .child(div().text_color(rgb(HEADING)).font_weight(FontWeight::BOLD).child(">"))
-            .when(!self.input.is_empty(), |d| {
-                d.child(div().text_color(rgb(TEXT)).child(SharedString::from(self.input.clone())))
-            })
-            .child(cursor)
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .whitespace_nowrap()
+                    .child(div().child(SharedString::from(before.to_owned())))
+                    .child(cursor)
+                    .child(div().child(SharedString::from(after.to_owned()))),
+            )
             .when(self.input.is_empty(), |d| d.child(div().text_color(rgb(FAINT)).child(hint)))
     }
 }
@@ -713,6 +707,33 @@ mod tests {
         assert_eq!(game.creatures(), creatures);
         submit(&mut game, "wait; wait; wait; wait; wait; wait");
         assert_eq!(game.round_number(), 7, "at most five rounds per line");
+    }
+
+    #[test]
+    fn arrow_movement_uses_the_game_rules_without_submitting_or_changing_a_draft() {
+        let mut game = made(7);
+        let pos = game.player().pos;
+        let mut input = CommandLine::default();
+        input.key(&gpui::Keystroke { key_char: Some("look".into()), ..Default::default() }, true);
+        input.key(&gpui::Keystroke::parse("ctrl-a").unwrap(), true);
+        for (clocked, stroke) in [(false, "right"), (true, "down")] {
+            let InputAction::Move(dir) = input.key(&gpui::Keystroke::parse(stroke).unwrap(), true) else {
+                panic!("an arrow moves");
+            };
+            let mut queue = VecDeque::new();
+            submit_commands(&mut game, &mut queue, &mut false, !clocked, dir.short());
+            assert_eq!(input.halves(), ("", "look"));
+            if clocked {
+                assert_eq!(queue.len(), 1);
+                game.round(Some(queue.pop_front().unwrap().1));
+            } else {
+                assert!(queue.is_empty());
+            }
+        }
+        assert_eq!(game.player().pos, (pos.0 + 1, pos.1 + 1));
+        assert_eq!(game.round_number(), 2);
+        assert_eq!(input.submit().as_deref(), Some("look"));
+        assert_eq!(input.submit().as_deref(), Some("look"));
     }
 
     #[test]

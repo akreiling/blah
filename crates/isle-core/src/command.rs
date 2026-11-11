@@ -307,7 +307,7 @@ pub const HELP: [&str; 10] = [
     "Town: buy <item>, sell <item>, list (in the shop); heal (in the temple).",
     "Stairs: down, up. Rest to recover; wait (wa) stands ready and strikes back.",
     "Chain rounds with ;  (nock; shoot a). A chain stops if you are hurt or something new appears.",
-    "Enter on an empty line repeats your last command; Up recalls it. quit saves and leaves.",
+    "Arrows move, keeping typed text. Ctrl-P/N recalls commands. Enter on an empty line repeats; quit leaves.",
     "Commands abbreviate: a, sh, no, ch, ca, g, l, i, q, r, d, u.",
 ];
 

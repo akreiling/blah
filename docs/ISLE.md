@@ -12,19 +12,37 @@ You type a command and press Enter. Each action resolves one round immediately: 
 then every creature in turn. The world waits while you think or type. `wait` (`wa`) lets a round pass
 while you *stand ready*, striking back at anything hunting you from the next cell.
 
-- Movement: `n s e w ne nw se sw`, up to three steps a round (`n n e`).
+- Movement: arrow keys take one step without clearing the command line or moving its cursor.
+  Typed directions `n s e w ne nw se sw` still work, up to three steps a round (`n n e`).
 - Fighting: `attack <who>`, `nock` then `shoot <who>`. A target is the letter the IN SIGHT list shows
   (`shoot a`), a name (`shoot orc`), or an ordinal and name (`sh 2 gob`).
 - Magic: `chant <spell>` one round, `cast [who]` the next.
 - Rounds chain with `;` (`nock; shoot a`), at most five per line. A chain stops if you are hurt, die,
   or a new creature comes into sight. The rest is discarded, not queued for later.
-- Enter on an empty line repeats the last command line; Up recalls it. `quit` saves and leaves.
+- Enter on an empty line repeats the last typed command line, not arrow movement. `quit` saves and leaves.
   `look`, `inventory`, `list`, and `help` take no time.
 
 For the original clock-driven pace, use `just isle --round 10` (0.5–60 seconds per round). Commands
 queue up to five rounds ahead instead of resolving immediately. With nothing queued you stand ready.
 `pause` toggles the clock and `stop` clears the queue; both take effect immediately. Without a clock,
 `pause` is unnecessary.
+
+### Editing commands
+
+Printable keys, spaces, and punctuation insert at the cursor. Editing takes no turns.
+
+| Keys | Action |
+|---|---|
+| Option-Left / Option-Right (Alt on other keyboards), Alt-B / Alt-F | Back / forward one word |
+| Ctrl-B / Ctrl-F | Back / forward one character |
+| Ctrl-A / Ctrl-E, Home / End | Start / end of line |
+| Backspace / Delete, Ctrl-H / Ctrl-D | Delete before / at the cursor |
+| Ctrl-W | Kill the preceding whitespace-delimited word |
+| Option-Backspace / Alt-D | Kill back / forward one word |
+| Ctrl-U / Ctrl-K | Kill to the start / end of the line |
+| Ctrl-Y | Yank (restore) the last killed text |
+| Ctrl-P / Ctrl-N | Previous / next typed command; next past the newest restores your draft |
+| Escape | Clear the line |
 
 ## Callings
 

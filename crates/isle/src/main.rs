@@ -6,6 +6,7 @@
 //! save beside the new one. Play is turn-based: each command is a round. `--round` puts rounds on a clock
 //! instead, the way the original ticked every ten seconds.
 
+mod input;
 mod save;
 mod view;
 
