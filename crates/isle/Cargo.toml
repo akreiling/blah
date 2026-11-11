@@ -1,0 +1,15 @@
+[package]
+name = "isle"
+description = "The Isle window: a two-character grid, a log, and a command line on a round clock."
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+dirs = "5"
+gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
+isle-core = { path = "../isle-core" }
+serde_json = "1"
+
+[lints]
+workspace = true

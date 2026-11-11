@@ -6,6 +6,10 @@ cargo := "mise exec -- cargo"
 run *args:
     {{cargo}} run --quiet -p blah -- {{args}}
 
+# Launch Isle, the Kesmai-style island game: just isle [--new] [--round SECONDS]
+isle *args:
+    {{cargo}} run --quiet -p isle -- {{args}}
+
 # Run every test in the workspace.
 test:
     {{cargo}} test --workspace

@@ -2892,6 +2892,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "isle"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "gpui",
+ "isle-core",
+ "serde_json",
+]
+
+[[package]]
+name = "isle-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
