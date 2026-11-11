@@ -5,6 +5,12 @@ blah one system at a time. Its wilderness now uses blah's seeded procedural terr
 life. Towns are generated on dry ground, each over its own generated Deep, floor after floor down.
 Characters are classless: practice grants power, while experience records adventuring rank.
 
+Evolved creatures now appear as genome-generated pixel sprites in the map. Their clade determines the
+body plan; individual genes determine size, limbs, covering, and color. Surface life keeps its home
+biome's tint; Deep life takes a stone tint. Each sprite carries its target letter, matching IN SIGHT and
+commands such as `attack a`. Sprites stay crisp at display scale and disappear when the creature leaves
+sight. Terrain, your `@`, treasure, and fixed-table creatures retain their text glyphs for now.
+
 - `crates/isle-core`: the rules. Pure and deterministic; the whole `Game` serializes, dice included.
 - `crates/isle`: the GPUI window. Run it with `just isle`.
 
@@ -169,7 +175,8 @@ Every reply says what the request did: `steps` (keystrokes delivered), `interrup
 
 - `"state": true` (the default for `op: state`) adds `screen`: what the window shows. That is the 13×13
   `view` as two-character cells, the `panel` lines, the last ten `log` lines, and the `prompt` text and
-  cursor. About 1 KB.
+  cursor. About 1 KB. The text map represents a genome sprite as its target letter and `*` (`A*`), not
+  image pixels, so agent targeting stays the same.
 - `"map": "rows"` adds the current level's `terrain` (one character per cell, as in `map.rs`) and `view`
   (blank where unseen), with size, `origin: [x, y]`, and stair positions. In town and underground this is
   a 50×28 window starting at that town's northwest corner, or the whole 64×32 floor of a Deep at origin `[0, 0]`.

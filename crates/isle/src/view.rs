@@ -7,7 +7,7 @@ use std::time::{Duration, Instant as Clock};
 
 use gpui::{
     App, Context, Div, FocusHandle, Focusable, FontWeight, KeyDownEvent, Keystroke, Pixels, SharedString, Subscription,
-    Task, Window, div, prelude::*, px, rgb,
+    Task, Window, div, img, prelude::*, px, rgb,
 };
 
 use isle_core::{
@@ -16,6 +16,7 @@ use isle_core::{
 };
 
 use crate::input::{CommandLine, InputAction};
+use crate::sprites::SpriteCache;
 
 /// Cells along each side of the map.
 const VIEW: i32 = 2 * SIGHT + 1;
@@ -70,6 +71,7 @@ pub struct IsleView {
     started: Clock,
     paused: bool,
     show_skills: bool,
+    sprites: SpriteCache,
     /// Log total before the latest round: lines past it are news.
     mark: u64,
     _ticker: Option<Task<()>>,
@@ -99,6 +101,7 @@ impl IsleView {
             })
         });
         let mark = game.log_total().saturating_sub(1);
+        let sprites = SpriteCache::new(game.seed());
         IsleView {
             game,
             path,
@@ -110,6 +113,7 @@ impl IsleView {
             started: Clock::now(),
             paused: false,
             show_skills: false,
+            sprites,
             mark,
             _ticker: ticker,
             control: None,
@@ -394,7 +398,10 @@ impl Focusable for IsleView {
 }
 
 impl Render for IsleView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<IsleView>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<IsleView>) -> impl IntoElement {
+        self.sprites.begin(window);
+        let map = map(&self.game, &mut self.sprites);
+        self.sprites.end(window);
         let title = self.save_error.clone().unwrap_or_else(|| {
             let file = self.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
             format!("Isle · seed {} · {file}", self.game.seed())
@@ -421,7 +428,7 @@ impl Render for IsleView {
                     .text_color(rgb(if self.save_error.is_some() { 0xff_70_70 } else { FAINT }))
                     .child(title),
             )
-            .child(div().flex().flex_row().gap(px(GAP)).child(map(&self.game)).child(self.panel()))
+            .child(div().flex().flex_row().gap(px(GAP)).child(map).child(self.panel()))
             .child(div().h(px(GAP)))
             .child(log(&self.game, self.mark))
             .child(div().h(px(GAP)))
@@ -793,27 +800,56 @@ fn dimmed(color: u32) -> u32 {
     scale(16) | scale(8) | scale(0)
 }
 
-fn map(game: &Game) -> Div {
+fn map(game: &Game, sprites: &mut SpriteCache) -> Div {
     let me = game.player().pos;
     let labels: Vec<(Pos, char)> = game.sighted().iter().map(|s| (s.creature.pos, s.label)).collect();
     let rows = (-SIGHT..=SIGHT).map(|dy| {
         let cells = (-SIGHT..=SIGHT).map(|dx| {
-            let (glyph, color, back) = cell(game, (me.0 + dx, me.1 + dy), &labels);
-            div()
+            let pos = (me.0 + dx, me.1 + dy);
+            let (glyph, color, back) = cell(game, pos, &labels);
+            let base = div()
                 .w(px(CELL_W))
                 .h(px(CELL_H))
+                .flex_none()
                 .flex()
                 .items_center()
                 .justify_center()
                 .text_size(px(GLYPH))
                 .text_color(rgb(color))
                 .when_some(back, |d, b| d.bg(rgb(b)))
-                .when(dx == 0 && dy == 0, |d| d.font_weight(FontWeight::BOLD))
-                .child(glyph)
+                .when(dx == 0 && dy == 0, |d| d.font_weight(FontWeight::BOLD));
+            if let Some(creature) = sprite_creature(game, pos)
+                && let Some(image) = sprites.get(creature)
+            {
+                let label = labels.iter().find(|(at, _)| *at == pos).map_or('?', |&(_, label)| label);
+                return base.relative().child(img(image).size(px(sprites.display_size()))).child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .w(px(12.0))
+                        .h(px(14.0))
+                        .bg(rgb(SCREEN))
+                        .text_color(rgb(color))
+                        .text_size(px(12.0))
+                        .line_height(px(14.0))
+                        .font_weight(FontWeight::BOLD)
+                        .child(label.to_string()),
+                );
+            }
+            base.child(glyph)
         });
         div().flex().flex_row().children(cells.collect::<Vec<_>>())
     });
     frame().w(px(MAP_W)).h(px(MAP_H)).flex().flex_col().children(rows.collect::<Vec<_>>())
+}
+
+/// Match the text map's visibility and player priority; remembered creatures never become ghost sprites.
+fn sprite_creature(game: &Game, pos: Pos) -> Option<&Creature> {
+    (pos != game.player().pos && game.sees(pos))
+        .then(|| game.creature_at(pos))
+        .flatten()
+        .filter(|creature| creature.wild.is_some())
 }
 
 const fn tint(tone: Tone, new: bool) -> u32 {
@@ -1180,6 +1216,37 @@ mod tests {
         let shop = isle_core::SHOP.iter().map(|(i, p)| format!("{} {p}", i.name())).collect::<Vec<_>>().join(", ");
         assert!(wrap(&shop, LOG_CHARS - 2).iter().all(|row| row.chars().count() <= LOG_CHARS - 2));
         const { assert!(LOG_CHARS > 80) };
+    }
+
+    #[test]
+    fn sprites_follow_sight_and_do_not_replace_the_player_or_authored_creatures() {
+        let mut game = encounter(7, Kind::Rat, 1, 20);
+        let me = game.player().pos;
+        let at = (me.0 + 1, me.1);
+        assert!(sprite_creature(&game, at).is_none(), "fixed-table creatures keep their glyphs");
+        let clade = blah_core::clades(7)[0].clone();
+        let wild = isle_core::Wildlife {
+            lineage: isle_core::Lineage::Region(blah_core::SpeciesId {
+                region: blah_core::World::new(7).region_at(0, 0),
+                clade: clade.id,
+            }),
+            name: "Test beast".into(),
+            genome: clade.base,
+        };
+        let mut save = serde_json::to_value(&game).unwrap();
+        save["creatures"][0]["kind"] = serde_json::json!(Kind::Wild);
+        save["creatures"][0]["wild"] = serde_json::to_value(wild).unwrap();
+        game = serde_json::from_value(save.clone()).unwrap();
+        assert!(sprite_creature(&game, at).is_some());
+        assert_eq!(game.sighted()[0].label, 'A');
+        assert_eq!(cell(&game, at, &[(at, 'A')]).0, "A*", "text inspection keeps the same target letter");
+        save["creatures"][0]["pos"] = serde_json::json!(me);
+        game = serde_json::from_value(save.clone()).unwrap();
+        assert!(sprite_creature(&game, me).is_none());
+        let far = (me.0 + SIGHT + 1, me.1);
+        save["creatures"][0]["pos"] = serde_json::json!(far);
+        game = serde_json::from_value(save).unwrap();
+        assert!(sprite_creature(&game, far).is_none());
     }
 
     #[test]

@@ -44,6 +44,12 @@ impl Sprite {
     /// Draws a creature: its phenotype in its clade's body plan, tinted by the biome it lives in.
     #[must_use]
     pub fn draw(phenotype: &Phenotype, plan: &BodyPlan, biome: BiomeId) -> Sprite {
+        Self::draw_tinted(phenotype, plan, biome.biome().color)
+    }
+
+    /// Draws the same body with an environment's color tint, including places outside the surface biomes.
+    #[must_use]
+    pub fn draw_tinted(phenotype: &Phenotype, plan: &BodyPlan, tint: [u8; 3]) -> Sprite {
         let mut c = Canvas::new(phenotype.size);
         let pairs = phenotype.legs / 2;
         match plan.family {
@@ -61,7 +67,7 @@ impl Sprite {
         if phenotype.covering == Covering::Chitin {
             c.spikes();
         }
-        let palette = Palette::new(phenotype, plan, biome);
+        let palette = Palette::new(phenotype, plan, tint);
         c.paint(&palette, phenotype.covering, plan.pattern)
     }
 }
@@ -511,7 +517,7 @@ const TINT: f32 = 0.12;
 const TONGUE: [u8; 3] = [214, 52, 64];
 
 impl Palette {
-    fn new(p: &Phenotype, plan: &BodyPlan, biome: BiomeId) -> Palette {
+    fn new(p: &Phenotype, plan: &BodyPlan, tint: [u8; 3]) -> Palette {
         let h = p.hue;
         // Saturation and value by covering: fur is soft, slime vivid, chitin deep.
         let (s, v) = match p.covering {
@@ -527,7 +533,6 @@ impl Palette {
         let wet = ((p.water - 0.5) * 2.0).max(0.0);
         let s = s * (1.0 - bleach) * (1.0 + 0.3 * wet);
         let v = (v + (1.0 - v) * bleach * 0.6) * (1.0 - 0.22 * wet);
-        let tint = biome.biome().color;
         let t = |c: [u8; 3]| mix(c, tint, TINT);
         // Shadows lean toward blue and lights toward yellow, the usual pixel-art ramp.
         let step = |shift: f32, ds: f32, dv: f32| t(hsv(toward(h, shift), (s * ds).min(1.0), (v * dv).min(1.0)));

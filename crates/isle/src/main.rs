@@ -9,6 +9,7 @@
 mod control;
 mod input;
 mod save;
+mod sprites;
 mod view;
 
 use std::path::PathBuf;
