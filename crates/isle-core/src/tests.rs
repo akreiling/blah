@@ -65,7 +65,7 @@ fn creatures_hunt_and_strike_you() {
     game.player_mut().max_hp = 999;
     game.player_mut().hp = 999;
     for _ in 0..12 {
-        game.round(Some(Command::Wait));
+        game.round(Some(Command::Rest));
     }
     assert!(game.creatures()[0].hunting);
     assert!(crate::distance(game.creatures()[0].pos, game.player().pos) <= 1);
@@ -86,6 +86,21 @@ fn standing_ready_strikes_back_at_an_adjacent_hunter() {
         game.round(None);
     }
     assert!(game.creatures().is_empty(), "the rat falls to blows struck back");
+}
+
+#[test]
+fn explicit_wait_matches_standing_ready_on_the_clock() {
+    let mut clocked = made("fighter");
+    clocked.clear_creatures();
+    let me = clocked.player().pos;
+    clocked.place(Kind::Rat, (me.0 + 1, me.1));
+    let mut turns = clocked.clone();
+    for _ in 0..20 {
+        clocked.round(None);
+        turns.round(Some(Command::Wait));
+        assert_eq!(turns, clocked);
+    }
+    assert!(turns.creatures().is_empty(), "explicit waiting strikes back too");
 }
 
 #[test]

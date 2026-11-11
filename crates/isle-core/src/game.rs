@@ -450,7 +450,7 @@ impl Game {
                 self.say(Tone::Gain, line);
                 self.say(Tone::Info, "You stand in Harrowmere. The outfitter is northwest and the temple northeast.");
                 self.say(Tone::Info, "South, past the woods, the old watchtower's stairs lead down.");
-                self.say(Tone::System, "Type help for the commands. Each round lasts until the clock runs out.");
+                self.say(Tone::System, "Type help for the commands. Each command you enter takes one round.");
                 self.spawn_all();
                 self.update_seen();
             }
@@ -577,11 +577,11 @@ impl Game {
             Command::Buy(what) => self.buy(&what),
             Command::Sell(what) => self.sell(&what),
             Command::Heal => self.temple_heal(),
-            Command::Wait => {}
+            Command::Wait => self.stand_ready(),
         }
     }
 
-    /// With nothing planned, you strike back at whatever is hunting you from the next cell.
+    /// Standing ready, you strike back at whatever is hunting you from the next cell.
     fn stand_ready(&mut self) {
         let me = self.player.pos;
         let attacker = self

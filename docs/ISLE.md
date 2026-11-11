@@ -4,21 +4,27 @@ Isle is a second, separate game in this workspace: a solo island adventure in th
 Kesmai* (Kesmai, 1985). It shares no rules with blah. Its maps, creatures, and text are original.
 
 - `crates/isle-core`: the rules. Pure and deterministic; the whole `Game` serializes, dice included.
-- `crates/isle`: the GPUI window. Run it with `just isle`, or `just isle --round 4` for faster rounds.
+- `crates/isle`: the GPUI window. Run it with `just isle`.
 
 ## How it plays
 
-You type a command and press Enter. Rounds resolve on a clock, ten seconds by default as in the
-original: your queued command first, then every creature in turn. With nothing queued you *stand
-ready* and strike back at anything hunting you from the next cell.
+You type a command and press Enter. Each action resolves one round immediately: your command first,
+then every creature in turn. The world waits while you think or type. `wait` (`wa`) lets a round pass
+while you *stand ready*, striking back at anything hunting you from the next cell.
 
 - Movement: `n s e w ne nw se sw`, up to three steps a round (`n n e`).
 - Fighting: `attack <who>`, `nock` then `shoot <who>`. A target is the letter the IN SIGHT list shows
   (`shoot a`), a name (`shoot orc`), or an ordinal and name (`sh 2 gob`).
 - Magic: `chant <spell>` one round, `cast [who]` the next.
-- Rounds chain with `;` (`nock; shoot a`), at most five ahead. Enter on an empty line repeats the last
-  command; Up recalls it. `pause`, `stop` (clear the queue), and `quit` act at once, as do `look`,
-  `inventory`, `list`, and `help`.
+- Rounds chain with `;` (`nock; shoot a`), at most five per line. A chain stops if you are hurt, die,
+  or a new creature comes into sight. The rest is discarded, not queued for later.
+- Enter on an empty line repeats the last command line; Up recalls it. `quit` saves and leaves.
+  `look`, `inventory`, `list`, and `help` take no time.
+
+For the original clock-driven pace, use `just isle --round 10` (0.5–60 seconds per round). Commands
+queue up to five rounds ahead instead of resolving immediately. With nothing queued you stand ready.
+`pause` toggles the clock and `stop` clears the queue; both take effect immediately. Without a clock,
+`pause` is unnecessary.
 
 ## Callings
 

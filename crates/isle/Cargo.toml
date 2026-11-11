@@ -1,6 +1,6 @@
 [package]
 name = "isle"
-description = "The Isle window: a two-character grid, a log, and a command line on a round clock."
+description = "The Isle window: a two-character grid, a log, and a turn-based command line."
 edition.workspace = true
 version.workspace = true
 publish.workspace = true

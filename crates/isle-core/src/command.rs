@@ -135,7 +135,7 @@ pub enum Command {
     Sell(String),
     /// Ask the temple to heal you.
     Heal,
-    /// Do nothing this round.
+    /// Stand ready: pass the round, striking back at anything hunting you from the next cell.
     Wait,
 }
 
@@ -299,15 +299,15 @@ fn capitalized(word: &str) -> String {
 
 /// The help text, one log line each.
 pub const HELP: [&str; 10] = [
-    "Move: n s e w ne nw se sw, up to three a round (n n e). Rounds tick on their own.",
+    "Move: n s e w ne nw se sw, up to three a round (n n e). Each command takes one round.",
     "Fight: attack <who>, nock then shoot <who>. Who is a letter (shoot a) or a name (sh 2 orc).",
     "Magic: chant <spell>, then cast [who]. Wizard: spark, shield. Thaumaturge: heal, stun.",
     "Thieves: hide, then strike or shoot from hiding for extra damage.",
     "Things: get <item>|all, drop, wield, wear, quaff, inventory, look.",
     "Town: buy <item>, sell <item>, list (in the shop); heal (in the temple).",
-    "Stairs: down, up. Rest to recover, wait to stand.",
-    "Chain rounds with ;  (nock; shoot a). Enter on an empty line repeats your last command.",
-    "Up arrow recalls it. pause stops the clock, stop clears queued rounds.",
+    "Stairs: down, up. Rest to recover; wait (wa) stands ready and strikes back.",
+    "Chain rounds with ;  (nock; shoot a). A chain stops if you are hurt or something new appears.",
+    "Enter on an empty line repeats your last command; Up recalls it. quit saves and leaves.",
     "Commands abbreviate: a, sh, no, ch, ca, g, l, i, q, r, d, u.",
 ];
 

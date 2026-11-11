@@ -3,7 +3,8 @@
 //! Usage: `isle [--new] [--save PATH] [--round SECONDS] [--seed N]`.
 //!
 //! A bare launch resumes the saved character, or starts a new one. `--new` starts over and keeps the old
-//! save beside the new one. Rounds tick every `--round` seconds, ten by default, as the original's did.
+//! save beside the new one. Play is turn-based: each command is a round. `--round` puts rounds on a clock
+//! instead, the way the original ticked every ten seconds.
 
 mod save;
 mod view;
@@ -21,8 +22,6 @@ use isle_core::Game;
 use crate::view::IsleView;
 
 const USAGE: &str = "usage: isle [--new] [--save PATH] [--round SECONDS] [--seed N]";
-/// The original's pace: one command every ten seconds.
-const DEFAULT_ROUND: f32 = 10.0;
 
 actions!(
     isle,
@@ -36,12 +35,13 @@ actions!(
 struct Args {
     fresh: bool,
     save: Option<PathBuf>,
-    round: f32,
+    /// Seconds per round, if rounds run on a clock.
+    round: Option<f32>,
     seed: Option<u64>,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
-    let mut parsed = Args { fresh: false, save: None, round: DEFAULT_ROUND, seed: None };
+    let mut parsed = Args { fresh: false, save: None, round: None, seed: None };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -49,10 +49,11 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--save" => parsed.save = Some(PathBuf::from(args.next().ok_or("--save needs a path")?)),
             "--round" => {
                 let n = args.next().ok_or("--round needs a number of seconds")?;
-                parsed.round = n.parse().map_err(|_| format!("--round takes seconds, not {n:?}"))?;
-                if !(0.5..=60.0).contains(&parsed.round) {
+                let seconds: f32 = n.parse().map_err(|_| format!("--round takes seconds, not {n:?}"))?;
+                if !(0.5..=60.0).contains(&seconds) {
                     return Err("--round must be between 0.5 and 60 seconds".into());
                 }
+                parsed.round = Some(seconds);
             }
             "--seed" => {
                 let n = args.next().ok_or("--seed needs a number")?;
@@ -89,7 +90,7 @@ fn main() {
         std::process::exit(2);
     });
     eprintln!("Save: {}", path.display());
-    let round = Duration::from_secs_f32(args.round);
+    let round = args.round.map(Duration::from_secs_f32);
 
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
@@ -127,12 +128,16 @@ mod tests {
     }
 
     #[test]
-    fn arguments_default_to_the_original_pace() {
+    fn arguments_default_to_turns_and_take_an_optional_clock() {
         let a = args(&[]).unwrap();
-        assert_eq!((a.fresh, a.round, a.seed), (false, DEFAULT_ROUND, None));
+        assert_eq!((a.fresh, a.round, a.seed), (false, None, None));
         let a = args(&["--new", "--round", "3", "--seed", "9", "--save", "/tmp/x.json"]).unwrap();
-        assert_eq!((a.fresh, a.round, a.seed), (true, 3.0, Some(9)));
-        assert!(args(&["--round", "0"]).is_err());
+        assert_eq!((a.fresh, a.round, a.seed), (true, Some(3.0), Some(9)));
+        assert_eq!(args(&["--round", "0.5"]).unwrap().round, Some(0.5));
+        assert_eq!(args(&["--round", "60"]).unwrap().round, Some(60.0));
+        for invalid in ["0", "0.49", "60.1", "NaN", "inf", "-inf"] {
+            assert!(args(&["--round", invalid]).is_err());
+        }
         assert!(args(&["--seed"]).is_err());
         assert!(args(&["7"]).is_err());
     }

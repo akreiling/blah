@@ -1,5 +1,5 @@
 //! The window: the map on the left drawn two characters to a cell, the character panel on the right, the
-//! log beneath, and the command line at the bottom. A clock resolves a round whenever it runs out.
+//! log beneath, and the command line at the bottom. Commands resolve rounds, unless a clock is requested.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -61,26 +61,35 @@ pub struct IsleView {
     input: String,
     queue: VecDeque<(String, Command)>,
     last_line: String,
-    round: Duration,
+    /// The round clock; without one, each command is a round and the world waits.
+    round: Option<Duration>,
     started: Clock,
     paused: bool,
     /// Log total before the latest round: lines past it are news.
     mark: u64,
-    _ticker: Task<()>,
+    _ticker: Option<Task<()>>,
 }
 
 impl IsleView {
-    /// A view of `game`, saved to `path`, with rounds of `round`.
-    pub fn new(game: Game, path: PathBuf, round: Duration, window: &mut Window, cx: &mut Context<IsleView>) -> Self {
+    /// A view of `game`, saved to `path`, turn-based or with rounds on a `round` clock.
+    pub fn new(
+        game: Game,
+        path: PathBuf,
+        round: Option<Duration>,
+        window: &mut Window,
+        cx: &mut Context<IsleView>,
+    ) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus);
-        let ticker = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(TICK).await;
-                if this.update(cx, |view, cx| view.tick(cx)).is_err() {
-                    break;
+        let ticker = round.map(|_| {
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(TICK).await;
+                    if this.update(cx, |view, cx| view.tick(cx)).is_err() {
+                        break;
+                    }
                 }
-            }
+            })
         });
         let mark = game.log_total().saturating_sub(1);
         IsleView {
@@ -104,11 +113,12 @@ impl IsleView {
     }
 
     fn tick(&mut self, cx: &mut Context<IsleView>) {
+        let Some(round) = self.round else { return };
         if self.game.phase() != &Phase::Play || self.paused {
             self.started = Clock::now();
             return;
         }
-        if self.started.elapsed() >= self.round {
+        if self.started.elapsed() >= round {
             self.mark = self.game.log_total();
             let command = self.queue.pop_front().map(|(_, c)| c);
             self.game.round(command);
@@ -154,38 +164,80 @@ impl IsleView {
             self.save();
             return;
         }
-        for part in line.split(';').map(str::trim).filter(|p| !p.is_empty()) {
-            match part.to_lowercase().as_str() {
-                "pause" => {
-                    self.paused = !self.paused;
-                    self.game.note(if self.paused { "The clock stops." } else { "The clock runs again." });
-                }
-                "stop" => {
-                    self.queue.clear();
-                    self.game.note("You put aside your plans.");
-                }
-                "quit" => {
-                    self.save();
-                    cx.quit();
-                    return;
-                }
-                _ => match self.game.parse(part) {
-                    Ok(Parsed::Instant(instant)) => self.game.instant(instant),
-                    Ok(Parsed::Round(command)) if self.queue.len() < QUEUE => {
-                        self.queue.push_back((part.to_owned(), command));
-                    }
-                    Ok(Parsed::Round(_)) => self.game.note("You can plan only five rounds ahead."),
-                    Err(message) => self.game.note(message),
-                },
-            }
+        let turn_based = self.round.is_none();
+        if turn_based {
+            self.mark = self.game.log_total();
         }
+        let quit = submit_commands(&mut self.game, &mut self.queue, &mut self.paused, turn_based, &line);
         self.save();
+        if quit {
+            cx.quit();
+        }
     }
 
-    /// Fraction of the round gone.
+    /// Fraction of the round gone; always zero without a clock.
     fn clock(&self) -> f32 {
-        (self.started.elapsed().as_secs_f32() / self.round.as_secs_f32()).clamp(0.0, 1.0)
+        self.round.map_or(0.0, |round| (self.started.elapsed().as_secs_f32() / round.as_secs_f32()).clamp(0.0, 1.0))
     }
+}
+
+/// Handles a play-mode line, returning whether the player asked to quit.
+fn submit_commands(
+    game: &mut Game,
+    queue: &mut VecDeque<(String, Command)>,
+    paused: &mut bool,
+    turn_based: bool,
+    line: &str,
+) -> bool {
+    let parts: Vec<&str> = line.split(';').map(str::trim).filter(|p| !p.is_empty()).collect();
+    let mut rounds_played = 0;
+    for (i, part) in parts.iter().enumerate() {
+        match part.to_lowercase().as_str() {
+            "pause" if turn_based => game.note("There is no clock. The world waits for you."),
+            "pause" => {
+                *paused = !*paused;
+                game.note(if *paused { "The clock stops." } else { "The clock runs again." });
+            }
+            "stop" => {
+                queue.clear();
+                game.note("You put aside your plans.");
+            }
+            "quit" => {
+                return true;
+            }
+            _ => match game.parse(part) {
+                Ok(Parsed::Instant(instant)) => game.instant(instant),
+                Ok(Parsed::Round(_)) if rounds_played >= QUEUE || queue.len() >= QUEUE => {
+                    game.note("You can plan only five rounds ahead.");
+                    if turn_based {
+                        break;
+                    }
+                }
+                Ok(Parsed::Round(command)) if turn_based => {
+                    rounds_played += 1;
+                    if !play_round(game, command) && i + 1 < parts.len() {
+                        game.note("You break off your plan.");
+                        break;
+                    }
+                }
+                Ok(Parsed::Round(command)) => queue.push_back(((*part).to_owned(), command)),
+                Err(message) => game.note(message),
+            },
+        }
+    }
+    false
+}
+
+/// Plays one round of a chain. False if it went badly enough that the rest of the plan should wait: you
+/// were hurt or fell, or something new came into sight.
+fn play_round(game: &mut Game, command: Command) -> bool {
+    let mark = game.log_total();
+    let before: Vec<u32> = game.sighted().iter().map(|s| s.creature.id).collect();
+    game.round(Some(command));
+    let news = (game.log_total() - mark) as usize;
+    let hurt = game.log().iter().rev().take(news).any(|line| matches!(line.tone, Tone::Hurt | Tone::Death));
+    let newcomer = game.sighted().iter().any(|s| !before.contains(&s.creature.id));
+    !hurt && !newcomer
 }
 
 impl Focusable for IsleView {
@@ -296,20 +348,26 @@ impl IsleView {
             Zone::Temple => format!("{} · temple", game.level().name),
             Zone::Open => game.level().name.to_owned(),
         };
-        let left = self.round.as_secs_f32() * (1.0 - self.clock());
+        panel = panel.child(rule()).child(pair("Place", place));
+        let Some(round) = self.round else {
+            return self.sighted(panel.child(pair("Round", format!("{}", game.round_number() + 1))));
+        };
+        let left = round.as_secs_f32() * (1.0 - self.clock());
         let clock = if self.paused { "PAUSED".to_owned() } else { format!("{left:.0}s") };
-        panel = panel.child(rule()).child(pair("Place", place)).child(gauge(
-            &format!("Round {}", game.round_number() + 1),
-            self.clock(),
-            CLOCK,
-            &clock,
-        ));
+        panel = panel.child(gauge(&format!("Round {}", game.round_number() + 1), self.clock(), CLOCK, &clock));
         let mut planned = self.queue.iter().map(|(text, _)| text.clone());
         panel = panel.child(pair("Next", planned.next().unwrap_or_else(|| "stand ready".into())));
         let later: Vec<String> = planned.collect();
         if !later.is_empty() {
             panel = panel.child(pair("Then", later.join("; ")));
         }
+        self.sighted(panel)
+    }
+
+    /// The creatures in sight, lettered as commands name them.
+    fn sighted(&self, mut panel: Div) -> Div {
+        let game = &self.game;
+        let p = game.player();
         panel = panel.child(rule()).child(heading("IN SIGHT"));
         let sighted = game.sighted();
         if sighted.is_empty() {
@@ -608,6 +666,123 @@ fn gauge(label: &str, fraction: f32, fill: u32, value: &str) -> Div {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn made(seed: u64) -> Game {
+        let mut game = Game::new(seed);
+        game.answer("Ash");
+        game.answer("fighter");
+        game
+    }
+
+    fn submit(game: &mut Game, line: &str) {
+        let mut queue = VecDeque::new();
+        let mut paused = false;
+        assert!(!submit_commands(game, &mut queue, &mut paused, true, line));
+        assert!(queue.is_empty() && !paused);
+    }
+
+    /// Resume a save with a single encounter and no scheduled spawns.
+    fn encounter(seed: u64, kind: Kind, offset: i32, hp: i32) -> Game {
+        let game = made(seed);
+        let (x, y) = game.player().pos;
+        let mut save = serde_json::to_value(&game).unwrap();
+        let mut creature = save["creatures"][0].clone();
+        creature["kind"] = serde_json::to_value(kind).unwrap();
+        creature["at"] = serde_json::json!("Surface");
+        creature["pos"] = serde_json::json!([x + offset, y]);
+        creature["home"] = creature["pos"].clone();
+        creature["hp"] = serde_json::json!(kind.stats().hp);
+        creature["hunting"] = serde_json::json!(false);
+        creature["spawn"] = serde_json::Value::Null;
+        save["creatures"] = serde_json::json!([creature]);
+        save["spawns"] = serde_json::json!([]);
+        save["player"]["hp"] = serde_json::json!(hp);
+        serde_json::from_value(save).unwrap()
+    }
+
+    #[test]
+    fn commands_resolve_immediately_but_information_and_errors_take_no_time() {
+        let mut game = made(7);
+        let pos = game.player().pos;
+        submit(&mut game, "e e; s");
+        assert_eq!(game.round_number(), 2);
+        assert_eq!(game.player().pos, (pos.0 + 2, pos.1 + 1));
+        let creatures = game.creatures().to_vec();
+        submit(&mut game, "look; inventory; help; list; nonsense; pause; stop");
+        assert_eq!(game.round_number(), 2);
+        assert_eq!(game.creatures(), creatures);
+        submit(&mut game, "wait; wait; wait; wait; wait; wait");
+        assert_eq!(game.round_number(), 7, "at most five rounds per line");
+    }
+
+    #[test]
+    fn clock_mode_queues_commands_and_keeps_immediate_controls() {
+        let mut game = made(7);
+        let pos = game.player().pos;
+        let mut queue = VecDeque::new();
+        let mut paused = false;
+        assert!(!submit_commands(&mut game, &mut queue, &mut paused, false, "e; e; pause; look"));
+        assert_eq!((game.round_number(), queue.len(), paused), (0, 2, true));
+        submit_commands(&mut game, &mut queue, &mut paused, false, "e; e; e; e");
+        assert_eq!(queue.len(), QUEUE);
+        let (_, command) = queue.pop_front().unwrap();
+        game.round(Some(command));
+        assert_eq!((game.round_number(), game.player().pos), (1, (pos.0 + 1, pos.1)));
+        assert!(!submit_commands(&mut game, &mut queue, &mut paused, false, "e; e; stop; pause"));
+        assert!(queue.is_empty() && !paused);
+        assert!(submit_commands(&mut game, &mut queue, &mut paused, false, "quit; e"));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn a_new_creature_interrupts_a_chain_and_discards_the_remaining_commands() {
+        let mut game = encounter(7, Kind::Rat, SIGHT + 1, 20);
+        assert!(game.sighted().is_empty());
+        submit(&mut game, "e; e; e");
+        assert_eq!(game.round_number(), 1);
+        assert!(!game.sighted().is_empty());
+        assert!(game.log().iter().any(|line| line.text == "You break off your plan."));
+        submit(&mut game, "nock");
+        assert_eq!(game.round_number(), 2, "the discarded movement does not run later");
+    }
+
+    #[test]
+    fn being_hurt_interrupts_even_when_a_potion_leaves_more_health_than_before() {
+        let mut checked = 0;
+        for seed in 1..=32 {
+            let mut game = encounter(seed, Kind::Rat, 1, 5);
+            let mark = game.log_total();
+            let mut first = game.clone();
+            first.round(Some(Command::Quaff));
+            let news = (first.log_total() - mark) as usize;
+            if first.log().iter().rev().take(news).any(|line| line.tone == Tone::Hurt) {
+                checked += 1;
+                submit(&mut game, "quaff; e");
+                assert_eq!(game.round_number(), 1);
+                assert_eq!(game.player(), first.player());
+                assert!(game.player().hp >= 5, "healing masks the damage in a health comparison");
+            }
+        }
+        assert!(checked > 0, "exercise actual damage, not only missed attacks");
+    }
+
+    #[test]
+    fn death_interrupts_a_chain_despite_restored_health_at_the_temple() {
+        let mut checked = 0;
+        for seed in 1..=32 {
+            let mut game = encounter(seed, Kind::Troll, 1, 1);
+            let mut first = game.clone();
+            first.round(Some(Command::Rest));
+            if first.player().deaths > 0 {
+                checked += 1;
+                submit(&mut game, "rest; e; e");
+                assert_eq!(game.round_number(), 1);
+                assert_eq!(game.zone(), Zone::Temple);
+                assert_eq!(game.player().hp, game.player().max_hp);
+            }
+        }
+        assert!(checked > 0);
+    }
 
     #[test]
     fn unseen_cells_are_blank_and_remembered_ones_dim() {
