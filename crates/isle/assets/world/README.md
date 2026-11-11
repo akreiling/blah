@@ -16,6 +16,12 @@ Local processing never resizes or resamples. Shared terrains (the path set's gra
 recolored to the shore set's grass and sand so the sets meet without seams; object alpha is made binary. No image
 is fetched or generated during play.
 
+Natural ground gets sparse, world-anchored pixel details: clustered grass tufts, sand pebbles and ripples,
+and small rock cracks. Meadow colors drift in broad patches, while transition tiles keep their original
+colors. These details are drawn locally, not generated or fetched, and never cover built ground or water.
+Town streets suppress the warp; Deep floors and walls keep their masonry straight. The rigidity field
+interpolates across world positions so neighboring cells still sample the same layout.
+
 The renderer uses only known terrain in its 5×5 neighborhood, substituting the center's ground and tint for
 unknown cells. Trees and boulders may be mirrored. Cached ground images are per position and neighborhood,
 evicted when unused, and rebuilt at display-scale changes. Terrain pairs without a joining set still have a

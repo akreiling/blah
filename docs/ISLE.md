@@ -13,10 +13,11 @@ and disappear when the creature leaves sight.
 
 The map draws grass, sand, water, rock, town streets and stone, and Deep floors and walls from 32×32 PixelLab
 tilesets. Seeded world-space noise warps their textures and boundaries and gently varies brightness, so cells
-do not repeat in a grid. Neighboring cells sample the same warped world; terrain pairs without a joining
-tileset still meet at a hard edge. Trees, boulders, doors, stairs, services, and ground items are objects over
-the ground; trees and boulders also vary by mirroring. Unknown neighbors never shape a visible edge. Your
-`@` and fixed-table creatures keep their text glyphs. `crates/isle/assets/world/README.md` describes the art
+do not repeat in a grid. Broad meadow patches and sparse grass tufts, sand ripples, pebbles, and rock cracks
+vary natural ground; streets and Deep masonry stay straighter. Neighboring cells sample the same warped world;
+terrain pairs without a joining tileset still meet at a hard edge. Trees, boulders, doors, stairs, services,
+and ground items are objects over the ground; trees and boulders also vary by mirroring. Unknown neighbors
+never shape a visible edge. Your `@` and fixed-table creatures keep their text glyphs. `crates/isle/assets/world/README.md` describes the art
 library and how to grow it.
 
 - `crates/isle-core`: the rules. Pure and deterministic; the whole `Game` serializes, dice included.

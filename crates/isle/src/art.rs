@@ -2,11 +2,11 @@
 //!
 //! Terrain comes from corner-matched (Wang) tilesets. Each map cell is made of four quarters, and each
 //! quarter comes from the tile whose four corners are the terrains of the 2×2 block of cells meeting at that
-//! corner of the cell, so a single cell of one terrain still shows. Every world pixel then samples that layout
-//! through smooth world-space noise: textures stop repeating, boundaries wander off the cell grid, and since
-//! the warp depends only on world position, neighboring cells agree on every shared edge. Visibility stays per
-//! cell. Images are enlarged by integer nearest-neighbor duplication for the display scale and cached only
-//! while the visible map uses them.
+//! corner of the cell, so a single cell of one terrain still shows. Natural ground samples that layout through
+//! smooth world-space noise, with clustered detail and meadow color patches. Built surfaces suppress the warp
+//! to keep streets and masonry straight. Both cells on a shared edge sample the same world; visibility stays
+//! per cell. Images are enlarged by integer nearest-neighbor duplication for the display scale and cached
+//! only while the visible map uses them.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -255,6 +255,16 @@ pub struct Quarter {
     pub mask: u8,
 }
 
+impl Quarter {
+    fn pure(self) -> Option<Terrain> {
+        match self.mask {
+            0 => Some(self.set.terrains().0),
+            15 => Some(self.set.terrains().1),
+            _ => None,
+        }
+    }
+}
+
 /// The four quarters (NW, NE, SW, SE) of a cell whose ground is `around[1][1]`. `around` is the 3×3 block of
 /// grounds centered on the cell, rows north to south; callers pass the center's own ground for cells the player
 /// does not know, so edges never reveal unseen terrain.
@@ -347,6 +357,105 @@ fn warp(seed: u64, p: (i64, i64)) -> (i64, i64) {
 fn shade(seed: u64, p: (i64, i64)) -> u16 {
     let n = value_noise(seed, 9, p.0 as f32 / SHADE_PERIOD, p.1 as f32 / SHADE_PERIOD);
     (100.0 + n * SHADE_PERCENT).round() as u16
+}
+
+fn warp_weight(terrain: Terrain) -> f32 {
+    match terrain {
+        Terrain::Floor | Terrain::Wall => 0.0,
+        Terrain::Dirt => 0.15,
+        Terrain::Rock => 0.7,
+        _ => 1.0,
+    }
+}
+
+/// Interpolate rigidity in world space, not separately per output cell. Masonry stays straight, and the
+/// natural ground next to it gradually loses its warp rather than tearing at the cell boundary.
+fn ground_point(seed: u64, p: (i64, i64), ground: impl Fn(i64, i64) -> Terrain) -> (i64, i64) {
+    let (x, y) = ((p.0 - 16).div_euclid(32), (p.1 - 16).div_euclid(32));
+    let smooth = |v: i64| {
+        let t = v.rem_euclid(32) as f32 / 32.0;
+        t * t * (3.0 - 2.0 * t)
+    };
+    let (fx, fy) = (smooth(p.0 - 16), smooth(p.1 - 16));
+    let top = warp_weight(ground(x, y)) * (1.0 - fx) + warp_weight(ground(x + 1, y)) * fx;
+    let bottom = warp_weight(ground(x, y + 1)) * (1.0 - fx) + warp_weight(ground(x + 1, y + 1)) * fx;
+    let strength = ((top * (1.0 - fy) + bottom * fy - 0.5) * 2.0).clamp(0.0, 1.0);
+    let (wx, wy) = if strength == 0.0 { (0, 0) } else { warp(seed, p) };
+    (p.0 + (wx as f32 * strength).round() as i64, p.1 + (wy as f32 * strength).round() as i64)
+}
+
+fn ground_color(seed: u64, surface: Option<Terrain>, p: (i64, i64), pixel: [u8; 4]) -> [u8; 4] {
+    let drift = i32::from(shade(seed, p)) - 100;
+    let drift = match surface {
+        Some(Terrain::Dirt | Terrain::Floor | Terrain::Wall) => drift / 3,
+        _ => drift,
+    };
+    let mut pixel = shaded(pixel, (100 + drift) as u16);
+    if surface == Some(Terrain::Grass) {
+        // Broad meadow patches, independent of cell layout. Color follows the ground's actual pure side,
+        // so it never washes green over sand or water in a transition tile.
+        let patch = value_noise(seed, 12, p.0 as f32 / 128.0, p.1 as f32 / 128.0);
+        let (color, amount) = if patch > 0.0 { ([153, 142, 67], patch * 22.0) } else { ([44, 97, 54], -patch * 16.0) };
+        for (channel, target) in pixel[..3].iter_mut().zip(color) {
+            *channel = blend(*channel, target, amount as u16);
+        }
+    }
+    pixel
+}
+
+/// Tiny world-anchored marks. Only pure natural terrain accepts them; transitions and built ground stay
+/// readable. A shared 12px lattice lets a tuft or pebble cross a cell edge without being cut in half.
+#[derive(Clone, Copy)]
+struct GroundMark {
+    pos: (i64, i64),
+    variant: bool,
+}
+
+fn ground_marks(seed: u64, origin: (i64, i64), side: i64) -> Vec<GroundMark> {
+    let mut marks = Vec::new();
+    for y in (origin.1 - 4).div_euclid(12)..=(origin.1 + side + 4).div_euclid(12) {
+        for x in (origin.0 - 4).div_euclid(12)..=(origin.0 + side + 4).div_euclid(12) {
+            let pos =
+                (x * 12 + (lattice(seed, 20, x, y) * 10.0) as i64, y * 12 + (lattice(seed, 21, x, y) * 10.0) as i64);
+            let patch = value_noise(seed, 22, pos.0 as f32 / 96.0, pos.1 as f32 / 96.0);
+            if lattice(seed, 23, x, y) < 0.22 + patch * 0.18 {
+                marks.push(GroundMark { pos, variant: lattice(seed, 24, x, y) > 0.5 });
+            }
+        }
+    }
+    marks
+}
+
+fn mark_color(mark: GroundMark, terrain: Terrain, p: (i64, i64)) -> Option<[u8; 3]> {
+    let (mut x, y) = (p.0 - mark.pos.0, p.1 - mark.pos.1);
+    if mark.variant {
+        x = -x;
+    }
+    match terrain {
+        Terrain::Grass => match (x, y) {
+            (-2, 0) | (-1, 1) | (0, 1) | (1, 0) | (0, -1) => Some([64, 102, 38]),
+            (-2, -1) | (0, -3) | (1, -2) => Some([157, 172, 76]),
+            (-1, 0) | (0, 0) | (0, -2) | (1, -1) => Some([112, 145, 48]),
+            _ => None,
+        },
+        Terrain::Sand if !mark.variant => match (x, y) {
+            (-1..=1, 1) | (2, 0) => Some([191, 164, 119]),
+            (-1..=1, 0) => Some([222, 207, 167]),
+            (0, -1) => Some([239, 224, 185]),
+            _ => None,
+        },
+        Terrain::Sand => match (x, y) {
+            (-3..=-2, 0) | (-1..=1, -1) | (2..=3, -2) => Some([218, 187, 137]),
+            (-2..=-1, 1) | (0..=2, 0) => Some([242, 218, 169]),
+            _ => None,
+        },
+        Terrain::Rock => match (x, y) {
+            (-2, -2) | (-1, -1) | (0, 0..=1) | (1, 2) => Some([63, 64, 70]),
+            (-1, -2) | (0, -1) | (1, 0..=1) => Some([121, 122, 126]),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn shaded(mut pixel: [u8; 4], percent: u16) -> [u8; 4] {
@@ -462,18 +571,41 @@ impl ArtCache {
                 });
                 let side = NATIVE_SIDE as i64;
                 let (cx, cy) = (i64::from(cell.pos.0), i64::from(cell.pos.1));
+                let mut surfaces = [[None; NATIVE_SIDE]; NATIVE_SIDE];
                 for y in 0..side {
                     for x in 0..side {
                         let p = (cx * side + x, cy * side + y);
-                        let (wx, wy) = warp(self.seed, p);
-                        let q = (p.0 + wx, p.1 + wy);
+                        let q = ground_point(self.seed, p, |gx, gy| {
+                            cell.around[(gy - cy + 2) as usize][(gx - cx + 2) as usize]
+                        });
                         let r = (q.1.div_euclid(side) - cy + 1) as usize;
                         let c = (q.0.div_euclid(side) - cx + 1) as usize;
                         let local = (q.0.rem_euclid(side) as usize, q.1.rem_euclid(side) as usize);
                         let quarter = quarters[r][c][(local.1 / QUARTER) * 2 + local.0 / QUARTER];
-                        let pixel = shaded(self.quarter_pixel(quarter, local), shade(self.seed, p));
+                        let surface = quarter.pure();
+                        surfaces[y as usize][x as usize] = surface;
+                        let pixel = ground_color(self.seed, surface, p, self.quarter_pixel(quarter, local));
                         let pixel = transform_pixel(pixel, cell.tints[r][c], false, false);
                         out.put_pixel(x as u32, y as u32, image::Rgba(pixel));
+                    }
+                }
+                for mark in ground_marks(self.seed, (cx * side, cy * side), side) {
+                    for dy in -3..=2 {
+                        for dx in -3..=3 {
+                            let p = (mark.pos.0 + dx, mark.pos.1 + dy);
+                            let (x, y) = (p.0 - cx * side, p.1 - cy * side);
+                            if !(0..side).contains(&x) || !(0..side).contains(&y) {
+                                continue;
+                            }
+                            let Some(terrain) = surfaces[y as usize][x as usize] else { continue };
+                            if let Some([r, g, b]) = mark_color(mark, terrain, p) {
+                                out.put_pixel(
+                                    x as u32,
+                                    y as u32,
+                                    image::Rgba(ground_color(self.seed, Some(terrain), p, [r, g, b, 255])),
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -686,14 +818,27 @@ mod tests {
 
     fn sample_world(world: &dyn Fn(i32, i32) -> Terrain, cache: &ArtCache, p: (i64, i64)) -> [u8; 4] {
         // Independent of any one cell: find the source cell of the warped point in the world itself.
-        let (wx, wy) = warp(cache.seed, p);
-        let q = (p.0 + wx, p.1 + wy);
+        let q = ground_point(cache.seed, p, |x, y| world(x as i32, y as i32));
         let source = (q.0.div_euclid(32) as i32, q.1.div_euclid(32) as i32);
         let around = [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| world(source.0 + dx, source.1 + dy)));
         let local = (q.0.rem_euclid(32) as usize, q.1.rem_euclid(32) as usize);
         let quarter = ground_quarters(around)[(local.1 / 16) * 2 + local.0 / 16];
         let tint = world_cell(world, source).tints[1][1];
-        transform_pixel(shaded(cache.quarter_pixel(quarter, local), shade(cache.seed, p)), tint, false, false)
+        let surface = quarter.pure();
+        let mut pixel = transform_pixel(
+            ground_color(cache.seed, surface, p, cache.quarter_pixel(quarter, local)),
+            tint,
+            false,
+            false,
+        );
+        if let Some(terrain) = surface {
+            for mark in ground_marks(cache.seed, p, 1) {
+                if let Some([r, g, b]) = mark_color(mark, terrain, p) {
+                    pixel = ground_color(cache.seed, surface, p, [r, g, b, 255]);
+                }
+            }
+        }
+        pixel
     }
 
     fn mixed_world(x: i32, y: i32) -> Terrain {
@@ -737,6 +882,74 @@ mod tests {
             }
         }
         assert!(moved > 30_000, "most pixels are displaced: {moved}");
+    }
+
+    #[test]
+    fn built_ground_stays_straight_and_natural_ground_keeps_its_warp() {
+        for terrain in [Terrain::Floor, Terrain::Wall, Terrain::Dirt] {
+            for y in -32..32 {
+                for x in -32..32 {
+                    assert_eq!(ground_point(7, (x, y), |_, _| terrain), (x, y));
+                }
+            }
+        }
+        for y in -32..32 {
+            for x in -32..32 {
+                let p = (x, y);
+                let (wx, wy) = warp(7, p);
+                assert_eq!(ground_point(7, p, |_, _| Terrain::Grass), (x + wx, y + wy));
+            }
+        }
+    }
+
+    #[test]
+    fn natural_marks_are_sparse_clustered_and_never_paint_built_ground_or_water() {
+        let marks = ground_marks(7, (-256, -256), 512);
+        assert!(!marks.is_empty());
+        for terrain in [Terrain::Water, Terrain::Dirt, Terrain::Floor, Terrain::Wall] {
+            assert!(marks.iter().all(|&mark| {
+                (-3..=3)
+                    .all(|y| (-3..=3).all(|x| mark_color(mark, terrain, (mark.pos.0 + x, mark.pos.1 + y)).is_none()))
+            }));
+        }
+        for terrain in [Terrain::Grass, Terrain::Sand, Terrain::Rock] {
+            let painted = marks
+                .iter()
+                .map(|&mark| {
+                    (-3..=3)
+                        .map(|y| {
+                            (-3..=3)
+                                .filter(|&x| mark_color(mark, terrain, (mark.pos.0 + x, mark.pos.1 + y)).is_some())
+                                .count()
+                        })
+                        .sum::<usize>()
+                })
+                .sum::<usize>();
+            assert!(painted > 100 && painted < 512 * 512 / 20, "{terrain:?}: {painted}");
+        }
+        let counts: Vec<_> = (-4..4).map(|x| ground_marks(7, (x * 64, 0), 64).len()).collect();
+        assert!(counts.iter().max().unwrap() - counts.iter().min().unwrap() >= 3);
+    }
+
+    #[test]
+    fn pure_fields_and_masonry_match_world_sampling_across_negative_and_positive_edges() {
+        let cache = ArtCache::new(7);
+        for terrain in [Terrain::Grass, Terrain::Sand, Terrain::Rock, Terrain::Floor, Terrain::Wall] {
+            let world = |_: i32, _: i32| terrain;
+            for pos in [(-1, -1), (0, 0), (1, 0)] {
+                let image = cache.native(Source::Ground(world_cell(&world, pos)));
+                for y in 0..32 {
+                    for x in 0..32 {
+                        let p = (i64::from(pos.0) * 32 + x, i64::from(pos.1) * 32 + y);
+                        assert_eq!(
+                            image.get_pixel(x as u32, y as u32).0,
+                            sample_world(&world, &cache, p),
+                            "{terrain:?} {p:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -790,34 +1003,39 @@ mod tests {
     #[ignore]
     fn ground_render_cost() {
         use std::time::Instant;
-        let start = Instant::now();
-        let mut cache = ArtCache::new(7);
-        cache.begin_scale(2.0);
-        let radius = isle_core::SIGHT;
-        let draw = |cache: &mut ArtCache, offset| {
-            for y in -radius..=radius {
-                for x in -radius..=radius {
-                    std::hint::black_box(cache.ground(world_cell(&mixed_world, (x + offset, y)), false, false));
+        type World = fn(i32, i32) -> Terrain;
+        let worlds: [(&str, World); 3] =
+            [("mixed", mixed_world), ("grass", |_, _| Terrain::Grass), ("floor", |_, _| Terrain::Floor)];
+        for (name, world) in worlds {
+            let start = Instant::now();
+            let mut cache = ArtCache::new(7);
+            cache.begin_scale(2.0);
+            let radius = isle_core::SIGHT;
+            let draw = |cache: &mut ArtCache, offset| {
+                for y in -radius..=radius {
+                    for x in -radius..=radius {
+                        std::hint::black_box(cache.ground(world_cell(&world, (x + offset, y)), false, false));
+                    }
                 }
-            }
-            cache.finish();
-        };
-        draw(&mut cache, 0);
-        let cold = start.elapsed();
-        let start = Instant::now();
-        cache.begin_scale(2.0);
-        draw(&mut cache, 0);
-        let warm = start.elapsed();
-        let start = Instant::now();
-        cache.begin_scale(2.0);
-        draw(&mut cache, 1);
-        let scroll = start.elapsed();
-        let count = (2 * radius + 1).pow(2) as usize;
-        assert_eq!(cache.images.len(), count);
-        eprintln!(
-            "{count} cells, 2x: cold {cold:?}, cached {warm:?}, scroll {scroll:?}; {} raster bytes",
-            count * 64 * 64 * 4
-        );
+                cache.finish();
+            };
+            draw(&mut cache, 0);
+            let cold = start.elapsed();
+            let start = Instant::now();
+            cache.begin_scale(2.0);
+            draw(&mut cache, 0);
+            let warm = start.elapsed();
+            let start = Instant::now();
+            cache.begin_scale(2.0);
+            draw(&mut cache, 1);
+            let scroll = start.elapsed();
+            let count = (2 * radius + 1).pow(2) as usize;
+            assert_eq!(cache.images.len(), count);
+            eprintln!(
+                "{name}: {count} cells, 2x: cold {cold:?}, cached {warm:?}, scroll {scroll:?}; {} raster bytes",
+                count * 64 * 64 * 4
+            );
+        }
     }
 
     /// Writes target/isle-world-art/noise-contact.png from the real renderer:
