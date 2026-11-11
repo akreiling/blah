@@ -4,7 +4,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 /// Snapshot layout. Bump when serialized fields or their meaning change.
-pub const SNAPSHOT_VERSION: u32 = 4;
+pub const SNAPSHOT_VERSION: u32 = 5;
 /// Terrain, biome table, region, and naming compatibility. Bump for incompatible generation changes.
 pub const TERRAIN_VERSION: u32 = 1;
 /// Simulation, evolution, clade, and technique-catalog compatibility.
@@ -37,6 +37,12 @@ pub struct GameSnapshot {
     salves: u8,
     #[serde(default)]
     caches: Vec<CacheRecord>,
+    #[serde(default)]
+    landmarks: Vec<LandmarkRecord>,
+    #[serde(default)]
+    relics: Vec<crate::Relic>,
+    #[serde(default)]
+    attuned_relics: [Option<crate::Relic>; crate::RELIC_SLOTS],
     #[serde(default)]
     herbs: [u8; 3],
     #[serde(default)]
@@ -151,6 +157,9 @@ impl Game {
             equipped: self.equipped,
             salves: self.salves,
             caches: self.caches.values().cloned().collect(),
+            landmarks: self.landmarks.values().cloned().collect(),
+            relics: self.relics.clone(),
+            attuned_relics: self.attuned_relics,
             herbs: self.herbs,
             draughts: self.draughts,
             picked: self.active_picks().map(|(position, turn)| PickedPatch { position, turn }).collect(),
@@ -164,12 +173,18 @@ impl Game {
     /// Restore without taking an action or granting practice. Derived state is regenerated.
     /// Unsupported versions and invalid state are rejected, never repaired silently.
     pub fn from_snapshot(mut s: GameSnapshot) -> Result<Self, &'static str> {
-        // Version 1 predates commitments; version 2 also predates equipment, salves, and caches; version 3
-        // predates herbs and draughts.
+        // Versions 1–4 predate relics and landmarks. Version 1 predates commitments; version 2 also
+        // predates equipment, salves, and caches; version 3 predates herbs and draughts.
         if (1..=3).contains(&s.snapshot_version) {
             s.herbs = [0; 3];
             s.draughts = 0;
             s.picked.clear();
+        }
+        if (1..=4).contains(&s.snapshot_version) {
+            s.wanderer.herbalism = crate::Skill::default();
+            s.landmarks.clear();
+            s.relics.clear();
+            s.attuned_relics = [None; crate::RELIC_SLOTS];
         }
         match s.snapshot_version {
             1 => {
@@ -190,6 +205,7 @@ impl Game {
                 s.snapshot_version = SNAPSHOT_VERSION;
             }
             3 => s.snapshot_version = SNAPSHOT_VERSION,
+            4 => s.snapshot_version = SNAPSHOT_VERSION,
             _ => {}
         }
         if s.snapshot_version != SNAPSHOT_VERSION {
@@ -229,13 +245,23 @@ impl Game {
             || s.caches.len() > 65_536
             || s.caches.iter().map(|cache| cache.region).collect::<HashSet<_>>().len() != s.caches.len()
             || (!s.journey && !s.caches.is_empty())
+            || s.landmarks.len() > 65_536
+            || s.landmarks.iter().map(|landmark| landmark.region).collect::<HashSet<_>>().len() != s.landmarks.len()
+            || (!s.journey && !s.landmarks.is_empty())
+            || s.relics.len() > crate::Relic::ALL.len()
+            || s.relics.iter().copied().collect::<HashSet<_>>().len() != s.relics.len()
+            || s.attuned_relics.iter().flatten().any(|relic| !s.relics.contains(relic))
+            || s.attuned_relics.iter().flatten().collect::<HashSet<_>>().len()
+                != s.attuned_relics.iter().flatten().count()
             || s.herbs.iter().any(|&count| count > crate::HERB_CAPACITY)
             || s.draughts > crate::DRAUGHT_CAPACITY
             || s.picked.len() > 4_096
             || (!s.journey && !s.picked.is_empty())
             || s.picked.iter().map(|pick| pick.position).collect::<HashSet<_>>().len() != s.picked.len()
             || s.picked.iter().any(|pick| {
-                !coordinate(pick.position) || pick.turn > s.turn || s.turn - pick.turn >= crate::HERB_REGROW_TURNS
+                !coordinate(pick.position)
+                    || pick.turn > s.turn
+                    || s.turn - pick.turn >= w.herbalism.herb_regrow_turns()
             })
         {
             return Err("Invalid character or world state in save.");
@@ -267,10 +293,14 @@ impl Game {
             let Some(site) = Self::cache_site(&world, &mut regions, &cache_region, s.home) else {
                 return Err("Saved cache is not in a land region.");
             };
+            // Claimed weapons can later be traded for supplies, so claims do not require inventory ownership.
             if regions.region_at(site.0, site.1) != cache.region
                 || !is_land(world.tile(site.0, site.1).biome.biome())
-                || !(2..=3).contains(&cache.guards.len())
-                || (cache.claimed && !s.inventory.contains(&cache.treasure))
+                || (if cache.ruin { cache.guards.len() != 3 } else { !(2..=3).contains(&cache.guards.len()) })
+                || (cache.ruin
+                    && (!Self::cache_is_ruin(s.seed, cache.region) || chebyshev(site, s.home) <= 4 * VIEW_RADIUS))
+                || (cache.relic_reward.is_some() && (!cache.ruin || !cache.claimed))
+                || cache.relic_reward.is_some_and(|relic| !s.relics.contains(&relic))
             {
                 return Err("Invalid cache state in save.");
             }
@@ -326,6 +356,38 @@ impl Game {
                 }
             }
         }
+        for landmark in &mut s.landmarks {
+            let Some(landmark_region) = regions.region(landmark.region) else {
+                return Err("Saved landmark names an unknown region.");
+            };
+            let Some((kind, position)) = Self::landmark_site(&world, &mut regions, &landmark_region, s.home) else {
+                return Err("Saved landmark is not a site in this world.");
+            };
+            let state_valid = match landmark.kind {
+                crate::LandmarkKind::Shrine => {
+                    landmark.last_used.is_none()
+                        && if landmark.used {
+                            landmark.relic_reward.is_some_and(|relic| s.relics.contains(&relic))
+                                || (landmark.relic_reward.is_none() && s.relics.len() == crate::Relic::ALL.len())
+                        } else {
+                            landmark.relic_reward.is_none()
+                        }
+                }
+                crate::LandmarkKind::Lookout => landmark.last_used.is_none() && landmark.relic_reward.is_none(),
+                crate::LandmarkKind::Spring | crate::LandmarkKind::WildGarden => {
+                    landmark.relic_reward.is_none()
+                        && if landmark.used {
+                            landmark.last_used.is_some_and(|used| used <= s.turn)
+                        } else {
+                            landmark.last_used.is_none()
+                        }
+                }
+            };
+            if landmark.kind != kind || !state_valid {
+                return Err("Invalid landmark state in save.");
+            }
+            landmark.position = position;
+        }
         for pick in &s.picked {
             let id = regions.region_at(pick.position.0, pick.position.1);
             let region = regions.region(id).ok_or("Saved herb patch names an unknown region.")?;
@@ -356,6 +418,9 @@ impl Game {
             equipped: s.equipped,
             salves: s.salves,
             caches: s.caches.into_iter().map(|cache| (cache.region, cache)).collect(),
+            landmarks: s.landmarks.into_iter().map(|landmark| (landmark.region, landmark)).collect(),
+            relics: s.relics,
+            attuned_relics: s.attuned_relics,
             herbs: s.herbs,
             draughts: s.draughts,
             picked: s.picked.iter().map(|pick| (pick.position, pick.turn)).collect(),
@@ -423,6 +488,7 @@ impl Game {
             });
         }
         game.update_visible_herbs();
+        game.update_visible_landmarks();
         Ok(game)
     }
 }
@@ -535,6 +601,61 @@ mod tests {
         assert_eq!(loaded.draughts, 0);
         assert!(loaded.picked.is_empty());
         assert_eq!(loaded.snapshot().snapshot_version, SNAPSHOT_VERSION);
+    }
+
+    #[test]
+    fn migrates_serialized_v4_without_landmarks_or_relics() {
+        let mut game = Game::new(42);
+        let region = game.region.clone();
+        game.position = Game::cache_site(&game.world, &mut game.regions, &region, game.home).unwrap();
+        game.update_region(false);
+        game.claim_cache();
+        let patch = Game::herb_patches(&game.world, &mut game.regions, &region, game.home)[0];
+        game.position = patch.position;
+        game.update_region(false);
+        assert_eq!(game.gather(), Step::Waited);
+        game.draughts = 1;
+        let mut legacy = serde_json::to_value(game.snapshot()).unwrap();
+        legacy["snapshot_version"] = 4.into();
+        legacy["wanderer"].as_object_mut().unwrap().remove("herbalism");
+        let object = legacy.as_object_mut().unwrap();
+        for field in ["landmarks", "relics", "attuned_relics"] {
+            object.remove(field);
+        }
+        for cache in legacy["caches"].as_array_mut().unwrap() {
+            let record = cache.as_object_mut().unwrap();
+            record.remove("ruin");
+            record.remove("relic_reward");
+        }
+
+        let loaded = Game::from_snapshot(serde_json::from_value(legacy).unwrap()).unwrap();
+        assert!(loaded.relics.is_empty());
+        assert_eq!(loaded.wanderer.herbalism, crate::Skill::default());
+        assert_eq!(loaded.herbs, game.herbs);
+        assert_eq!(loaded.draughts, game.draughts);
+        assert_eq!(loaded.picked, game.picked);
+        assert_eq!(loaded.inventory, game.inventory);
+        assert_eq!(loaded.attuned_relics, [None; crate::RELIC_SLOTS]);
+        assert_eq!(loaded.caches.len(), game.caches.len());
+        for (id, cache) in &loaded.caches {
+            let old = &game.caches[id];
+            assert_eq!(cache.claimed, old.claimed);
+            assert_eq!(cache.guards, old.guards);
+            assert!(!cache.ruin, "v4 caches retain their old ordinary-cache interpretation");
+        }
+        assert_eq!(loaded.snapshot().snapshot_version, 5);
+    }
+
+    #[test]
+    fn snapshots_reject_duplicate_or_unowned_attunements() {
+        for slots in [
+            [Some(crate::Relic::HearthEmber), Some(crate::Relic::HearthEmber)],
+            [Some(crate::Relic::HearthEmber), None],
+        ] {
+            let mut snapshot = Game::new(42).snapshot();
+            snapshot.attuned_relics = slots;
+            assert!(Game::from_snapshot(snapshot).is_err());
+        }
     }
 
     #[test]

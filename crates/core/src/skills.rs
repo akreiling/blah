@@ -96,6 +96,41 @@ impl Skill {
         crate::MAX_FOCUS + 2 * self.rank() as i32
     }
 
+    /// Chance in percent of gathering a second herb, capped by pouch room.
+    #[must_use]
+    pub const fn second_herb_chance(self) -> usize {
+        match self.rank() {
+            Rank::Novice => 0,
+            Rank::Practiced => 20,
+            Rank::Skilled => 30,
+            Rank::Adept => 40,
+            Rank::Expert => 50,
+        }
+    }
+
+    /// Skilled herbalists can pick without standing out of concealment.
+    #[must_use]
+    pub fn quiet_gathering(self) -> bool {
+        self.rank() >= Rank::Skilled
+    }
+
+    /// Regrowth time, shortened by earned fieldcraft but never below half the base time.
+    #[must_use]
+    pub const fn herb_regrow_turns(self) -> u64 {
+        match self.rank() {
+            Rank::Novice | Rank::Practiced => crate::HERB_REGROW_TURNS,
+            Rank::Skilled => 250,
+            Rank::Adept => 200,
+            Rank::Expert => 150,
+        }
+    }
+
+    /// Draught potency, from eight to twelve Focus.
+    #[must_use]
+    pub const fn draught_focus(self) -> i32 {
+        crate::DRAUGHT_FOCUS + self.rank() as i32
+    }
+
     /// How much sneaking shortens an unalerted observer's initial sensing range, from 6 to 8 tiles.
     #[must_use]
     pub const fn sneak_reduction(self) -> i64 {
@@ -195,6 +230,25 @@ mod tests {
             assert_eq!(skill.rank(), rank);
             assert_eq!(skill.bonus(), damage);
             assert_eq!(skill.miss_chance(), miss);
+        }
+    }
+
+    #[test]
+    fn herbalism_benefits_follow_each_rank_with_fixed_caps() {
+        for (points, chance, quiet, regrowth, potency) in [
+            (0, 0, false, 300, 8),
+            (1_000, 20, false, 300, 9),
+            (4_000, 30, true, 250, 10),
+            (12_000, 40, true, 200, 11),
+            (30_000, 50, true, 150, 12),
+            (u32::MAX, 50, true, 150, 12),
+        ] {
+            let mut skill = Skill::default();
+            skill.learn(points, Rank::Expert);
+            assert_eq!(skill.second_herb_chance(), chance);
+            assert_eq!(skill.quiet_gathering(), quiet);
+            assert_eq!(skill.herb_regrow_turns(), regrowth);
+            assert_eq!(skill.draught_focus(), potency);
         }
     }
 

@@ -73,15 +73,27 @@ biome-table indices remaining unchanged forever.
 **Implemented first-journey slice:** deterministic cache sites per land region, territorial guards whose
 state persists through despawn/death/save-load, one-time cache claims, four owned weapon variants with
 safe-point equipment, exposed camping, salves, three biome-tied herbs, and Focus draughts brewed at camp.
-Herb patches regrow after 300 turns; depletion survives reload and reentry. Snapshot v4 migrates v1–v3
-with empty herb pouches and no draughts. Passive Health
+Herb patches start at 300-turn regrowth, shortened by earned herbalism; depletion survives reload and
+reentry. Snapshot v5 migrates v1–v4, preserving claims and supplies while starting with no relics or
+landmark-use history; visible landmarks are rediscovered normally. Shrines,
+springs, lookouts, and wild gardens now provide one-time relics, cooldown-based resupply, scouting, and
+renewable herbs. Some caches become guarded ruins with three tougher guards and a relic reward. Four
+relics each change one bounded rule; two can be attuned at home. Passive Health
 regeneration has been removed now that those recovery paths exist. Acceptance tests cover a fresh sneaking
 route and a watchful policy (sneak only while watched, camp to refill Focus) that claims at least 70% of
 sampled starting caches unharmed with every guard alive. Gathering tests cover placement, supply caps,
-brewing, exposed drinking, persistence, death, and the regrowth boundary.
-This does not complete every CP5 work item: the broader landmark/relic journey remains out of scope,
-and the CP5 checkboxes stay unchecked until the complete journey
-and GUI evidence are recorded.
+brewing, exposed drinking, persistence, death, and the regrowth boundary. Landmark/relic tests cover
+cooldowns, attunement, scouting, migration, and trading claimed weapons without reopening their caches.
+Unsuitable unequipped cache weapons can be traded at home for supplies.
+
+**Validation (2026-11-10):** `mise exec -- just lint`, `mise exec -- just test`, and the release
+`pinned_to_exact_bits` tests pass without changing either pin. Native GUI smoke checks covered seeds 42
+and 1: blocked interaction keys, paused workshop controls, gathering, ready/regrowing herb contrast on
+sand, spring-marker contrast, and save/relaunch with depletion intact. A limited 200-seed starting-region
+and neighbor probe improved the median different-herb pair trip from 57 to 45 turns; seeds with no pair
+found within the probe fell from 85 to 56. This is not a guarantee of a short recipe route on every seed.
+The checkboxes remain unchecked by convention; complete longer landmark/relic journeys still need
+whole-journey playtesting.
 
 **Work**
 

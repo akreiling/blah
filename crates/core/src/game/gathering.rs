@@ -1,7 +1,8 @@
 //! Herbs gathered in the field and brewed into Focus draughts.
 //!
 //! Each land region has a few herb patches whose sites follow from the seed and the region alone, like its
-//! cache. Which herb grows depends on the patch's biome, so a draught, which needs two different herbs, asks
+//! cache. Minority-biome slivers get extra sites when they grow an otherwise missing herb.
+//! Which herb grows depends on the patch's biome, so a draught, which needs two different herbs, asks
 //! for a journey across biomes. A picked patch regrows after [`HERB_REGROW_TURNS`]; only the turns patches
 //! were picked are state, and a record is dropped once its patch has regrown.
 
@@ -56,7 +57,7 @@ pub const DRAUGHT_CAPACITY: u8 = 2;
 pub const DRAUGHT_FOCUS: i32 = 8;
 /// Turns a picked patch takes to regrow.
 pub const HERB_REGROW_TURNS: u64 = 300;
-/// Most patches one region grows.
+/// Most original patches one region grows, before adding minority-biome sites.
 const MAX_PATCHES: usize = 4;
 
 /// An herb patch on the map.
@@ -97,7 +98,7 @@ impl Game {
         self.draughts
     }
 
-    /// Gather the ready patch underfoot during one exposed turn.
+    /// Gather the ready patch underfoot during one turn. Skilled herbalists keep their sneaking stance.
     pub fn gather(&mut self) -> Step {
         self.update_visible_herbs();
         let Some(info) = self.herb_at(self.position.0, self.position.1) else {
@@ -112,10 +113,11 @@ impl Game {
             self.log.push(LogKind::Blocked, format!("Your pouch has no room for more {}.", info.herb.name()));
             return Step::Blocked;
         }
-        self.herbs[info.herb.index()] += 1;
+        self.harvest_herb(info.herb);
         self.picked.insert(self.position, self.turn);
         self.turn += 1;
-        self.sneaking = false;
+        self.sneaking &= self.wanderer.herbalism.quiet_gathering();
+        self.practice_herbalism(100);
         self.log.push(
             LogKind::Attack,
             format!("You gather {}. You carry {}/{HERB_CAPACITY}.", info.herb.name(), self.herbs(info.herb)),
@@ -137,7 +139,8 @@ impl Game {
         self.draughts -= 1;
         self.turn += 1;
         self.sneaking = false;
-        self.wanderer.focus = (self.wanderer.focus + DRAUGHT_FOCUS).min(self.wanderer.max_focus());
+        self.wanderer.focus =
+            (self.wanderer.focus + self.wanderer.herbalism.draught_focus()).min(self.wanderer.max_focus());
         self.log.push(
             LogKind::Attack,
             format!("You drink a Focus draught. Focus {}/{}.", self.wanderer.focus, self.wanderer.max_focus()),
@@ -166,6 +169,7 @@ impl Game {
         self.herbs[first.index()] -= 1;
         self.herbs[second.index()] -= 1;
         self.draughts += 1;
+        self.practice_herbalism(200);
         Some(format!(
             " You brew a Focus draught from {} and {} ({}/{DRAUGHT_CAPACITY}).",
             first.name(),
@@ -175,21 +179,24 @@ impl Game {
     }
 
     pub(super) fn patch_ready(&self, position: (i64, i64)) -> bool {
-        self.picked.get(&position).is_none_or(|&picked| self.turn.saturating_sub(picked) >= HERB_REGROW_TURNS)
+        self.picked
+            .get(&position)
+            .is_none_or(|&picked| self.turn.saturating_sub(picked) >= self.wanderer.herbalism.herb_regrow_turns())
     }
 
     /// Picks whose patches have not regrown: the only gathering state that matters.
     pub(super) fn active_picks(&self) -> impl Iterator<Item = ((i64, i64), u64)> + '_ {
         self.picked
             .iter()
-            .filter(|&(_, &picked)| self.turn.saturating_sub(picked) < HERB_REGROW_TURNS)
+            .filter(|&(_, &picked)| self.turn.saturating_sub(picked) < self.wanderer.herbalism.herb_regrow_turns())
             .map(|(&position, &picked)| (position, picked))
     }
 
     /// Know the patches of every region in view, and forget picks that have regrown.
     pub(super) fn update_visible_herbs(&mut self) {
         let turn = self.turn;
-        self.picked.retain(|_, picked| turn.saturating_sub(*picked) < HERB_REGROW_TURNS);
+        let regrowth = self.wanderer.herbalism.herb_regrow_turns();
+        self.picked.retain(|_, picked| turn.saturating_sub(*picked) < regrowth);
         if !self.journey {
             self.herb_sites.clear();
             return;
@@ -208,8 +215,8 @@ impl Game {
         }
     }
 
-    /// A region's patches, chosen only from the world seed, region identity, and home: up to four tiles of
-    /// the region that grow an herb, never home or the region's cache site.
+    /// A region's patches, chosen only from the world seed, region identity, and home: two to four original
+    /// sites, plus up to two minority-herb sites, never home or the region's cache site.
     pub(super) fn herb_patches(
         world: &World,
         regions: &mut RegionCache,
@@ -264,7 +271,47 @@ impl Game {
                 }
             }
         }
+        // Preserve the original sites for old saves, then add one site for each otherwise missing herb
+        // that actually grows in a sliver of this region.
+        let area = width * height;
+        let start = rng.below(area);
+        for offset in 0..area {
+            if Herb::ALL.iter().all(|herb| patches.iter().any(|patch| patch.herb == *herb)) {
+                break;
+            }
+            let index = (start + offset) % area;
+            let at = (bounds.min_x + (index % width) as i64, bounds.min_y + (index / width) as i64);
+            if at == home || Some(at) == cache {
+                continue;
+            }
+            let Some(herb) = Herb::of(world.tile(at.0, at.1).biome.biome()) else {
+                continue;
+            };
+            if patches.iter().any(|patch| patch.herb == herb) || regions.region_at(at.0, at.1) != region.id {
+                continue;
+            }
+            patches.push(HerbPatch { position: at, herb });
+        }
         patches
+    }
+
+    pub(super) fn harvest_herb(&mut self, herb: Herb) -> u8 {
+        let mut rng = Rng::keyed(
+            self.world.seed(),
+            b"herbpick",
+            &[self.turn, self.position.0 as u64, self.position.1 as u64, herb as u64],
+        );
+        let amount = if rng.below(100) < self.wanderer.herbalism.second_herb_chance() { 2 } else { 1 };
+        let before = self.herbs[herb.index()];
+        self.herbs[herb.index()] = (before + amount).min(HERB_CAPACITY);
+        self.herbs[herb.index()] - before
+    }
+
+    pub(super) fn practice_herbalism(&mut self, evidence: u32) {
+        if self.wanderer.herbalism.learn(evidence, Rank::Expert) {
+            self.log
+                .push(LogKind::Learning, format!("Your herbalism is now {}.", self.wanderer.herbalism.rank().name()));
+        }
     }
 }
 
@@ -309,7 +356,7 @@ mod tests {
                 let cache = Game::cache_site(&game.world, &mut game.regions, &region, game.home);
                 // Tiny pockets may have fewer than two unoccupied tiles.
                 if region.tiles >= 4 {
-                    assert!((2..=4).contains(&patches.len()), "seed {seed} {id:?}: {patches:?}");
+                    assert!((2..=6).contains(&patches.len()), "seed {seed} {id:?}: {patches:?}");
                 }
                 assert_eq!(patches.iter().map(|p| p.position).collect::<BTreeSet<_>>().len(), patches.len());
                 for patch in patches {
@@ -325,6 +372,34 @@ mod tests {
             }
         }
         assert_eq!(kinds.len(), 3);
+    }
+
+    #[test]
+    fn every_available_minority_herb_gets_a_site() {
+        let mut diverse = 0;
+        for seed in 0..12 {
+            let mut game = Game::new(seed);
+            let region = game.region.clone();
+            let patches = Game::herb_patches(&game.world, &mut game.regions, &region, game.home);
+            let represented: BTreeSet<_> = patches.iter().map(|p| p.herb).collect();
+            let cache = Game::cache_site(&game.world, &mut game.regions, &region, game.home);
+            let mut available = BTreeSet::new();
+            for y in region.bounds.min_y..=region.bounds.max_y {
+                for x in region.bounds.min_x..=region.bounds.max_x {
+                    if (x, y) == game.home || Some((x, y)) == cache {
+                        continue;
+                    }
+                    if let Some(herb) = Herb::of(game.world.tile(x, y).biome.biome())
+                        && game.regions.region_at(x, y) == region.id
+                    {
+                        available.insert(herb);
+                    }
+                }
+            }
+            assert_eq!(represented, available, "seed {seed}");
+            diverse += usize::from(represented.len() > 1);
+        }
+        assert!(diverse > 0, "the sample must exercise minority-biome herbs");
     }
 
     #[test]
@@ -475,5 +550,72 @@ mod tests {
         state["turn"] = HERB_REGROW_TURNS.into();
         state["picked"] = serde_json::json!([{"position": game.home, "turn": 0}]);
         assert!(Game::from_snapshot(serde_json::from_value(state).unwrap()).is_err());
+    }
+
+    #[test]
+    fn herbalism_is_earned_only_by_success_and_survives_reload() {
+        let mut game = Game::new(42);
+        let before = game.wanderer.herbalism;
+        assert_eq!(game.gather(), Step::Blocked);
+        assert_eq!(game.wanderer.herbalism, before);
+        let patch = starting_patch(&mut game);
+        game.position = patch.position;
+        game.update_region(false);
+        game.monsters.clear();
+        game.gather();
+        assert_ne!(game.wanderer.herbalism, before);
+        let learned = game.wanderer.herbalism;
+        assert_eq!(game.gather(), Step::Blocked);
+        assert_eq!(game.wanderer.herbalism, learned);
+        game.position = game.home;
+        game.update_region(false);
+        game.monsters.clear();
+        game.herbs = [1, 1, 0];
+        assert_eq!(game.camp(), Step::Waited);
+        assert_ne!(game.wanderer.herbalism, learned);
+        assert_eq!(Game::from_snapshot(game.snapshot()).unwrap(), game);
+    }
+
+    #[test]
+    fn skilled_gathering_keeps_sneaking_and_expert_yields_and_regrowth_are_bounded() {
+        let mut game = Game::new(42);
+        let patch = starting_patch(&mut game);
+        game.position = patch.position;
+        game.update_region(false);
+        game.monsters.clear();
+        game.sneaking = true;
+        assert_eq!(game.gather(), Step::Waited);
+        assert!(!game.sneaking);
+        game.wanderer.herbalism.learn(4_000, Rank::Expert);
+        game.picked.clear();
+        game.sneaking = true;
+        game.monsters.clear();
+        assert_eq!(game.gather(), Step::Waited);
+        assert!(game.sneaking);
+        game.wanderer.herbalism.learn(30_000, Rank::Expert);
+        let mut yields = BTreeSet::new();
+        for _ in 0..40 {
+            game.monsters.clear();
+            game.picked.clear();
+            game.herbs = [0; 3];
+            assert_eq!(game.gather(), Step::Waited);
+            yields.insert(game.herbs(patch.herb));
+        }
+        assert_eq!(yields, BTreeSet::from([1, 2]));
+        game.picked.clear();
+        game.herbs[patch.herb.index()] = HERB_CAPACITY - 1;
+        game.monsters.clear();
+        game.gather();
+        assert_eq!(game.herbs(patch.herb), HERB_CAPACITY);
+        let picked = game.picked[&patch.position];
+        game.turn = picked + 149;
+        assert!(!game.patch_ready(patch.position));
+        game.turn += 1;
+        assert!(game.patch_ready(patch.position));
+        game.wanderer.focus = 0;
+        game.draughts = 1;
+        game.monsters.clear();
+        game.drink_draught();
+        assert_eq!(game.wanderer.focus, 12);
     }
 }

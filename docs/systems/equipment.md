@@ -86,8 +86,32 @@ Cache variants keep the same learned weapon family and have explicit trade-offs:
 | Quiet staff | +1 concealment while sneaking | −1 force |
 
 Inventory contains only owned items. The workshop can equip an owned item at a safe point; it cannot equip a
-cache reward that has not been claimed. This is a narrow journey slice, not the full equipment or relic
-system proposed above.
+cache reward that has not been claimed.
+
+At home, `I` cycles unequipped cache weapons and `U` exchanges the selected one for one salve and one
+Focus draught, limited by pack room. The starting kit and equipped weapon cannot be traded. Creatures in
+view or completely full supplies block the exchange without spending time or the item. A successful
+exchange takes one exposed turn; it never reopens the cache that awarded the weapon.
+
+### Implemented CP5 relics and landmarks
+
+| Relic | One bounded rule while attuned |
+| --- | --- |
+| Hearth ember | Camps restore 2 additional Health. |
+| Hushstone | Entering careful movement costs no Focus. |
+| Spring vial | Springs recover in 150 turns instead of 300. |
+| Returning lantern | Death wakes you with 3 Health instead of 1. |
+
+Characters own unique relics separately from weapons and have two attunement slots. A newly acquired relic
+fills an empty slot; changing the pair is safe and free at home (`Y` cycles owned pairings). Shrines award
+one relic once. One quarter of deterministic cache sites more than 32 tiles from home are eligible guarded
+ruins: they have three stronger guards and add an unowned relic to the cache reward. Duplicate relics are
+never added; sites select from the unowned set, and later sites offer no relic after all four are owned.
+
+Landmarks are deterministic per region and retained once seen or marked by a lookout. `X` uses the site
+underfoot. Springs refill salves and draughts every 300 turns (150 with the Spring vial); wild gardens
+provide each herb with the same yield and regrowth benefits as ordinary gathering. A lookout can be used once to reveal caches and landmarks up to
+32 tiles away. These are exposed actions and pass a turn; failed uses spend neither time nor supplies.
 
 ## Reward value
 
@@ -108,8 +132,9 @@ economy is not required for the first slice.
 
 ### Implemented herb gathering
 
-Each land region has 2–4 deterministic patches (or fewer if a tiny region has too few free tiles), away from
-home and its cache. The patch's actual biome determines its herb:
+Each land region has 2–4 deterministic original patches (or fewer if a tiny region has too few free tiles),
+away from home and its cache. Regions also get a patch for each additional herb their minority biome
+slivers can grow, preserving the original patches. The patch's actual biome determines its herb:
 
 | Herb | Biomes |
 | --- | --- |
@@ -117,18 +142,22 @@ home and its cache. The patch's actual biome determines its herb:
 | Sunthistle | Grassland, savanna, desert, beach |
 | Stonecap | Hills, mountains, badlands, tundra |
 
-`E` gathers one herb from the patch underfoot during an exposed turn and breaks sneaking. The pouch holds
-three of each herb. A picked patch regrows 300 turns after the pick; leaving, cache eviction, and reload
-do not refresh it. Death advances 1,000 turns, so patches regrow during that time, but carried supplies
-are neither lost nor refilled.
+`E` gathers from the patch underfoot during a turn and normally breaks sneaking; Skilled herbalists can keep
+their careful stance. The pouch holds three of each herb. Practiced through Expert herbalists have a
+20–50% chance to gather a second herb, capped by pouch room. Patch regrowth starts at 300 turns and falls
+to 250/200/150 at Skilled/Adept/Expert. Leaving, cache eviction, and reload do not refresh it. Death advances
+1,000 turns, so patches regrow during that time, but carried supplies are neither lost nor refilled.
 
 `P` camps and brews one Focus draught from one each of two different herbs, taking the most plentiful kinds
 first (ties use table order). Brewing works even at full Health and Focus, but still requires no creature
-in view and takes the camp's exposed turn. Carry at most two draughts. `T` drinks one for up to 8 Focus
-during an exposed turn, including in combat, and breaks sneaking. Full Focus, an empty pouch, a full stack,
-or an unavailable patch never wastes a resource or turn. Salves remain separate and unchanged.
+in view and takes the camp's exposed turn. Carry at most two draughts. `T` drinks one for up to 8–12 Focus
+according to Herbalism rank during an exposed turn, including in combat, and breaks sneaking. Full Focus,
+an empty pouch, a full stack, or an unavailable patch never wastes a resource or turn. Salves remain separate
+and unchanged.
 
-This is supply gathering only, not gathering mastery or the crafting system below.
+Successful picking grants 100 Herbalism practice per herb kind gathered; brewing grants 200. The usual
+practice thresholds apply. Failed actions and drinking grant none. This is a bounded supply-gathering
+track, not the larger crafting system below.
 
 ### Longer-term materials
 

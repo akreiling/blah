@@ -10,20 +10,21 @@ use gpui::{
 };
 
 use blah_core::{
-    ADAPTATION_CAPACITY, Adaptation, Aim, Comparison, Delivery, Dir, Element, Game, Gene, Herb, HerbInfo, LearnedMove,
-    LogKind, MAX_AREA_RADIUS, MAX_BURST_POWER, Monster, MovePreview, Shape, SpeciesId, Tile, Trigger, VIEW_RADIUS,
-    Weapon, hash_point,
+    ADAPTATION_CAPACITY, Adaptation, Aim, Comparison, Delivery, Dir, Element, Game, Gene, Herb, HerbInfo, LandmarkInfo,
+    LandmarkKind, LearnedMove, LogKind, MAX_AREA_RADIUS, MAX_BURST_POWER, Monster, MovePreview, Shape, SpeciesId, Tile,
+    Trigger, VIEW_RADIUS, Weapon, hash_point,
 };
 
 use crate::commitment::{self, CommitmentPanel, Enter as CommitmentEnter};
 use crate::sprites::{Key, SPRITE_PX, SpriteCache};
 use crate::workshop::{Edit, Workshop};
 use crate::{
-    Camp, CancelWorkshop, ClaimCache, CycleEarnedMove, DrinkDraught, EarnedMoveEast, EarnedMoveNorth, EarnedMoveSouth,
-    EarnedMoveWest, Gather, MoveEast, MoveNorth, MoveSouth, MoveWest, OpenCommitment, OpenWorkshop, PrepareWorkshop,
-    RecoverFocus, TechniqueEast, TechniqueNorth, TechniqueSouth, TechniqueWest, ToggleSneak, Unleash, UseSalve, Wait,
-    WorkshopAim, WorkshopDaggerExample, WorkshopDelivery, WorkshopElement, WorkshopPayload, WorkshopPowerDown,
-    WorkshopPowerUp, WorkshopShape, WorkshopStaffExample, WorkshopTrigger, WorkshopWeapon,
+    Camp, CancelWorkshop, ClaimCache, CycleEarnedMove, CycleRelics, CycleTrade, DrinkDraught, EarnedMoveEast,
+    EarnedMoveNorth, EarnedMoveSouth, EarnedMoveWest, Gather, MoveEast, MoveNorth, MoveSouth, MoveWest, OpenCommitment,
+    OpenWorkshop, PrepareWorkshop, RecoverFocus, TechniqueEast, TechniqueNorth, TechniqueSouth, TechniqueWest,
+    ToggleSneak, TradeWeapon, Unleash, UseLandmark, UseSalve, Wait, WorkshopAim, WorkshopDaggerExample,
+    WorkshopDelivery, WorkshopElement, WorkshopPayload, WorkshopPowerDown, WorkshopPowerUp, WorkshopShape,
+    WorkshopStaffExample, WorkshopTrigger, WorkshopWeapon,
 };
 
 /// Tiles along each side of the viewport. Odd, so the wanderer sits on the center tile.
@@ -168,6 +169,7 @@ pub struct GameView {
     workshop: Option<Workshop>,
     commitment: Option<CommitmentPanel>,
     move_slot: EarnedMoveSlot,
+    trade_slot: usize,
 }
 
 impl GameView {
@@ -192,6 +194,7 @@ impl GameView {
             workshop: None,
             commitment: None,
             move_slot: EarnedMoveSlot::default(),
+            trade_slot: 0,
         }
     }
 
@@ -236,6 +239,18 @@ impl GameView {
         if result.is_ok() && prepared {
             self.workshop = None;
         }
+        cx.notify();
+    }
+
+    fn cycle_relics(&mut self, cx: &mut Context<GameView>) {
+        if self.workshop.is_some() || self.commitment.is_some() {
+            return;
+        }
+        let mut game_error = None;
+        let result = crate::save::commit_action(&mut self.game, &mut self.save, |game| {
+            game_error = game.cycle_relics().err().map(str::to_owned);
+        });
+        self.save_error = result.err().or(game_error);
         cx.notify();
     }
 
@@ -323,8 +338,14 @@ impl Render for GameView {
         let hurt = self.news().any(|k| matches!(k, LogKind::Hurt | LogKind::Death));
         self.sprites.begin(window);
         let map = map(&self.game, &mut self.sprites, hurt);
-        let panel =
-            panel(&self.game, &mut self.sprites, self.workshop.as_ref(), self.commitment.as_ref(), self.move_slot);
+        let panel = panel(
+            &self.game,
+            &mut self.sprites,
+            self.workshop.as_ref(),
+            self.commitment.as_ref(),
+            self.move_slot,
+            self.trade_slot,
+        );
         self.sprites.end(window);
         let title = self.save_error.clone().unwrap_or_else(|| {
             let slot = self
@@ -373,6 +394,18 @@ impl Render for GameView {
             .on_action(cx.listener(|this, _: &UseSalve, _, cx| this.act(|g| _ = g.use_salve(), cx)))
             .on_action(cx.listener(|this, _: &Gather, _, cx| this.act(|g| _ = g.gather(), cx)))
             .on_action(cx.listener(|this, _: &DrinkDraught, _, cx| this.act(|g| _ = g.drink_draught(), cx)))
+            .on_action(cx.listener(|this, _: &UseLandmark, _, cx| this.act(|g| _ = g.use_landmark(), cx)))
+            .on_action(cx.listener(|this, _: &CycleRelics, _, cx| this.cycle_relics(cx)))
+            .on_action(cx.listener(|this, _: &CycleTrade, _, cx| {
+                if this.workshop.is_none() && this.commitment.is_none() {
+                    this.trade_slot = this.trade_slot.wrapping_add(1);
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &TradeWeapon, _, cx| {
+                let item = trade_candidate(&this.game, this.trade_slot).unwrap_or(blah_core::WeaponItem::Dagger);
+                this.act(|g| _ = g.trade_weapon(item), cx);
+            }))
             .on_action(cx.listener(|this, _: &ToggleSneak, _, cx| this.act(|g| _ = g.toggle_sneak(), cx)))
             .on_action(cx.listener(|this, _: &RecoverFocus, _, cx| this.act(|g| _ = g.recover_focus(), cx)))
             .on_action(cx.listener(|this, _: &Unleash, _, cx| this.act(|g| _ = g.unleash(), cx)))
@@ -443,7 +476,9 @@ fn map(game: &Game, sprites: &mut SpriteCache, hurt: bool) -> Div {
                 } else if let Some(monster) = game.monster_at(x, y) {
                     monster_cell(&tile, (x, y), monster, sprites, game.cache_at(x, y).is_some())
                 } else if let Some(cache) = game.cache_at(x, y) {
-                    cache_cell(&tile, (x, y), cache.claimed)
+                    cache_cell(&tile, (x, y), cache)
+                } else if let Some(landmark) = game.landmark_at(x, y) {
+                    landmark_cell(&tile, (x, y), landmark)
                 } else if (x, y) == game.home() {
                     home_cell(&tile, (x, y))
                 } else if let Some(herb) = game.herb_at(x, y) {
@@ -459,18 +494,38 @@ fn map(game: &Game, sprites: &mut SpriteCache, hurt: bool) -> Div {
 }
 
 /// An unclaimed cache uses an amber capital; a spent cache stays marked but dims.
-fn cache_cell(tile: &Tile, at: (i64, i64), claimed: bool) -> Div {
+fn cache_cell(tile: &Tile, at: (i64, i64), cache: blah_core::CacheInfo) -> Div {
+    let claimed = cache.claimed;
+    let glyph = match (cache.ruin, claimed) {
+        (false, false) => "C",
+        (false, true) => "c",
+        (true, false) => "R",
+        (true, true) => "r",
+    };
     tile_base(tile.biome.biome().color, at)
         .border_2()
         .border_color(rgb(if claimed { DIM } else { HEADING }))
         .text_color(rgb(if claimed { DIM } else { HEADING }))
         .font_weight(FontWeight::BOLD)
-        .child(if claimed { "c" } else { "C" })
+        .child(glyph)
+}
+
+/// Landmarks use fixed glyphs; spent or regrowing sites are dim.
+fn landmark_cell(tile: &Tile, at: (i64, i64), landmark: LandmarkInfo) -> Div {
+    let tint = if landmark.ready { 0xa8_e0_aa } else { DIM };
+    tile_base(tile.biome.biome().color, at)
+        .bg(rgb(0x10_1a_12))
+        .border_2()
+        .border_color(rgb(tint))
+        .text_color(rgb(tint))
+        .font_weight(FontWeight::BOLD)
+        .child(landmark.kind.glyph(landmark.ready).to_string())
 }
 
 /// Ready herbs use a bright sprig; a picked patch keeps a dim marker until it regrows.
 fn herb_cell(tile: &Tile, at: (i64, i64), herb: HerbInfo) -> Div {
     tile_base(tile.biome.biome().color, at)
+        .bg(rgb(0x10_1a_12))
         .border_1()
         .border_color(rgb(if herb.ready { 0xb6_f0_90 } else { DIM }))
         .text_color(rgb(if herb.ready { 0xb6_f0_90 } else { DIM }))
@@ -577,6 +632,7 @@ fn panel(
     workshop: Option<&Workshop>,
     commitment: Option<&CommitmentPanel>,
     move_slot: EarnedMoveSlot,
+    trade_slot: usize,
 ) -> impl IntoElement + use<> {
     let panel = frame().id("status-panel").w(px(PANEL)).h(px(MAP)).p(px(INSET)).flex().flex_col().overflow_y_scroll();
     if let Some(workshop) = workshop {
@@ -590,11 +646,15 @@ fn panel(
         .child(rule())
         .child(adaptations(game))
         .child(rule())
-        .child(equipment(game))
+        .child(equipment(game, trade_slot))
+        .child(rule())
+        .child(relics_panel(game))
         .child(rule())
         .child(gathering(game))
         .child(rule())
         .child(cache_status(game))
+        .child(rule())
+        .child(landmark_status(game))
         .child(rule())
         .child(place(game))
         .child(rule())
@@ -615,11 +675,23 @@ fn panel(
                 .child("M edit · C sneak · R home rest · P camp")
                 .child("V salve · G claim cache · F unleash")
                 .child("E gather · T draught · P also brews")
+                .child("X use landmark · Y cycle relics at home")
+                .child("I choose trade · U trade at home")
                 .child("Space / . wait · Q quit"),
         )
 }
 
-fn equipment(game: &Game) -> Div {
+fn trade_candidate(game: &Game, slot: usize) -> Option<blah_core::WeaponItem> {
+    let items: Vec<_> = game
+        .inventory()
+        .iter()
+        .copied()
+        .filter(|item| blah_core::WeaponItem::CACHE_REWARDS.contains(item) && *item != game.equipped_item())
+        .collect();
+    if items.is_empty() { None } else { Some(items[slot % items.len()]) }
+}
+
+fn equipment(game: &Game, trade_slot: usize) -> Div {
     let owned = game.inventory().iter().map(|item| item.name()).collect::<Vec<_>>().join(", ");
     div()
         .flex()
@@ -628,6 +700,17 @@ fn equipment(game: &Game) -> Div {
         .child(pair("Equipped", game.equipped_item().name().into()))
         .children(wrap(&format!("Owned: {owned}"), PANEL_CHARS).into_iter().map(small_line))
         .child(pair("Salves", format!("{}/{} · V to use", game.salves(), blah_core::SALVE_CAPACITY)))
+        .children(
+            wrap(
+                &format!(
+                    "Trade: {} · I choose, U exchange at home",
+                    trade_candidate(game, trade_slot).map_or("no spare cache weapon", |item| item.name())
+                ),
+                PANEL_CHARS,
+            )
+            .into_iter()
+            .map(small_line),
+        )
 }
 
 fn gathering(game: &Game) -> Div {
@@ -636,8 +719,15 @@ fn gathering(game: &Game) -> Div {
         panel = panel.child(pair(herb.name(), format!("{}/{}", game.herbs(herb), blah_core::HERB_CAPACITY)));
     }
     panel = panel
+        .child(pair("Herbalism", game.wanderer().herbalism.rank().name().into()))
+        .child(small_line(format!(
+            "Extra herb {}% · regrows {} turns{}",
+            game.wanderer().herbalism.second_herb_chance(),
+            game.wanderer().herbalism.herb_regrow_turns(),
+            if game.wanderer().herbalism.quiet_gathering() { " · quiet" } else { "" }
+        )))
         .child(pair("Draughts", format!("{}/{} · T to drink", game.draughts(), blah_core::DRAUGHT_CAPACITY)))
-        .child(small_line("P brews: 2 different herbs → 8 Focus"));
+        .child(small_line(format!("P brews: 2 different herbs → {} Focus", game.wanderer().herbalism.draught_focus())));
     if let Some(info) = game.herb_at(game.position().0, game.position().1) {
         panel = panel.child(small_line(format!(
             "{} here · {}",
@@ -646,6 +736,24 @@ fn gathering(game: &Game) -> Div {
         )));
     }
     panel
+}
+
+fn relics_panel(game: &Game) -> Div {
+    let mut panel = div().flex().flex_col().child(heading("RELICS"));
+    let attuned = game.attuned_relics();
+    for (index, relic) in attuned.into_iter().enumerate() {
+        let description =
+            relic.map_or_else(|| "empty".to_owned(), |relic| format!("{} · {}", relic.name(), relic.effect()));
+        panel = panel
+            .children(wrap(&format!("Slot {}: {description}", index + 1), PANEL_CHARS).into_iter().map(small_line));
+    }
+    let owned = game.relics().iter().map(|relic| relic.name()).collect::<Vec<_>>();
+    if owned.is_empty() {
+        panel = panel.child(small_line("No relics owned."));
+    } else {
+        panel = panel.children(wrap(&format!("Owned: {}", owned.join(", ")), PANEL_CHARS).into_iter().map(small_line));
+    }
+    panel.child(small_line("Y cycles pairs at home; X uses a site."))
 }
 
 fn cache_status(game: &Game) -> Div {
@@ -665,14 +773,59 @@ fn cache_status(game: &Game) -> Div {
     } else {
         format!("{distance} tiles · move there, then G")
     };
+    let treasure = if cache.ruin {
+        match cache.relic_reward {
+            Some(relic) => format!("{} + {}", cache.treasure.name(), relic.name()),
+            None => format!("{} + no new relic", cache.treasure.name()),
+        }
+    } else {
+        cache.treasure.name().to_owned()
+    };
     div()
         .flex()
         .flex_col()
-        .child(heading("CACHE"))
+        .child(heading(if cache.ruin { "GUARDED RUIN" } else { "CACHE" }))
         .child(pair("Status", status))
         .child(pair("Guards", format!("{}/{} alive", cache.guards_alive, cache.guards)))
-        .child(pair("Treasure", cache.treasure.name().into()))
+        .children(wrap(&format!("Treasure: {treasure}"), PANEL_CHARS).into_iter().map(small_line))
         .child(small_line(format!("Direction: {}", if at_cache { "here".to_owned() } else { compass(dx, dy) })))
+}
+
+fn landmark_status(game: &Game) -> Div {
+    let (x, y) = game.position();
+    let nearest = game
+        .known_landmarks()
+        .map(|landmark| {
+            let (dx, dy) = (landmark.position.0 - x, landmark.position.1 - y);
+            (dx.abs().max(dy.abs()), dx, dy, landmark)
+        })
+        .min_by_key(|(distance, dx, dy, _)| (*distance, *dy, *dx));
+    let Some((distance, dx, dy, landmark)) = nearest else {
+        return div();
+    };
+    let status = if distance == 0 {
+        if landmark.kind == LandmarkKind::Shrine && landmark.relic_reward.is_none() {
+            "no new relic".to_owned()
+        } else if landmark.ready {
+            "X to use".to_owned()
+        } else {
+            "spent or regrowing".to_owned()
+        }
+    } else {
+        format!("{distance} tiles · {}", compass(dx, dy))
+    };
+    let mut panel = div()
+        .flex()
+        .flex_col()
+        .child(heading("LANDMARK"))
+        .child(pair("Site", landmark.kind.name().into()))
+        .child(pair("Status", status));
+    if let Some(relic) = landmark.relic_reward
+        && landmark.kind == LandmarkKind::Shrine
+    {
+        panel = panel.children(wrap(&format!("Reward: {}", relic.name()), PANEL_CHARS).into_iter().map(small_line));
+    }
+    panel
 }
 
 /// The eight-way compass point for an offset, e.g. "NE".
@@ -1345,6 +1498,22 @@ fn glyph_shade(c @ [r, g, b]: [u8; 3]) -> [u8; 3] {
 mod tests {
     use super::*;
     use blah_core::{LearnedMove, MAX_FOCUS};
+
+    #[test]
+    fn trade_selection_cycles_only_spare_cache_weapons() {
+        use blah_core::WeaponItem;
+        let game = Game::new(42);
+        assert_eq!(trade_candidate(&game, 0), None);
+        let mut state = serde_json::to_value(game.snapshot()).unwrap();
+        state["inventory"]
+            .as_array_mut()
+            .unwrap()
+            .extend([serde_json::json!("HeavyClub"), serde_json::json!("QuietStaff")]);
+        let game = Game::from_snapshot(serde_json::from_value(state).unwrap()).unwrap();
+        assert_eq!(trade_candidate(&game, 0), Some(WeaponItem::HeavyClub));
+        assert_eq!(trade_candidate(&game, 1), Some(WeaponItem::QuietStaff));
+        assert_eq!(trade_candidate(&game, 2), Some(WeaponItem::HeavyClub));
+    }
 
     #[test]
     fn a_modal_blocks_all_play_actions_until_closed() {

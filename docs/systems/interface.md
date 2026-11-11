@@ -106,13 +106,25 @@ The first journey exposes its small action set directly in the play view:
 - `P` camps for one exposed turn when no creature is in view, also brewing a draught from two different
   herbs if possible.
 - `E` gathers the herb patch underfoot. Ready patches use a bright `*`; regrowing patches use a dim `·`.
-  The pouch panel identifies the herb underfoot and whether it is ready.
+  Both use a dark backing so they remain legible on sand. The pouch panel identifies the herb underfoot,
+  whether it is ready, and the Herbalism rank, yield chance, regrowth time, and draught potency.
 - `T` drinks a Focus draught, including in combat. `D` remains eastward movement in WASD.
 - `V` uses a salve during a normal turn, including combat.
 - `R` rests at home. The equipment panel shows the equipped item, owned items, and salve count; the workshop
   lists owned weapon variants and equips one only when preparation is safe.
+- `I` selects an unequipped cache weapon; `U` trades the selected weapon at home for one salve and one
+  draught, as room allows. Full supplies and nearby creatures block the trade.
 - The herb pouch shows all three herb counts (capacity three each), the draught count (capacity two), and
-  the brewing recipe. Supplies do not automatically refill when camping or resting at home.
+  the brewing recipe. Herbs and draughts do not automatically refill at camp or home; home rest does
+  restock salves.
 
 The nearby cache panel shows its direction, claim state, living-guard count, and reward before the player
 reaches it. Claiming breaks sneaking, so the exposed turn is visible to territorial guards.
+
+Landmarks use `X` while standing on the site: shrines grant a one-time relic, springs refill salves and
+draughts on a 300-turn per-site cooldown, wild gardens yield each herb with Herbalism benefits, and
+lookouts mark caches and landmarks within 32 tiles. The map uses `S`, `W`, `O`, and `G` for those sites;
+lowercase markers are spent or regrowing. Cache ruins use `R`/`r` and show their three stronger guards and
+relic reward in the cache panel. Two relic slots and their bounded effects appear in the status panel.
+New relics fill empty slots; `Y` cycles alternate owned pairs at home without passing a turn. Failed site
+uses and unsafe attunement do not spend time or supplies.

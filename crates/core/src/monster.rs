@@ -119,6 +119,9 @@ pub struct Wanderer {
     pub focus_skill: Skill,
     /// Practice evading real threats, which conceals better, sneaks cheaper, and strikes openings harder.
     pub stealth: Skill,
+    /// Practice gathering and brewing, with bounded fieldcraft benefits.
+    #[serde(default)]
+    pub herbalism: Skill,
     /// Permanent developments and the history that earns their offers.
     #[serde(default)]
     pub adaptations: Adaptations,
@@ -135,6 +138,7 @@ impl Wanderer {
             weapons: WeaponSkills::default(),
             focus_skill: Skill::default(),
             stealth: Skill::default(),
+            herbalism: Skill::default(),
             adaptations: Adaptations::default(),
         }
     }

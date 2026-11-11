@@ -72,6 +72,14 @@ actions!(
         Gather,
         /// Drink a Focus draught during a normal turn.
         DrinkDraught,
+        /// Use the landmark underfoot.
+        UseLandmark,
+        /// Cycle active relics safely at home.
+        CycleRelics,
+        /// Select the next unequipped cache weapon for trade.
+        CycleTrade,
+        /// Exchange the selected cache weapon for supplies at home.
+        TradeWeapon,
         /// Open the composition workshop.
         OpenWorkshop,
         /// Open the adaptation commitment panel.
@@ -156,6 +164,10 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("v", UseSalve, None),
         KeyBinding::new("e", Gather, None),
         KeyBinding::new("t", DrinkDraught, None),
+        KeyBinding::new("x", UseLandmark, None),
+        KeyBinding::new("y", CycleRelics, None),
+        KeyBinding::new("i", CycleTrade, None),
+        KeyBinding::new("u", TradeWeapon, None),
         KeyBinding::new("1", WorkshopWeapon, None),
         KeyBinding::new("2", WorkshopDelivery, None),
         KeyBinding::new("3", WorkshopAim, None),
@@ -500,6 +512,23 @@ mod tests {
                 .iter()
                 .filter(|b| {
                     b.contains(&format!("key: \"{key}\"")) && b.contains("shift: false") && b.contains("alt: false")
+                })
+                .collect();
+            assert_eq!(matching.len(), 1, "{matching:?}");
+            assert!(matching[0].contains(action), "{matching:?}");
+        }
+    }
+
+    #[test]
+    fn landmarks_and_relics_have_distinct_interaction_keys() {
+        let bindings: Vec<_> = keymap().iter().map(|binding| format!("{binding:?}")).collect();
+        for (key, action) in [("x", "UseLandmark"), ("y", "CycleRelics"), ("i", "CycleTrade"), ("u", "TradeWeapon")] {
+            let matching: Vec<_> = bindings
+                .iter()
+                .filter(|binding| {
+                    binding.contains(&format!("key: \"{key}\""))
+                        && binding.contains("shift: false")
+                        && binding.contains("alt: false")
                 })
                 .collect();
             assert_eq!(matching.len(), 1, "{matching:?}");

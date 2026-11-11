@@ -51,6 +51,7 @@ mod names;
 mod noise;
 mod phenotype;
 mod region;
+mod relics;
 mod skills;
 mod sprite;
 mod world;
@@ -65,9 +66,10 @@ pub use combat::{
 };
 pub use game::{
     CAMP_FOCUS, CAMP_HEALTH, CacheInfo, Comparison, DEATH_TURNS, DESPAWN_RADIUS, DRAUGHT_CAPACITY, DRAUGHT_FOCUS, Dir,
-    Game, HERB_CAPACITY, HERB_REGROW_TURNS, Herb, HerbInfo, LAND_SEARCH_RADIUS, LOG_LIMIT, Log, LogEntry, LogKind,
-    REST_FOCUS, REST_HEALTH, SALVE_CAPACITY, SALVE_HEAL, SPAWN_MAX, SPAWN_MIN, Step, TERRITORY, VIEW_RADIUS,
-    WANDER_CHANCE, capacity, find_land, individual, ring, spawn_chance,
+    GARDEN_REGROW_TURNS, Game, HERB_CAPACITY, HERB_REGROW_TURNS, Herb, HerbInfo, LAND_SEARCH_RADIUS, LOG_LIMIT,
+    LOOKOUT_RADIUS, LandmarkInfo, LandmarkKind, Log, LogEntry, LogKind, REST_FOCUS, REST_HEALTH, SALVE_CAPACITY,
+    SALVE_HEAL, SPAWN_MAX, SPAWN_MIN, SPRING_COOLDOWN_TURNS, Step, TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity,
+    find_land, individual, ring, spawn_chance,
 };
 pub use game::{GameSnapshot, RULES_VERSION, SNAPSHOT_VERSION, TERRAIN_VERSION};
 pub use genome::{GENES, Gene, Genome, gene_delta};
@@ -85,6 +87,7 @@ pub use phenotype::{
 pub use region::{
     Bounds, CELL_SPACING, CORE_TILES, MAX_REGION_TILES, Means, Region, RegionCache, RegionId, SLIVER_TILES, STRAY_TILES,
 };
+pub use relics::{HEARTH_EMBER_HEAL, RELIC_SLOTS, RETURNING_LANTERN_HEALTH, Relic};
 pub use skills::{Rank, Skill, Training, WeaponSkills};
 pub use sprite::{SPRITE_SIZE, Sprite};
 pub use world::{Tile, World};

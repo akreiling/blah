@@ -34,11 +34,16 @@ mod commitment_tests;
 mod gathering;
 #[cfg(test)]
 mod journey_tests;
+mod landmarks;
 mod learned;
 mod snapshot;
+mod trading;
 
+use crate::Relic;
 use gathering::HerbPatch;
 pub use gathering::{DRAUGHT_CAPACITY, DRAUGHT_FOCUS, HERB_CAPACITY, HERB_REGROW_TURNS, Herb, HerbInfo};
+use landmarks::LandmarkRecord;
+pub use landmarks::{GARDEN_REGROW_TURNS, LOOKOUT_RADIUS, LandmarkInfo, LandmarkKind, SPRING_COOLDOWN_TURNS};
 
 pub use snapshot::{GameSnapshot, RULES_VERSION, SNAPSHOT_VERSION, TERRAIN_VERSION};
 
@@ -135,6 +140,10 @@ pub struct CacheInfo {
     pub guards_alive: usize,
     /// The deterministic weapon reward.
     pub treasure: WeaponItem,
+    /// Whether this is a tougher guarded ruin.
+    pub ruin: bool,
+    /// The ruin's relic reward, if any, whether already claimed or not.
+    pub relic_reward: Option<Relic>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
@@ -163,6 +172,11 @@ pub(super) struct CacheRecord {
     pub(super) claimed: bool,
     #[serde(skip)]
     pub(super) treasure: WeaponItem,
+    /// Existing v4 caches default to ordinary caches during migration.
+    #[serde(default)]
+    pub(super) ruin: bool,
+    #[serde(default)]
+    pub(super) relic_reward: Option<Relic>,
     pub(super) guards: Vec<CacheGuardRecord>,
 }
 
@@ -407,6 +421,12 @@ pub struct Game {
     salves: u8,
     /// Caches revealed once and retained by region, including their named guards' living state.
     caches: BTreeMap<RegionId, CacheRecord>,
+    /// Known landmarks and their durable use/cooldown state.
+    landmarks: BTreeMap<RegionId, LandmarkRecord>,
+    /// Relics acquired from shrines and guarded ruins.
+    relics: Vec<Relic>,
+    /// Active relic effects; an owned relic can remain dormant.
+    attuned_relics: [Option<Relic>; crate::RELIC_SLOTS],
     /// Gathered herbs by [`Herb`] order.
     herbs: [u8; 3],
     draughts: u8,
@@ -436,6 +456,8 @@ impl PartialEq for Game {
                 == (&other.maneuver, other.sneaking, other.last_attack, other.sneak_moves)
             && (&self.inventory, self.equipped, self.salves, &self.caches)
                 == (&other.inventory, other.equipped, other.salves, &other.caches)
+            && (&self.landmarks, &self.relics, self.attuned_relics)
+                == (&other.landmarks, &other.relics, other.attuned_relics)
             && (self.herbs, self.draughts) == (other.herbs, other.draughts)
             && self.active_picks().eq(other.active_picks())
             && self.journey == other.journey
@@ -477,6 +499,9 @@ impl Game {
             equipped: WeaponItem::Dagger,
             salves: SALVE_CAPACITY,
             caches: BTreeMap::new(),
+            landmarks: BTreeMap::new(),
+            relics: Vec::new(),
+            attuned_relics: [None; crate::RELIC_SLOTS],
             herbs: [0; 3],
             draughts: 0,
             picked: BTreeMap::new(),
@@ -490,6 +515,7 @@ impl Game {
         game.populate(&mut Rng::keyed(seed, b"populate", &[]));
         game.update_visible_caches();
         game.update_visible_herbs();
+        game.update_visible_landmarks();
         game
     }
 
@@ -512,6 +538,9 @@ impl Game {
         game.update_region(false);
         game.monsters.clear();
         game.caches.clear();
+        game.landmarks.clear();
+        game.relics.clear();
+        game.attuned_relics = [None; crate::RELIC_SLOTS];
         game.herb_sites.clear();
         game.journey = false;
         game.prepare(maneuver)?;
@@ -665,15 +694,17 @@ impl Game {
         self.salves
     }
 
-    /// Cache at `(x, y)`, once it has come into view.
+    /// Cache at `(x, y)`, once seen or marked by a lookout.
     #[must_use]
     pub fn cache_at(&self, x: i64, y: i64) -> Option<CacheInfo> {
-        let record = self.caches.values().find(|record| record.position == (x, y))?;
+        let (&id, record) = self.caches.iter().find(|(_, record)| record.position == (x, y))?;
         Some(CacheInfo {
             claimed: record.claimed,
             guards: record.guards.len(),
             guards_alive: record.guards.iter().filter(|guard| guard.hp > 0).count(),
             treasure: record.treasure,
+            ruin: record.ruin,
+            relic_reward: if record.ruin && !record.claimed { self.relic_reward_for(id) } else { record.relic_reward },
         })
     }
 
@@ -689,26 +720,38 @@ impl Game {
             self.log.push(LogKind::Blocked, "This cache has already been claimed.");
             return Step::Blocked;
         }
-        let record = self
-            .caches
-            .values_mut()
-            .find(|record| record.position == self.position)
-            .expect("cache info came from this map");
-        record.claimed = true;
-        let treasure = record.treasure;
+        let (region, treasure, ruin) = {
+            let record = self
+                .caches
+                .values_mut()
+                .find(|record| record.position == self.position)
+                .expect("cache info came from this map");
+            record.claimed = true;
+            (record.region, record.treasure, record.ruin)
+        };
         let new_item = !self.inventory.contains(&treasure);
         if new_item {
             self.inventory.push(treasure);
+        }
+        let relic = ruin.then(|| self.relic_reward_for(region)).flatten();
+        if let Some(record) = self.caches.get_mut(&region) {
+            record.relic_reward = relic;
+        }
+        if let Some(relic) = relic {
+            self.grant_relic(relic);
         }
         let had_room = self.salves < SALVE_CAPACITY;
         self.salves = self.salves.saturating_add(1).min(SALVE_CAPACITY);
         self.turn += 1;
         self.sneaking = false;
-        let item_text = if new_item {
+        let mut item_text = if new_item {
             format!("You claim the cache: {}.", treasure.name())
         } else {
             format!("You claim the cache; you already own {}.", treasure.name())
         };
+        if let Some(relic) = relic {
+            item_text.push_str(&format!(" The ruin yields the {}.", relic.name()));
+        }
         let salve_text = if had_room { " One salve added." } else { " Your salves are already full." };
         self.log.push(LogKind::Attack, format!("{item_text}{salve_text}"));
         self.finish_turn(false);
@@ -749,7 +792,7 @@ impl Game {
         }
         self.turn += 1;
         self.sneaking = false;
-        self.wanderer.hp = (self.wanderer.hp + CAMP_HEALTH).min(self.wanderer.max_hp());
+        self.wanderer.hp = (self.wanderer.hp + CAMP_HEALTH + self.camp_healing_bonus()).min(self.wanderer.max_hp());
         self.wanderer.focus = (self.wanderer.focus + CAMP_FOCUS).min(self.wanderer.max_focus());
         let brewed = self.brew().unwrap_or_default();
         self.log.push(
@@ -1004,13 +1047,14 @@ impl Game {
 
     /// Enter or leave careful movement. Entering spends one Focus and a turn; it does not erase tracking.
     pub fn toggle_sneak(&mut self) -> Step {
-        if !self.sneaking && self.wanderer.focus < 1 {
+        let cost = self.sneaking_focus_cost();
+        if !self.sneaking && self.wanderer.focus < cost {
             self.log.push(LogKind::Blocked, "Not enough Focus to sneak.");
             return Step::Blocked;
         }
         self.sneaking = !self.sneaking;
         if self.sneaking {
-            self.wanderer.focus -= 1;
+            self.wanderer.focus -= cost;
         }
         self.turn += 1;
         self.log.push(
@@ -1266,6 +1310,7 @@ impl Game {
     fn finish_turn(&mut self, sheltered: bool) {
         self.update_visible_caches();
         self.update_visible_herbs();
+        self.update_visible_landmarks();
         let deaths = self.deaths;
         let crept = std::mem::take(&mut self.crept);
         self.monsters_act(crept, sheltered);
@@ -1375,8 +1420,10 @@ impl Game {
 
     fn reveal_cache(&mut self, region: &Region, position: (i64, i64)) {
         let (x, y) = region.id.anchor();
+        let ruin =
+            chebyshev(position, self.home) > 4 * VIEW_RADIUS && Self::cache_is_ruin(self.world.seed(), region.id);
         let mut rng = Rng::keyed(self.world.seed(), b"cachegrd", &[x as u64, y as u64]);
-        let count = 2 + rng.below(2);
+        let count = if ruin { 3 } else { 2 + rng.below(2) };
         let species = self.life(region.id).species.clone();
         let mut candidates: Vec<_> = (1..=TERRITORY)
             .flat_map(|radius| ring(radius).map(move |(dx, dy)| (position.0 + dx, position.1 + dy)))
@@ -1395,6 +1442,11 @@ impl Game {
                 let genome = individual(&source.pool[rng.below(source.pool.len())], &mut rng);
                 let mut phenotype = Phenotype::of(&genome);
                 phenotype.temperament = Temperament::Territorial;
+                if ruin {
+                    phenotype.stats.hp = (phenotype.stats.hp + (phenotype.stats.hp / 2).max(6)).min(10_000);
+                    phenotype.stats.attack = (phenotype.stats.attack + 2).min(10_000);
+                    phenotype.stats.defense = (phenotype.stats.defense + 2).min(10_000);
+                }
                 let Some(at) = candidates.iter().copied().find(|&(gx, gy)| {
                     (gx, gy) != position
                         && (gx, gy) != self.position
@@ -1447,8 +1499,8 @@ impl Game {
                 break;
             }
         }
-        // Land-region species and the four-tile site perimeter always leave room for at least two guards.
-        if guards.len() < 2 {
+        // A ruin is only committed when all three tougher guardians fit; ordinary caches need two.
+        if guards.len() < if ruin { 3 } else { 2 } {
             let ids: HashSet<_> = guards.iter().map(|g| g.id).collect();
             self.monsters.retain(|m| !ids.contains(&m.id));
             self.next_monster -= guards.len() as u64;
@@ -1461,6 +1513,8 @@ impl Game {
                 position,
                 claimed: false,
                 treasure: Self::cache_reward(self.world.seed(), region.id),
+                ruin,
+                relic_reward: None,
                 guards,
             },
         );
@@ -1872,16 +1926,17 @@ impl Game {
         }
     }
 
-    /// The wanderer dies: time jumps, and they wake at home with 1 Health and no Focus.
+    /// The wanderer dies: time jumps, and they wake at home weak and with no Focus.
     ///
-    /// Dying refills nothing, so it never beats retreating. Ordinary creatures survive and recover while
-    /// the wanderer is away; cache guards persist with their actual Health. Those near home are driven off.
+    /// Death never refills supplies and costs [`DEATH_TURNS`], so it does not beat retreating. Ordinary
+    /// creatures survive and recover while the wanderer is away; cache guards persist with their actual
+    /// Health. Those near home are driven off.
     fn die(&mut self) {
         self.log.push(LogKind::Death, "You fall.");
         self.deaths += 1;
         self.turn += DEATH_TURNS;
         self.position = self.home;
-        self.wanderer.hp = 1;
+        self.wanderer.hp = self.death_health();
         self.wanderer.focus = 0;
         self.sneaking = false;
         self.last_attack = None;
@@ -1899,6 +1954,7 @@ impl Game {
         self.update_region(false);
         self.update_visible_caches();
         self.update_visible_herbs();
+        self.update_visible_landmarks();
         self.sync_cache_guards();
         self.log.push(
             LogKind::Death,
