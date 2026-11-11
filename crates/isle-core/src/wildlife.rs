@@ -37,6 +37,16 @@ pub const DEEP: Biome = Biome {
     },
 };
 
+/// The Deep at `depth`: deeper floors are colder and hungrier still, which selects bigger, bolder bodies.
+pub fn deep_biome(depth: u32) -> Biome {
+    let f = depth.clamp(1, 10) as f32 - 1.0;
+    Biome {
+        fitness: Fitness { cold: 0.45 + 0.03 * f, size: 0.3 + 0.05 * f, aggression: 0.75 + 0.025 * f, ..DEEP.fitness },
+        productivity: DEEP.productivity * (1.0 - 0.05 * f),
+        ..DEEP
+    }
+}
+
 /// Words for life shaped by the Deep. They name where it lives, not senses the genome does not model.
 const DEEP_EPITHETS: [&str; 12] =
     ["Cave", "Gloom", "Stone", "Hollow", "Drip", "Burrow", "Shale", "Grotto", "Crag", "Silt", "Under", "Echo"];
@@ -46,10 +56,12 @@ const DEEP_EPITHETS: [&str; 12] =
 pub enum Lineage {
     /// A surface region's species.
     Region(SpeciesId),
-    /// A clade evolved in the Deep under one town.
+    /// A clade evolved on one floor of the Deep under one town.
     Deep {
         /// The town above.
         town: Town,
+        /// The floor, from 1.
+        depth: u32,
         /// What it descends from.
         clade: CladeId,
     },
@@ -72,16 +84,30 @@ impl Wildlife {
         Phenotype::of(&self.genome)
     }
 
+    /// Floors below the surface it lives on; zero for surface life.
+    pub fn depth(&self) -> u32 {
+        match self.lineage {
+            Lineage::Region(_) => 0,
+            Lineage::Deep { depth, .. } => depth,
+        }
+    }
+
+    /// Its genome's numbers, hardened by every floor below the first: deeper life has survived worse.
     pub(crate) fn stats(&self) -> Stats {
         let p = self.phenotype().stats;
+        let f = self.depth().saturating_sub(1) as i32;
+        let hp = p.hp + p.hp * f / 3;
+        let attack = p.attack + f;
+        let defense = p.defense + f / 2;
+        let xp = (hp + 2 * attack + defense) as u32;
         Stats {
             name: self.name.clone(),
-            hp: p.hp,
-            ac: 9 + p.defense,
-            hit: p.attack - 1,
-            damage: (1.max(p.attack - 2), p.attack),
-            xp: (p.hp + 2 * p.attack + p.defense) as u32,
-            gold: (0, p.attack),
+            hp,
+            ac: 9 + defense,
+            hit: attack - 1,
+            damage: (1.max(p.attack - 2) + f / 2, attack),
+            xp: xp * (2 + f as u32) / 2,
+            gold: (3 * f, attack + 6 * f),
             ..Kind::Wild.stats()
         }
     }
@@ -96,11 +122,12 @@ pub(crate) struct DeepSpecies {
     pub(crate) abundance: f32,
 }
 
-/// Grows the life beneath `town`: two to four clades chosen by how well they could come to fit the Deep, each
-/// evolved there from its clade's base genome.
-pub(crate) fn grow_deep(seed: u64, clades: &[Clade], town: Town) -> Vec<DeepSpecies> {
-    let mut rng = Rng::keyed(seed, b"deeplife", &[town.origin.0 as u64, town.origin.1 as u64]);
-    let mut weights: Vec<f32> = clades.iter().map(|c| potential(c, &DEEP)).map(|p| p * p * p).collect();
+/// Grows the life on one floor beneath `town`: two to four clades chosen by how well they could come to fit
+/// that depth, each evolved there from its clade's base genome.
+pub(crate) fn grow_deep(seed: u64, clades: &[Clade], town: Town, depth: u32) -> Vec<DeepSpecies> {
+    let biome = deep_biome(depth);
+    let mut rng = Rng::keyed(seed, b"deeplife", &[town.origin.0 as u64, town.origin.1 as u64, u64::from(depth)]);
+    let mut weights: Vec<f32> = clades.iter().map(|c| potential(c, &biome)).map(|p| p * p * p).collect();
     let count = (2 + rng.below(3)).min(clades.len());
     let mut chosen = Vec::with_capacity(count);
     for _ in 0..count {
@@ -114,8 +141,8 @@ pub(crate) fn grow_deep(seed: u64, clades: &[Clade], town: Town) -> Vec<DeepSpec
         .map(|i| {
             let clade = &clades[i];
             let mut pool: Vec<Genome> = (0..POOL_SIZE).map(|_| clade.base.mutate(&mut rng, 1.0, 0.10)).collect();
-            evolve(&mut pool, &DEEP, GENERATIONS, &mut rng);
-            let abundance = pool.iter().map(|g| fitness(&Phenotype::of(g), &DEEP)).sum::<f32>() / pool.len() as f32;
+            evolve(&mut pool, &biome, GENERATIONS, &mut rng);
+            let abundance = pool.iter().map(|g| fitness(&Phenotype::of(g), &biome)).sum::<f32>() / pool.len() as f32;
             let name = format!("{} {}", DEEP_EPITHETS[rng.below(DEEP_EPITHETS.len())], clade.root);
             DeepSpecies { clade: clade.id, name, pool, abundance }
         })
@@ -139,7 +166,7 @@ struct Cache {
     regions: RegionCache,
     clades: Vec<Clade>,
     lives: VecDeque<RegionLife>,
-    deeps: VecDeque<(Town, Vec<DeepSpecies>)>,
+    deeps: VecDeque<((Town, u32), Vec<DeepSpecies>)>,
 }
 
 impl PartialEq for LifeCache {
@@ -196,27 +223,27 @@ impl LifeCache {
         }
     }
 
-    pub(crate) fn deep_species(&mut self, seed: u64, town: Town) -> &[DeepSpecies] {
+    pub(crate) fn deep_species(&mut self, seed: u64, town: Town, depth: u32) -> &[DeepSpecies] {
         let cache = self.cache(seed);
-        let index = if let Some(index) = cache.deeps.iter().position(|(t, _)| *t == town) {
+        let index = if let Some(index) = cache.deeps.iter().position(|(key, _)| *key == (town, depth)) {
             index
         } else {
             if cache.deeps.len() == 8 {
                 cache.deeps.pop_front();
             }
-            let species = grow_deep(seed, &cache.clades, town);
-            cache.deeps.push_back((town, species));
+            let species = grow_deep(seed, &cache.clades, town, depth);
+            cache.deeps.push_back(((town, depth), species));
             cache.deeps.len() - 1
         };
         &cache.deeps[index].1
     }
 
-    pub(crate) fn draw_deep(&mut self, seed: u64, town: Town, rng: &mut Rng) -> Wildlife {
-        let life = self.deep_species(seed, town);
+    pub(crate) fn draw_deep(&mut self, seed: u64, town: Town, depth: u32, rng: &mut Rng) -> Wildlife {
+        let life = self.deep_species(seed, town, depth);
         let weights: Vec<f32> = life.iter().map(|s| s.abundance).collect();
         let species = &life[rng.weighted(&weights)];
         Wildlife {
-            lineage: Lineage::Deep { town, clade: species.clade },
+            lineage: Lineage::Deep { town, depth, clade: species.clade },
             name: species.name.clone(),
             genome: individual(&species.pool[rng.below(species.pool.len())], rng),
         }
@@ -273,7 +300,7 @@ mod tests {
         let mut total = 0;
         for seed in [3, 7, 11] {
             for town in towns(seed) {
-                let deep = grow_deep(seed, &clades(seed), town);
+                let deep = grow_deep(seed, &clades(seed), town, 1);
                 assert!((2..=4).contains(&deep.len()));
                 assert!((deep.iter().map(|s| s.abundance).sum::<f32>() - 1.0).abs() < 1e-4);
                 for species in &deep {
@@ -295,15 +322,37 @@ mod tests {
     fn deep_draws_are_reproducible_after_eviction_and_differ_between_towns() {
         let all = towns(7);
         let mut cache = LifeCache::default();
-        let first = cache.draw_deep(7, all[0], &mut Rng::new(5));
+        let first = cache.draw_deep(7, all[0], 1, &mut Rng::new(5));
         assert!(matches!(first.lineage, Lineage::Deep { town, .. } if town == all[0]));
         for &town in all.iter().cycle().skip(1).take(9) {
-            cache.draw_deep(7, town, &mut Rng::new(5));
+            cache.draw_deep(7, town, 1, &mut Rng::new(5));
             assert!(cache.inner.as_ref().unwrap().deeps.len() <= 8);
         }
-        assert_eq!(cache.draw_deep(7, all[0], &mut Rng::new(5)), first);
+        assert_eq!(cache.draw_deep(7, all[0], 1, &mut Rng::new(5)), first);
         let names: std::collections::HashSet<Vec<String>> =
-            all.iter().map(|&t| cache.deep_species(7, t).iter().map(|s| s.name.clone()).collect()).collect();
+            all.iter().map(|&t| cache.deep_species(7, t, 1).iter().map(|s| s.name.clone()).collect()).collect();
         assert!(names.len() > 1, "each town's Deep has its own life");
+    }
+
+    #[test]
+    fn deeper_floors_evolve_bigger_bolder_life_that_is_much_harder_to_kill() {
+        let town = towns(7)[0];
+        let mut cache = LifeCache::default();
+        let mean = |cache: &mut LifeCache, depth: u32| {
+            let mut rng = Rng::new(11);
+            let draws: Vec<Wildlife> = (0..200).map(|_| cache.draw_deep(7, town, depth, &mut rng)).collect();
+            let n = draws.len() as f32;
+            let size = draws.iter().map(|w| w.phenotype().size).sum::<f32>() / n;
+            let stats: Vec<Stats> = draws.iter().map(Wildlife::stats).collect();
+            let hp = stats.iter().map(|s| s.hp).sum::<i32>() as f32 / n;
+            let hit = stats.iter().map(|s| s.hit).sum::<i32>() as f32 / n;
+            let xp = stats.iter().map(|s| s.xp).sum::<u32>() as f32 / n;
+            (size, hp, hit, xp)
+        };
+        let (one, five, ten) = (mean(&mut cache, 1), mean(&mut cache, 5), mean(&mut cache, 10));
+        assert!(one.0 < ten.0, "deeper selection favors bigger bodies: {one:?} {ten:?}");
+        assert!(five.1 > one.1 * 1.8 && ten.1 > one.1 * 3.0, "health: {one:?} {five:?} {ten:?}");
+        assert!(five.2 >= one.2 + 4.0 && ten.2 >= one.2 + 9.0, "accuracy: {one:?} {five:?} {ten:?}");
+        assert!(ten.3 > one.3 * 10.0, "deep kills are worth far more: {one:?} {ten:?}");
     }
 }

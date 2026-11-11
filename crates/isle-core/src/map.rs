@@ -59,8 +59,8 @@ impl Tile {
 pub enum LevelId {
     /// The surface: towns and the wilds between them.
     Surface,
-    /// The Deep beneath a town's stairs.
-    Deep(Town),
+    /// A floor of the Deep beneath a town's stairs, from depth 1.
+    Deep(Town, u32),
 }
 
 /// A part of a map where a service is offered.
@@ -155,7 +155,7 @@ pub struct Place {
     pub start: Option<Pos>,
     /// The active town's revival spot.
     pub respawn: Option<Pos>,
-    /// The active town's stairs down.
+    /// The active town's or floor's stairs down.
     pub stairs_down: Option<Pos>,
     /// The Deep's stairs up.
     pub stairs_up: Option<Pos>,
@@ -168,7 +168,7 @@ impl Place {
     pub(crate) fn new(id: LevelId, terrain: Terrain, towns: [Option<Town>; 10], at: Pos) -> Place {
         let deep = match id {
             LevelId::Surface => None,
-            LevelId::Deep(town) => Some(Deep::new(town)),
+            LevelId::Deep(town, depth) => Some(Deep::new(town, depth)),
         };
         let town = towns.iter().flatten().find(|t| t.contains(at)).copied().filter(|_| deep.is_none());
         Place {
@@ -179,7 +179,7 @@ impl Place {
             height: if deep.is_some() { Deep::HEIGHT } else { 28 },
             start: town.map(Town::start),
             respawn: town.map(Town::respawn),
-            stairs_down: town.map(Town::stairs),
+            stairs_down: town.map(Town::stairs).or(deep.map(|d| d.stairs_down())),
             stairs_up: deep.map(|d| d.stairs()),
             deep,
         }

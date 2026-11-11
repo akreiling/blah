@@ -137,7 +137,7 @@ fn stairs_lead_down_and_back_up() {
     game.clear_creatures();
     game.player_mut().pos = game.level().stairs_down.unwrap();
     round(&mut game, "d");
-    assert!(matches!(game.player().at, LevelId::Deep(_)));
+    assert!(matches!(game.player().at, LevelId::Deep(_, 1)));
     round(&mut game, "u");
     assert_eq!(game.player().at, LevelId::Surface);
     round(&mut game, "u");
@@ -326,7 +326,7 @@ fn wilderness_memory_spans_signed_chunks_and_survives_saving_and_level_changes()
         assert!(!loaded.sees(pos));
         assert!(loaded.remembers(pos));
     }
-    loaded.player_mut().at = LevelId::Deep(loaded.level().towns().next().unwrap());
+    loaded.player_mut().at = LevelId::Deep(loaded.level().towns().next().unwrap(), 1);
     assert!(!loaded.remembers((-1, -1)));
     loaded.player_mut().at = LevelId::Surface;
     assert!(loaded.remembers((-1, -1)));
@@ -374,7 +374,7 @@ fn other_towns_trade_heal_and_return_you_to_the_correct_stairs_after_reload() {
         assert_eq!(game.player().hp, game.player().max_hp);
         game.player_mut().pos = town.stairs();
         round(&mut game, "down");
-        assert_eq!(game.player().at, LevelId::Deep(town));
+        assert_eq!(game.player().at, LevelId::Deep(town, 1));
         game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
         round(&mut game, "up");
         assert_eq!(game.player().pos, town.stairs());

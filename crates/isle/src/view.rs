@@ -1009,7 +1009,7 @@ mod tests {
             let mut input = CommandLine::default();
             let town = game.level().town_at(stairs).unwrap();
             for (i, (punctuation, level)) in [
-                (">", isle_core::LevelId::Deep(town)),
+                (">", isle_core::LevelId::Deep(town, 1)),
                 ("<", isle_core::LevelId::Surface),
                 (",", isle_core::LevelId::Surface),
             ]

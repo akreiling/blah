@@ -2,8 +2,8 @@
 
 Isle is a solo island adventure in the manner of *Island of Kesmai* (Kesmai, 1985), being merged with
 blah one system at a time. Its wilderness now uses blah's seeded procedural terrain and evolved regional
-life. Towns are generated on dry ground, each with its own generated Deep below. Callings are still
-Isle's original system.
+life. Towns are generated on dry ground, each over its own generated Deep, floor after floor down.
+Callings are still Isle's original system.
 
 - `crates/isle-core`: the rules. Pure and deterministic; the whole `Game` serializes, dice included.
 - `crates/isle`: the GPUI window. Run it with `just isle`.
@@ -84,21 +84,37 @@ Individual genomes determine health, armor, attack, speed, senses, and terrain a
 flee (cornered, provoked ones fight back), territorial creatures defend home or retaliate, and aggressive
 ones hunt. They stay within seven cells of home. Faster creatures bank speed between rounds and can take
 up to two actions per round. The IN SIGHT panel shows their regional names and temperaments; target those
-names or the usual letters. Wildlife drops small amounts of gold, not manufactured gear.
+names or the usual letters. Wildlife drops coins and sometimes scavenged gear, with stronger creatures
+leaving better finds.
 
-Every town's stairs lead down to its own Deep: a 64×32 maze of rooms joined by corridors, the same each
-time for that town. You arrive on a stair landing that Deep life never enters or attacks into. What you
-have seen, what you dropped, and who lives there persist per Deep across visits and saves; a Deep you are
-not in waits unchanged.
+Every town's stairs lead down to its own Deep, one 64×32 floor per depth with no bottom. Each floor is a
+maze of rooms joined by corridors, the same each time for that town and depth. It has two safe landings:
+one at the stairs up, where you arrive, and one at the stairs down, in the room farthest away. Deep life
+never enters a landing or attacks into one. Climbing up from a floor puts you on the lower landing of the
+floor above. What you have seen, what lies on the floor, and who lives there persist per floor across
+visits and saves; a floor you are not on waits unchanged.
 
 Deep life is evolved, not authored. The Deep is a fitness environment like a biome: cool, damp, unchanging
 stone with little food, which favors small, bold, well-legged creatures and barely rewards coloring. Each
-town's Deep grows two to four of blah's clades, chosen by how well they could fit, evolved from their clade
-base for the same number of generations as surface regions, and named for the Deep (Hollow Tickler, Burrow
-Glide). They follow the same genome-driven rules as wildlife, within fourteen cells of home. Each room
-past the landing has a spawn point that refills sixty rounds after its creature dies, out of sight. The
-room farthest from the stairs is a den: its keeper is the strongest of four draws and guards a ring of
-warding and a potion, returning four hundred rounds after it falls.
+floor grows two to four of blah's clades, chosen by how well they could fit, evolved from their clade base
+for the same number of generations as surface regions, and named for the Deep (Hollow Tickler, Crag
+Slither). Every floor down is colder and hungrier, which selects bigger, bolder bodies, and its survivors
+are hardened besides: below the first floor, each depth adds a third of their health, +1 to hit and to top
+damage, and armor every other floor. Experience grows faster than that. A typical creature goes from 8
+health, +2 to hit, and 16 experience at depth 1 to about 27 health, +7, and 140 at depth 5, and 59 health,
++13, 7–14 damage, and about 510 experience at depth 10. They follow the same genome-driven rules as
+wildlife, within fourteen cells of home.
+
+Each room but the landings has a spawn point that refills sixty rounds after its creature dies, out of
+sight. The remaining room farthest from the stairs up is a den: its keeper is the strongest of four draws
+and sits on a hoard, returning four hundred rounds after it falls.
+
+Treasure is random and scales with what it took to get. Every floor is stocked once, when first reached,
+with one to six piles; deeper floors have more and richer ones. A kill drops coins, and evolved life may
+also drop gear it gathered: the more experience it is worth, the likelier the drop and the better the gear.
+A find never holds gear priced under a sixth of its value, so deep finds run to longbows, chainmail, plate,
+and the ring of warding rather than daggers. Den hoards are worth eight times the keeper's experience and
+always include a potion.
 
 Saves live in the platform data directory (`isle/save.json`) and are rewritten after every round. `--new`
 starts another character and keeps the old save beside it; `--save PATH` and `--seed N` pick the file and
@@ -137,7 +153,7 @@ Every reply says what the request did: `steps` (keystrokes delivered), `interrup
   cursor. About 1 KB.
 - `"map": "rows"` adds the current level's `terrain` (one character per cell, as in `map.rs`) and `view`
   (blank where unseen), with size, `origin: [x, y]`, and stair positions. In town and underground this is
-  a 50×28 window starting at that town's northwest corner, or the whole 64×32 Deep at origin `[0, 0]`.
+  a 50×28 window starting at that town's northwest corner, or the whole 64×32 floor of a Deep at origin `[0, 0]`.
   Outside town it is a 50×28 window centered on the character. `towns` lists nearby generated settlements
   and the starting town, with their names, footprints, arrival points, shops, temples, and stairs.
   Row/column indices are relative to `origin`, while stair positions remain level coordinates.
@@ -159,8 +175,9 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
   and shooting an actual spawned individual by its regional name.
 - `python3 crates/isle/scripts/towns.py` visits two generated towns, exercises their services, and checks
   stair returns and revival after reload.
-- `python3 crates/isle/scripts/deep.py` descends below two towns and checks separate layouts, evolved
-  Deep life off the landing, and that each Deep's life and memory persist across visits and reloads.
+- `python3 crates/isle/scripts/deep.py` descends below two towns and to a second floor, and checks separate
+  layouts, evolved life off the landings, tougher life deeper down, stair returns, and that each floor's life
+  and memory persist across visits and reloads.
 - `python3 crates/isle/scripts/seed7.py` plans routes from the map and fights from the window's panel. It
   walks to the stairs, heads for the far end of the Deep, and retreats to the temple to heal. Games are deterministic per seed and input, so its
   output repeats exactly.

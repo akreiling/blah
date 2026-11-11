@@ -1,9 +1,10 @@
-//! A generated Deep beneath each town: rooms joined into one tree of corridors, around a safe stair landing.
-//! The layout is a pure function of the town, so saves keep only what was seen and what lives there.
+//! A generated Deep beneath each town, one floor per depth: rooms joined into one tree of corridors, with a
+//! safe landing at the stairs up and another at the stairs down. Each floor is a pure function of the town
+//! and depth, so saves keep only what was seen, what lies there, and what lives there.
 
 use blah_core::Rng;
 
-use crate::map::{Pos, Tile, distance};
+use crate::map::{LevelId, Pos, Tile, distance};
 use crate::town::Town;
 
 /// Most rooms in one Deep, the landing included.
@@ -35,11 +36,15 @@ impl Room {
     }
 }
 
-/// The dungeon beneath one town.
+/// One floor of the dungeon beneath a town.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Deep {
     /// The town whose stairs lead here.
     pub town: Town,
+    /// Floors below the surface, from 1.
+    pub depth: u32,
+    /// The room holding the stairs down, farthest from the stairs up.
+    down: usize,
     rooms: [Room; ROOMS],
     /// Each room after the landing joins an earlier one; the flag says whether the corridor runs across first.
     links: [(usize, bool); ROOMS],
@@ -52,9 +57,10 @@ impl Deep {
     /// Cells down.
     pub const HEIGHT: i32 = 32;
 
-    /// The Deep under `town`.
-    pub fn new(town: Town) -> Deep {
-        let mut rng = Rng::keyed(town.variant(), b"isledeep", &[town.origin.0 as u64, town.origin.1 as u64]);
+    /// The floor `depth` levels under `town`.
+    pub fn new(town: Town, depth: u32) -> Deep {
+        let keys = [town.origin.0 as u64, town.origin.1 as u64, u64::from(depth)];
+        let mut rng = Rng::keyed(town.variant(), b"isledeep", &keys);
         let mut rooms = [Room::default(); ROOMS];
         let mut count = 0;
         for _ in 0..400 {
@@ -84,17 +90,37 @@ impl Deep {
                 .expect("the landing comes first");
             links[i] = (nearest, rng.chance(0.5));
         }
-        Deep { town, rooms, links, count }
+        let up = rooms[0].center();
+        let down = (1..count).max_by_key(|&i| (distance(rooms[i].center(), up), i)).expect("more than one room");
+        Deep { town, depth, down, rooms, links, count }
     }
 
-    /// The stairs up, in the middle of the landing.
+    /// Where this floor is.
+    pub fn level(&self) -> LevelId {
+        LevelId::Deep(self.town, self.depth)
+    }
+
+    /// The stairs up, in the middle of the upper landing.
     pub fn stairs(&self) -> Pos {
         self.rooms[0].center()
     }
 
-    /// Whether a cell is on the stair landing, where nothing that lives here goes.
+    /// The stairs down, in the middle of the lower landing.
+    pub fn stairs_down(&self) -> Pos {
+        self.rooms[self.down].center()
+    }
+
+    /// Whether a cell is in a stair landing, where nothing that lives here goes.
     pub fn landing(&self, at: Pos) -> bool {
-        self.rooms[0].contains(at)
+        self.rooms[0].contains(at) || self.rooms[self.down].contains(at)
+    }
+
+    /// A seeded floor cell outside both landings and off the room centers where creatures rise.
+    pub(crate) fn hiding_place(&self, rng: &mut Rng) -> Pos {
+        let rooms: Vec<Room> = (1..self.count).filter(|&i| i != self.down).map(|i| self.rooms[i]).collect();
+        let room = rooms[rng.below(rooms.len())];
+        let at = (room.x + rng.below(room.w as usize) as i32, room.y + rng.below(room.h as usize) as i32);
+        if at == room.center() || at == (room.x + 1, room.y + 1) { (room.x + room.w - 1, room.y) } else { at }
     }
 
     /// Whether a coordinate is on this map.
@@ -102,13 +128,15 @@ impl Deep {
         x >= 0 && y >= 0 && x < Self::WIDTH && y < Self::HEIGHT
     }
 
-    /// Where creatures rise: one in every room past the landing, two in big ones. The flag marks the den in
-    /// the room farthest from the stairs.
+    /// Where creatures rise: one in every room but the landings, two in big ones. The flag marks the den, in
+    /// the remaining room farthest from the stairs up.
     pub fn spawns(&self) -> Vec<(Pos, bool)> {
         let stairs = self.stairs();
-        let den = (1..self.count).max_by_key(|&i| (distance(self.rooms[i].center(), stairs), i));
+        let rooms = || (1..self.count).filter(|&i| i != self.down);
+        let den = rooms().max_by_key(|&i| (distance(self.rooms[i].center(), stairs), i));
         let mut spawns = Vec::new();
-        for (i, room) in self.rooms.iter().enumerate().take(self.count).skip(1) {
+        for i in rooms() {
+            let room = self.rooms[i];
             spawns.push((room.center(), Some(i) == den));
             if room.w * room.h >= 40 {
                 spawns.push(((room.x + 1, room.y + 1), false));
@@ -137,6 +165,8 @@ impl Deep {
             Tile::Wall
         } else if at == self.stairs() {
             Tile::StairsUp
+        } else if at == self.stairs_down() {
+            Tile::StairsDown
         } else if self.floor(at) {
             Tile::Floor
         } else {
@@ -150,7 +180,7 @@ impl Deep {
 
     /// Its name, as the log says it.
     pub fn name(&self) -> String {
-        format!("the Deep beneath {}", self.town.name())
+        format!("the Deep beneath {}, depth {}", self.town.name(), self.depth)
     }
 }
 
@@ -165,13 +195,13 @@ mod tests {
             let mut game = crate::Game::new(seed);
             game.answer("Ash");
             game.answer("fighter");
-            found.extend(game.level().towns().map(Deep::new));
+            found.extend(game.level().towns().flat_map(|town| [1, 2, 9].map(|depth| Deep::new(town, depth))));
         }
         found
     }
 
     #[test]
-    fn every_deep_is_connected_walled_and_has_rooms_a_landing_and_a_den() {
+    fn every_floor_is_connected_walled_and_has_rooms_two_landings_and_a_den() {
         let all = deeps();
         assert!(all.len() > 24);
         let mut layouts = HashSet::new();
@@ -180,6 +210,8 @@ mod tests {
             layouts.insert(deep.rooms);
             let start = deep.stairs();
             assert_eq!(deep.tile(start), Tile::StairsUp);
+            assert_eq!(deep.tile(deep.stairs_down()), Tile::StairsDown);
+            assert!(deep.landing(deep.stairs_down()) && distance(start, deep.stairs_down()) > 2);
             let mut reached = HashSet::from([start]);
             let mut queue = VecDeque::from([start]);
             while let Some((x, y)) = queue.pop_front() {
@@ -204,14 +236,21 @@ mod tests {
                 assert_eq!(deep.tile(at), Tile::Floor);
                 assert!(!deep.landing(at));
             }
+            let mut rng = Rng::new(3);
+            for _ in 0..20 {
+                let at = deep.hiding_place(&mut rng);
+                assert!(deep.tile(at) == Tile::Floor && !deep.landing(at));
+                assert!(!deep.spawns().iter().any(|s| s.0 == at));
+            }
         }
         assert!(layouts.len() > 20, "towns have their own layouts");
     }
 
     #[test]
-    fn a_town_always_has_the_same_deep() {
+    fn a_town_always_has_the_same_floors_and_each_depth_differs() {
         for deep in deeps().into_iter().take(8) {
-            assert_eq!(Deep::new(deep.town), deep);
+            assert_eq!(Deep::new(deep.town, deep.depth), deep);
+            assert_ne!(Deep::new(deep.town, deep.depth + 1).rooms, deep.rooms);
         }
     }
 }

@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::rng::Rng;
+
 /// A character's calling, chosen at creation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Class {
@@ -267,6 +269,39 @@ pub fn sale_price(item: Item) -> u32 {
     }
 }
 
+/// What a treasure is reckoned at, which is what the outfitter charges for it. The ring is not sold.
+fn worth(item: Item) -> u32 {
+    match item {
+        Item::Ring => 300,
+        _ => SHOP.iter().find(|(i, _)| *i == item).map_or(0, |&(_, price)| price),
+    }
+}
+
+/// A find worth about `value` gold: coins, and maybe the best kind of thing that value buys. The bigger the
+/// value, the better the gear, since nothing priced at under a sixth of it is worth carrying off.
+pub(crate) fn treasure(value: u32, item_chance: i32, rng: &mut Rng) -> Vec<Item> {
+    let mut found = Vec::new();
+    if rng.chance(item_chance) {
+        let floor = value.min(1800) / 6;
+        let goods: Vec<Item> = SHOP
+            .iter()
+            .map(|&(item, _)| item)
+            .chain([Item::Ring])
+            .filter(|&item| (floor..=value).contains(&worth(item)))
+            .collect();
+        if !goods.is_empty() {
+            found.push(goods[rng.below(goods.len() as u32) as usize]);
+        }
+        if rng.chance(25) && value >= 25 {
+            found.push(Item::Potion);
+        }
+    }
+    let coins = rng.range((value / 4) as i32, (value / 2) as i32);
+    if coins > 0 {
+        found.push(Item::Gold(coins as u32));
+    }
+    found
+}
 /// A spell, chanted one round and cast the next.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Spell {
@@ -449,5 +484,22 @@ mod tests {
         assert_eq!(sale_price(Item::Bow(Bow::Longbow)), 60);
         assert_eq!(sale_price(Item::Weapon(Weapon::Staff)), 5);
         assert_eq!(sale_price(Item::Ring), 150);
+    }
+
+    #[test]
+    fn bigger_treasures_hold_better_gear_and_more_gold() {
+        let mut rng = Rng::new(9);
+        let mean_worth = |value: u32, rng: &mut Rng| {
+            let finds: Vec<Vec<Item>> = (0..400).map(|_| treasure(value, 100, rng)).collect();
+            let gear: Vec<u32> =
+                finds.iter().flatten().filter(|i| !matches!(i, Item::Gold(_))).map(|&i| worth(i)).collect();
+            let gold: u32 = finds.iter().flatten().map(|i| if let Item::Gold(n) = i { *n } else { 0 }).sum();
+            (gear.iter().sum::<u32>() / gear.len().max(1) as u32, gold / 400)
+        };
+        let (small, large) = (mean_worth(30, &mut rng), mean_worth(400, &mut rng));
+        assert!(large.0 > small.0 * 4 && large.1 > small.1 * 8, "{small:?} {large:?}");
+        assert!((0..400).any(|_| treasure(600, 100, &mut rng).contains(&Item::Armor(Armor::Plate))));
+        assert!((0..400).all(|_| !treasure(30, 100, &mut rng).contains(&Item::Ring)));
+        assert!(treasure(0, 0, &mut rng).is_empty());
     }
 }
