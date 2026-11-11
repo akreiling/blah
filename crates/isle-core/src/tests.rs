@@ -32,7 +32,7 @@ fn creation_asks_name_then_a_unique_calling() {
     assert!(matches!(game.phase(), Phase::Calling(_)), "th is both thief and thaumaturge");
     game.answer("tha");
     assert_eq!(game.player().class, Class::Thaumaturge);
-    assert!(game.player().max_mp > 0 && !game.creatures().is_empty());
+    assert!(game.player().max_mp > 0);
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn stairs_lead_down_and_back_up() {
     game.clear_creatures();
     game.player_mut().pos = game.level().stairs_down.unwrap();
     round(&mut game, "d");
-    assert_eq!(game.player().at, LevelId::Undercroft);
+    assert!(matches!(game.player().at, LevelId::Deep(_)));
     round(&mut game, "u");
     assert_eq!(game.player().at, LevelId::Surface);
     round(&mut game, "u");
@@ -326,7 +326,7 @@ fn wilderness_memory_spans_signed_chunks_and_survives_saving_and_level_changes()
         assert!(!loaded.sees(pos));
         assert!(loaded.remembers(pos));
     }
-    loaded.player_mut().at = LevelId::Undercroft;
+    loaded.player_mut().at = LevelId::Deep(loaded.level().towns().next().unwrap());
     assert!(!loaded.remembers((-1, -1)));
     loaded.player_mut().at = LevelId::Surface;
     assert!(loaded.remembers((-1, -1)));
@@ -374,7 +374,7 @@ fn other_towns_trade_heal_and_return_you_to_the_correct_stairs_after_reload() {
         assert_eq!(game.player().hp, game.player().max_hp);
         game.player_mut().pos = town.stairs();
         round(&mut game, "down");
-        assert_eq!(game.player().at, LevelId::Undercroft);
+        assert_eq!(game.player().at, LevelId::Deep(town));
         game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
         round(&mut game, "up");
         assert_eq!(game.player().pos, town.stairs());

@@ -1,8 +1,10 @@
-"""Play seed 7's generated town and dungeon with a frail fighter (12 health, armor class 10).
+"""Play seed 7's starting town and the Deep beneath it with a frail fighter (12 health, armor class 10).
 
 Run after `cargo build -p isle`:  python3 crates/isle/scripts/seed7.py
-Uses the omniscient town map to plan walks, and only the window's panel to make combat decisions.
+Uses the omniscient maps to plan walks, and only the window's panel to make combat decisions.
 """
+
+import collections
 
 from isle import Isle, hp, sighted, panel_value
 from smoke import route
@@ -22,21 +24,48 @@ def walk(isle, route, label):
             raise RuntimeError(f"{label} was interrupted: {sighted(isle.screen())}")
 
 
-def fight(isle, retreat_at):
-    """Stand on the stairs: wait for hunters to come, attack the nearest. Returns 'clear', 'retreat', or 'died'."""
-    for _ in range(60):
-        screen = isle.screen()
-        seen = sighted(screen)
-        if not seen:
-            return "clear"
-        if hp(screen)[0] <= retreat_at:
-            say(isle.batch("<"), "retreat")
-            return "retreat"
-        letter, name, distance, _ = seen[0]
-        result = say(isle.batch(f"attack {letter.lower()}\n" if distance <= 1 else "wait\n"), f"{name} at {distance}")
-        if any(line["tone"] == "Death" for line in result["news"]):
+def farthest(level, start):
+    """The walkable cell farthest from start by cardinal steps."""
+    todo, dist = collections.deque([start]), {start: 0}
+    while todo:
+        x, y = todo.popleft()
+        for nxt in [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]:
+            if 0 <= nxt[0] < level["width"] and 0 <= nxt[1] < level["height"] and nxt not in dist \
+                    and level["terrain"][nxt[1]][nxt[0]] in ".<":
+                dist[nxt] = dist[(x, y)] + 1
+                todo.append(nxt)
+    return max(dist, key=lambda p: (dist[p], p))
+
+
+def position(isle):
+    return tuple(isle.request("state", state=False, game=True)["game"]["player"]["pos"])
+
+
+def explore(isle, level, retreat_at):
+    """Walk toward the far end of the Deep, fighting what comes. Returns 'deep', 'retreat', or 'died'."""
+    stairs = tuple(level["stairs_up"])
+    for key in route(level, stairs, farthest(level, stairs)):
+        for _ in range(40):
+            screen = isle.screen()
+            seen = sighted(screen)
+            if hp(screen)[0] <= retreat_at:
+                for step in route(level, position(isle), stairs):
+                    if any(line["tone"] == "Death" for line in say(isle.batch(step), "flee")["news"]):
+                        return "died"
+                say(isle.batch("<"), "retreat")
+                return "retreat"
+            near = [s for s in seen if s[2] <= 1]
+            if near:
+                result = say(isle.batch(f"attack {near[0][0].lower()}\n"), f"{near[0][1]} beside")
+            elif any("hunting" in s[3] for s in seen):
+                result = say(isle.batch("wait\n"), f"{seen[0][1]} at {seen[0][2]}")
+            else:
+                break
+            if any(line["tone"] == "Death" for line in result["news"]):
+                return "died"
+        if any(line["tone"] == "Death" for line in say(isle.batch(key), "deeper")["news"]):
             return "died"
-    return "stalemate"
+    return "deep"
 
 
 def main():
@@ -48,8 +77,10 @@ def main():
         walk(isle, route(level, start, stairs), "to the stairs")
         for trip in range(4):
             say(isle.batch(">"), "descend")
+            deep = isle.request("state", state=False, map="rows")["map"]
+            print(f"trip {trip + 1}: {deep['name']}")
             # Retreat before another strong blow can kill this frail character.
-            outcome = fight(isle, retreat_at=7)
+            outcome = explore(isle, deep, retreat_at=6)
             print(f"trip {trip + 1}: {outcome}; {panel_value(isle.screen(), 'Level')}; HP {hp(isle.screen())}")
             if outcome != "retreat":
                 break

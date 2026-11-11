@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::map::{Pos, Terrain, Tile, Zone};
 
 /// A terrain-placed town with three guaranteed services and a safe central square.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Town {
     /// Northwest corner, in surface coordinates.
     pub origin: Pos,
@@ -26,6 +26,10 @@ impl Town {
     fn new(seed: u64, origin: Pos, world_center: (i64, i64)) -> Town {
         let variant = Rng::keyed(seed, b"isletown", &[world_center.0 as u64, world_center.1 as u64]).next_u64();
         Town { origin, variant }
+    }
+
+    pub(crate) fn variant(self) -> u64 {
+        self.variant
     }
 
     /// The town's seeded name.

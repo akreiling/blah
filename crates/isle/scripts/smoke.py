@@ -6,7 +6,7 @@ import pathlib
 import tempfile
 import time
 
-from isle import Isle, hp, sighted
+from isle import Isle, creature, hp, sighted
 
 
 def route(level, start, goal):
@@ -69,7 +69,7 @@ def turn_based():
         elapsed = time.perf_counter() - began
         assert not reply["interrupted"] and reply["steps"] == len(keys) + 2
         assert reply["game"]["player"]["at"] == "Surface" and reply["game"]["player"]["pos"] == stairs
-        assert any("descend into the Undercroft" in line["text"] for line in reply["news"])
+        assert any("descend into the Deep beneath" in line["text"] for line in reply["news"])
         assert json.loads(isle.save.read_text()) == reply["game"]
         print(f"PASS turn-based: {len(keys) + 2} keystrokes, {len(keys) + 2} rounds in one batch, {elapsed * 1000:.1f} ms")
         save = json.loads(isle.save.read_text())
@@ -79,10 +79,9 @@ def turn_based():
 
 def interruption(save, town):
     """A rat placed just out of sight interrupts a batch of moves toward it."""
-    rat = dict(save["creatures"][0], kind="Rat", at="Surface", hp=5, hunting=False, spawn=None)
     save["player"]["pos"] = town["start"]
     x, y = town["start"]
-    rat["pos"] = rat["home"] = [x+7, y]
+    rat = creature(save, "Rat", "Surface", [x + 7, y], 5)
     save["creatures"], save["spawns"] = [rat], []
     with tempfile.TemporaryDirectory(prefix="isle-save-", dir="/tmp") as directory:
         path = pathlib.Path(directory) / "save.json"

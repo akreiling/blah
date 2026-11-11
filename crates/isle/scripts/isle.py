@@ -105,5 +105,13 @@ def sighted(screen):
     return found
 
 
+def creature(save, kind, at, pos, hp, **fields):
+    """A fixed-table creature for a save fixture, with a fresh id from the save."""
+    save["next_id"] += 1
+    made = dict(id=save["next_id"] - 1, kind=kind, wild=None, energy=0, at=at, pos=list(pos), home=list(pos), hp=hp,
+                hunting=False, last_seen=None, lost=0, stunned=0, spawn=None)
+    return {**made, **fields}
+
+
 def panel_value(screen, label):
     return next((l[len(label) + 1:] for l in screen["panel"] if l.startswith(label + " ")), None)

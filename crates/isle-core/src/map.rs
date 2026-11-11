@@ -1,8 +1,8 @@
-//! Procedural surface terrain and towns, with an authored dungeon beneath their stairs.
+//! Procedural surface terrain and towns, with a generated Deep beneath each town's stairs.
 
-use std::sync::OnceLock;
-
+use crate::deep::Deep;
 use crate::town::Town;
+use crate::wildlife::DEEP;
 use blah_core::{Biome, BiomeId, Rng, World};
 use serde::{Deserialize, Serialize};
 
@@ -57,22 +57,10 @@ impl Tile {
 /// Which map a thing is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum LevelId {
-    /// The town and the fields around it.
+    /// The surface: towns and the wilds between them.
     Surface,
-    /// The halls beneath the watchtower.
-    Undercroft,
-}
-
-impl LevelId {
-    /// Both levels, in save order.
-    pub const ALL: [LevelId; 2] = [LevelId::Surface, LevelId::Undercroft];
-
-    pub(crate) const fn index(self) -> usize {
-        match self {
-            LevelId::Surface => 0,
-            LevelId::Undercroft => 1,
-        }
-    }
+    /// The Deep beneath a town's stairs.
+    Deep(Town),
 }
 
 /// A part of a map where a service is offered.
@@ -85,174 +73,6 @@ pub enum Zone {
     /// Inside the temple.
     Temple,
 }
-
-/// What kind of creature a spawn point raises.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SpawnKind {
-    /// Woods beasts on the surface.
-    Wild,
-    /// The undercroft's rank and file.
-    Deep,
-    /// The thing at the bottom.
-    Lair,
-}
-
-/// One authored map.
-#[derive(Debug)]
-pub struct Level {
-    /// Which level this is.
-    pub id: LevelId,
-    /// Its name, as the log says it.
-    pub name: &'static str,
-    /// Cells across.
-    pub width: i32,
-    /// Cells down.
-    pub height: i32,
-    tiles: Vec<Tile>,
-    zones: Vec<Zone>,
-    /// Where creatures rise, in map order.
-    pub spawns: Vec<(Pos, SpawnKind)>,
-    /// Where a new character stands, if on this level.
-    pub start: Option<Pos>,
-    /// Where the fallen wake, if on this level.
-    pub respawn: Option<Pos>,
-    /// The stairs down, if any.
-    pub stairs_down: Option<Pos>,
-    /// The stairs up, if any.
-    pub stairs_up: Option<Pos>,
-}
-
-const UNDERCROFT: [&str; 19] = [
-    "##################################################",
-    "#<....#..........#...............#...............#",
-    "#.....#..m.......#.......m.......#...............#",
-    "#.....+..........+...............#.......m.......#",
-    "#.....#..........#...............+...............#",
-    "###+###..........#...............#...............#",
-    "#.....############.......#########.......m.......#",
-    "#.................#......#.......#...............#",
-    "#....m............#......#.......#######+#########",
-    "#.................+......#...............#.......#",
-    "#######+###########......+.......m.......#...B...#",
-    "#.................#......#...............+.......#",
-    "#.........m.......#......#################.......#",
-    "#.................#......#...............#.......#",
-    "#.................#...m..#...............#########",
-    "#######.###########......#.......m.......#.......#",
-    "#.................+......+...............+...m...#",
-    "#..m..............#......#...............#.......#",
-    "##################################################",
-];
-
-impl Level {
-    fn parse(id: LevelId, name: &'static str, rows: &[&str]) -> Level {
-        let height = rows.len() as i32;
-        let width = rows[0].len() as i32;
-        let mut level = Level {
-            id,
-            name,
-            width,
-            height,
-            tiles: Vec::with_capacity((width * height) as usize),
-            zones: Vec::with_capacity((width * height) as usize),
-            spawns: Vec::new(),
-            start: None,
-            respawn: None,
-            stairs_down: None,
-            stairs_up: None,
-        };
-        for (y, row) in rows.iter().enumerate() {
-            assert_eq!(row.len() as i32, width, "{name} row {y} is ragged");
-            for (x, c) in row.chars().enumerate() {
-                let at = (x as i32, y as i32);
-                let (tile, zone) = match c {
-                    '#' => (Tile::Wall, Zone::Open),
-                    '.' => (Tile::Floor, Zone::Open),
-                    ',' => (Tile::Grass, Zone::Open),
-                    'T' => (Tile::Tree, Zone::Open),
-                    '~' => (Tile::Water, Zone::Open),
-                    '+' => (Tile::Door, Zone::Open),
-                    '=' => (Tile::Counter, Zone::Shop),
-                    '_' => (Tile::Altar, Zone::Temple),
-                    'S' => (Tile::Floor, Zone::Shop),
-                    'H' => (Tile::Floor, Zone::Temple),
-                    'R' => {
-                        level.respawn = Some(at);
-                        (Tile::Floor, Zone::Temple)
-                    }
-                    '@' => {
-                        level.start = Some(at);
-                        (Tile::Floor, Zone::Open)
-                    }
-                    '>' => {
-                        level.stairs_down = Some(at);
-                        (Tile::StairsDown, Zone::Open)
-                    }
-                    '<' => {
-                        level.stairs_up = Some(at);
-                        (Tile::StairsUp, Zone::Open)
-                    }
-                    'm' | 'B' => {
-                        let kind = match (c, id) {
-                            ('B', _) => SpawnKind::Lair,
-                            (_, LevelId::Surface) => SpawnKind::Wild,
-                            _ => SpawnKind::Deep,
-                        };
-                        level.spawns.push((at, kind));
-                        (if id == LevelId::Surface { Tile::Grass } else { Tile::Floor }, Zone::Open)
-                    }
-                    other => panic!("{name} has an unknown map character {other:?}"),
-                };
-                level.tiles.push(tile);
-                level.zones.push(zone);
-            }
-        }
-        level
-    }
-
-    /// The authored dungeon, built once. The surface is procedural; use [`crate::Game::level`].
-    ///
-    /// # Panics
-    ///
-    /// If asked for the procedural surface.
-    pub fn get(id: LevelId) -> &'static Level {
-        assert_eq!(id, LevelId::Undercroft, "the surface is procedural");
-        static UNDER: OnceLock<Level> = OnceLock::new();
-        UNDER.get_or_init(|| Level::parse(LevelId::Undercroft, "the Undercroft", &UNDERCROFT))
-    }
-
-    fn index(&self, (x, y): Pos) -> Option<usize> {
-        (x >= 0 && y >= 0 && x < self.width && y < self.height).then(|| (y * self.width + x) as usize)
-    }
-
-    /// The cell at `at`; outside the map is wall.
-    pub fn tile(&self, at: Pos) -> Tile {
-        self.index(at).map_or(Tile::Wall, |i| self.tiles[i])
-    }
-
-    /// The service zone at `at`.
-    pub fn zone(&self, at: Pos) -> Zone {
-        self.index(at).map_or(Zone::Open, |i| self.zones[i])
-    }
-
-    /// Cells on the map.
-    pub fn cells(&self) -> usize {
-        self.tiles.len()
-    }
-
-    pub(crate) fn cell_index(&self, at: Pos) -> Option<usize> {
-        self.index(at)
-    }
-
-    /// Whether `from` can see `to` within `radius` cells: no opaque cell strictly between them.
-    pub fn sees(&self, from: Pos, to: Pos, radius: i32) -> bool {
-        if distance(from, to) > radius {
-            return false;
-        }
-        line(from, to).iter().skip(1).take_while(|&&p| p != to).all(|&p| !self.tile(p).opaque())
-    }
-}
-
 /// How much of a biome's ground is trees (passable, blocking sight) and rock (blocking both).
 fn cover(biome: &Biome) -> (f32, f32) {
     match biome.name {
@@ -322,97 +142,111 @@ impl Terrain {
     }
 }
 
-/// The active map: generated towns over terrain, or the authored dungeon.
+/// The active map: generated towns over terrain, or the Deep under one of them.
 #[derive(Clone, Copy, Debug)]
 pub struct Place {
     /// Current map identity.
     pub id: LevelId,
-    /// Width of control inspection windows, or of the dungeon.
+    /// Width of control inspection windows, or of the Deep.
     pub width: i32,
-    /// Height of control inspection windows, or of the dungeon.
+    /// Height of control inspection windows, or of the Deep.
     pub height: i32,
     /// The active town's arrival square, if standing in a town.
     pub start: Option<Pos>,
     /// The active town's revival spot.
     pub respawn: Option<Pos>,
-    /// The active town's dungeon entrance.
+    /// The active town's stairs down.
     pub stairs_down: Option<Pos>,
-    /// The dungeon exit.
+    /// The Deep's stairs up.
     pub stairs_up: Option<Pos>,
     terrain: Terrain,
     towns: [Option<Town>; 10],
+    deep: Option<Deep>,
 }
 
 impl Place {
     pub(crate) fn new(id: LevelId, terrain: Terrain, towns: [Option<Town>; 10], at: Pos) -> Place {
-        let town = towns.iter().flatten().find(|t| t.contains(at)).copied();
-        let under = Level::get(LevelId::Undercroft);
-        let surface = id == LevelId::Surface;
+        let deep = match id {
+            LevelId::Surface => None,
+            LevelId::Deep(town) => Some(Deep::new(town)),
+        };
+        let town = towns.iter().flatten().find(|t| t.contains(at)).copied().filter(|_| deep.is_none());
         Place {
             id,
             terrain,
             towns,
-            width: if surface { 50 } else { under.width },
-            height: if surface { 28 } else { under.height },
-            start: if surface { town.map(Town::start) } else { None },
-            respawn: if surface { town.map(Town::respawn) } else { None },
-            stairs_down: if surface { town.map(Town::stairs) } else { None },
-            stairs_up: if surface { None } else { under.stairs_up },
+            width: if deep.is_some() { Deep::WIDTH } else { 50 },
+            height: if deep.is_some() { Deep::HEIGHT } else { 28 },
+            start: town.map(Town::start),
+            respawn: town.map(Town::respawn),
+            stairs_down: town.map(Town::stairs),
+            stairs_up: deep.map(|d| d.stairs()),
+            deep,
         }
+    }
+
+    /// The Deep, when below ground.
+    pub fn deep(&self) -> Option<&Deep> {
+        self.deep.as_ref()
     }
 
     /// The town covering a surface cell.
     pub fn town_at(&self, at: Pos) -> Option<Town> {
-        (self.id == LevelId::Surface).then(|| self.towns.iter().flatten().find(|t| t.contains(at)).copied()).flatten()
+        if self.deep.is_some() {
+            return None;
+        }
+        self.towns.iter().flatten().find(|t| t.contains(at)).copied()
     }
 
     /// Generated towns in the currently inspected neighborhood, including the starting town.
     pub fn towns(&self) -> impl Iterator<Item = Town> + '_ {
-        self.towns.iter().flatten().copied().filter(|_| self.id == LevelId::Surface)
+        self.towns.iter().flatten().copied().filter(|_| self.deep.is_none())
     }
 
     /// Whether a coordinate is on this map.
     pub fn contains(&self, at: Pos) -> bool {
-        self.id == LevelId::Surface || Level::get(LevelId::Undercroft).index(at).is_some()
+        self.deep.is_none_or(|d| d.contains(at))
     }
 
-    /// Whether a cell belongs to a safe town or to the authored dungeon.
+    /// Whether a cell belongs to a generated town or to the Deep's fixed layout, rather than open wilderness.
     pub fn authored(&self, at: Pos) -> bool {
-        if self.id == LevelId::Surface {
-            self.town_at(at).is_some()
-        } else {
-            Level::get(LevelId::Undercroft).index(at).is_some()
+        match &self.deep {
+            Some(deep) => deep.contains(at),
+            None => self.town_at(at).is_some(),
         }
+    }
+
+    /// Whether living things leave you alone here: a town, or the Deep's stair landing.
+    pub fn safe(&self, at: Pos) -> bool {
+        match &self.deep {
+            Some(deep) => deep.landing(at),
+            None => self.town_at(at).is_some(),
+        }
+    }
+
+    /// The conditions life meets on a cell.
+    pub fn ground(&self, at: Pos) -> &'static Biome {
+        if self.deep.is_some() { &DEEP } else { self.terrain.biome(at).biome() }
     }
 
     /// The cell at a coordinate, including wilderness and any generated town.
     pub fn tile(&self, at: Pos) -> Tile {
-        if self.id == LevelId::Undercroft {
-            Level::get(LevelId::Undercroft).tile(at)
-        } else {
-            self.town_at(at).map_or_else(|| self.terrain.tile(at), |town| town.cell(at).0)
+        match &self.deep {
+            Some(deep) => deep.tile(at),
+            None => self.town_at(at).map_or_else(|| self.terrain.tile(at), |town| town.cell(at).0),
         }
     }
 
     /// A service zone at a coordinate.
     pub fn zone(&self, at: Pos) -> Zone {
-        if self.id == LevelId::Undercroft {
-            Zone::Open
-        } else {
-            self.town_at(at).map_or(Zone::Open, |town| town.cell(at).1)
-        }
+        self.town_at(at).map_or(Zone::Open, |town| town.cell(at).1)
     }
 
-    pub(crate) fn cell_index(&self, at: Pos) -> Option<usize> {
-        if self.id == LevelId::Surface { None } else { Level::get(LevelId::Undercroft).cell_index(at) }
-    }
-
-    /// The town, biome, or dungeon name at a coordinate.
+    /// The town, biome, or Deep name at a coordinate.
     pub fn name_at(&self, at: Pos) -> String {
-        if self.id == LevelId::Undercroft {
-            Level::get(LevelId::Undercroft).name.to_owned()
-        } else {
-            self.town_at(at).map_or_else(|| self.terrain.biome(at).biome().name.to_owned(), Town::name)
+        match &self.deep {
+            Some(deep) => deep.name(),
+            None => self.town_at(at).map_or_else(|| self.terrain.biome(at).biome().name.to_owned(), Town::name),
         }
     }
 
@@ -452,39 +286,6 @@ pub fn line(a: Pos, b: Pos) -> Vec<Pos> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{HashSet, VecDeque};
-
-    #[test]
-    fn every_walkable_dungeon_cell_is_reachable() {
-        let level = Level::get(LevelId::Undercroft);
-        let start = level.stairs_up.unwrap();
-        let mut reached = HashSet::from([start]);
-        let mut queue = VecDeque::from([start]);
-        while let Some((x, y)) = queue.pop_front() {
-            for dy in -1..=1 {
-                for dx in -1..=1 {
-                    let next = (x + dx, y + dy);
-                    if level.tile(next).walkable() && reached.insert(next) {
-                        queue.push_back(next);
-                    }
-                }
-            }
-        }
-        for y in 0..level.height {
-            for x in 0..level.width {
-                assert!(!level.tile((x, y)).walkable() || reached.contains(&(x, y)));
-            }
-        }
-        assert!(level.spawns.iter().any(|&(_, k)| k == SpawnKind::Lair));
-    }
-
-    #[test]
-    fn walls_block_sight_but_not_the_cell_itself() {
-        let level = Level::get(LevelId::Undercroft);
-        assert!(level.sees((1, 1), (3, 1), 6));
-        assert!(!level.sees((1, 1), (8, 1), 6));
-        assert!(level.sees((1, 1), (6, 1), 6));
-    }
 
     #[test]
     fn lines_run_end_to_end() {

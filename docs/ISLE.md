@@ -2,7 +2,8 @@
 
 Isle is a solo island adventure in the manner of *Island of Kesmai* (Kesmai, 1985), being merged with
 blah one system at a time. Its wilderness now uses blah's seeded procedural terrain and evolved regional
-life. Towns are generated on dry ground; the dungeon and callings are still Isle's original systems.
+life. Towns are generated on dry ground, each with its own generated Deep below. Callings are still
+Isle's original system.
 
 - `crates/isle-core`: the rules. Pure and deterministic; the whole `Game` serializes, dice included.
 - `crates/isle`: the GPUI window. Run it with `just isle`.
@@ -85,9 +86,19 @@ ones hunt. They stay within seven cells of home. Faster creatures bank speed bet
 up to two actions per round. The IN SIGHT panel shows their regional names and temperaments; target those
 names or the usual letters. Wildlife drops small amounts of gold, not manufactured gear.
 
-Town stairs currently share the authored Undercroft: rats, goblins, goblin archers, orcs, skeletons (arrows
-do half), and the pit troll. Upstairs returns to the exact town entrance used, including after a reload.
-Separate generated dungeons are the next integration step.
+Every town's stairs lead down to its own Deep: a 64×32 maze of rooms joined by corridors, the same each
+time for that town. You arrive on a stair landing that Deep life never enters or attacks into. What you
+have seen, what you dropped, and who lives there persist per Deep across visits and saves; a Deep you are
+not in waits unchanged.
+
+Deep life is evolved, not authored. The Deep is a fitness environment like a biome: cool, damp, unchanging
+stone with little food, which favors small, bold, well-legged creatures and barely rewards coloring. Each
+town's Deep grows two to four of blah's clades, chosen by how well they could fit, evolved from their clade
+base for the same number of generations as surface regions, and named for the Deep (Hollow Tickler, Burrow
+Glide). They follow the same genome-driven rules as wildlife, within fourteen cells of home. Each room
+past the landing has a spawn point that refills sixty rounds after its creature dies, out of sight. The
+room farthest from the stairs is a den: its keeper is the strongest of four draws and guards a ring of
+warding and a potion, returning four hundred rounds after it falls.
 
 Saves live in the platform data directory (`isle/save.json`) and are rewritten after every round. `--new`
 starts another character and keeps the old save beside it; `--save PATH` and `--seed N` pick the file and
@@ -126,7 +137,7 @@ Every reply says what the request did: `steps` (keystrokes delivered), `interrup
   cursor. About 1 KB.
 - `"map": "rows"` adds the current level's `terrain` (one character per cell, as in `map.rs`) and `view`
   (blank where unseen), with size, `origin: [x, y]`, and stair positions. In town and underground this is
-  a 50×28 window starting at that town's northwest corner, or the dungeon at origin `[0, 0]`.
+  a 50×28 window starting at that town's northwest corner, or the whole 64×32 Deep at origin `[0, 0]`.
   Outside town it is a 50×28 window centered on the character. `towns` lists nearby generated settlements
   and the starting town, with their names, footprints, arrival points, shops, temples, and stairs.
   Row/column indices are relative to `origin`, while stair positions remain level coordinates.
@@ -148,6 +159,8 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
   and shooting an actual spawned individual by its regional name.
 - `python3 crates/isle/scripts/towns.py` visits two generated towns, exercises their services, and checks
   stair returns and revival after reload.
-- `python3 crates/isle/scripts/seed7.py` plans town routes from the map and fights from the window's panel. It walks to the stairs,
-  fights from them, and retreats to the temple to heal. Games are deterministic per seed and input, so its
+- `python3 crates/isle/scripts/deep.py` descends below two towns and checks separate layouts, evolved
+  Deep life off the landing, and that each Deep's life and memory persist across visits and reloads.
+- `python3 crates/isle/scripts/seed7.py` plans routes from the map and fights from the window's panel. It
+  walks to the stairs, heads for the far end of the Deep, and retreats to the temple to heal. Games are deterministic per seed and input, so its
   output repeats exactly.

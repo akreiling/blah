@@ -5,7 +5,7 @@ import pathlib
 import tempfile
 import time
 
-from isle import Isle
+from isle import Isle, creature
 from smoke import route
 
 
@@ -28,7 +28,6 @@ def towns():
         # Select an actual generated settlement, then exercise its services with normal keyboard input.
         fixture = json.loads(json.dumps(save))
         fixture["player"]["pos"] = town["start"]
-        template = fixture["creatures"][0]
         fixture["creatures"], fixture["spawns"] = [], []
         with tempfile.TemporaryDirectory(prefix="isle-towns-", dir="/tmp") as directory:
             path = pathlib.Path(directory) / "save.json"
@@ -56,8 +55,7 @@ def towns():
             saved["player"]["pos"] = town["start"]
             saved["player"]["hp"] = 1
             x, y = town["start"]
-            troll = dict(template, kind="Troll", wild=None, hp=70, at="Surface",
-                         pos=[x+1, y], home=[x+1, y], hunting=True, spawn=None)
+            troll = creature(saved, "Troll", "Surface", [x + 1, y], 70, hunting=True)
             saved["creatures"] = [troll]
             path.write_text(json.dumps(saved))
             with Isle(save=path) as isle:

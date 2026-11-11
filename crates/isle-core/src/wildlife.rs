@@ -1,18 +1,66 @@
-//! Regional life is regenerated from the seed. Only individual identities and genomes belong in saves.
+//! Regional and Deep life are regenerated from the seed. Only individual identities and genomes belong in saves.
 
 use std::collections::VecDeque;
 
-use blah_core::{Clade, Genome, Phenotype, RegionCache, RegionLife, Rng, SpeciesId, World, clades, individual};
+use blah_core::{
+    Band, Biome, Clade, CladeId, Fitness, GENERATIONS, Genome, POOL_SIZE, Phenotype, RegionCache, RegionLife, Rng,
+    SpeciesId, World, clades, evolve, fitness, individual, potential,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::data::{Kind, Stats};
+use crate::town::Town;
 
-/// The evolved identity of one surface creature.
+/// What life under a town selects for: cool, damp, unchanging stone with little to eat. Scarce food favors small
+/// bodies and boldness, broken rock favors legs, and the dark makes coloring nearly irrelevant.
+pub const DEEP: Biome = Biome {
+    name: "Deep",
+    glyph: '.',
+    color: [96, 90, 84],
+    passable: true,
+    water: false,
+    deep: false,
+    productivity: 0.12,
+    elevation: Band::ANY,
+    moisture: Band::ANY,
+    temperature: Band::ANY,
+    fitness: Fitness {
+        heat: 0.05,
+        cold: 0.45,
+        wet: 0.55,
+        insulation: 0.4,
+        size: 0.3,
+        limbs: 0.5,
+        aggression: 0.75,
+        camo_hue: 0.08,
+        camo_strength: 0.1,
+    },
+};
+
+/// Words for life shaped by the Deep. They name where it lives, not senses the genome does not model.
+const DEEP_EPITHETS: [&str; 12] =
+    ["Cave", "Gloom", "Stone", "Hollow", "Drip", "Burrow", "Shale", "Grotto", "Crag", "Silt", "Under", "Echo"];
+
+/// Where a creature's population lives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Lineage {
+    /// A surface region's species.
+    Region(SpeciesId),
+    /// A clade evolved in the Deep under one town.
+    Deep {
+        /// The town above.
+        town: Town,
+        /// What it descends from.
+        clade: CladeId,
+    },
+}
+
+/// The evolved identity of one creature.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Wildlife {
-    /// The region and clade it descends from.
-    pub species: SpeciesId,
-    /// Its regional species name.
+    /// The population it descends from.
+    pub lineage: Lineage,
+    /// Its species name.
     pub name: String,
     /// Its individual genome, including variation from the species pool.
     pub genome: Genome,
@@ -39,6 +87,46 @@ impl Wildlife {
     }
 }
 
+/// One clade's population in one Deep.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DeepSpecies {
+    pub(crate) clade: CladeId,
+    pub(crate) name: String,
+    pub(crate) pool: Vec<Genome>,
+    pub(crate) abundance: f32,
+}
+
+/// Grows the life beneath `town`: two to four clades chosen by how well they could come to fit the Deep, each
+/// evolved there from its clade's base genome.
+pub(crate) fn grow_deep(seed: u64, clades: &[Clade], town: Town) -> Vec<DeepSpecies> {
+    let mut rng = Rng::keyed(seed, b"deeplife", &[town.origin.0 as u64, town.origin.1 as u64]);
+    let mut weights: Vec<f32> = clades.iter().map(|c| potential(c, &DEEP)).map(|p| p * p * p).collect();
+    let count = (2 + rng.below(3)).min(clades.len());
+    let mut chosen = Vec::with_capacity(count);
+    for _ in 0..count {
+        let i = rng.weighted(&weights);
+        weights[i] = 0.0;
+        chosen.push(i);
+    }
+    chosen.sort_unstable();
+    let mut species: Vec<DeepSpecies> = chosen
+        .into_iter()
+        .map(|i| {
+            let clade = &clades[i];
+            let mut pool: Vec<Genome> = (0..POOL_SIZE).map(|_| clade.base.mutate(&mut rng, 1.0, 0.10)).collect();
+            evolve(&mut pool, &DEEP, GENERATIONS, &mut rng);
+            let abundance = pool.iter().map(|g| fitness(&Phenotype::of(g), &DEEP)).sum::<f32>() / pool.len() as f32;
+            let name = format!("{} {}", DEEP_EPITHETS[rng.below(DEEP_EPITHETS.len())], clade.root);
+            DeepSpecies { clade: clade.id, name, pool, abundance }
+        })
+        .collect();
+    let total: f32 = species.iter().map(|s| s.abundance).sum();
+    for s in &mut species {
+        s.abundance = if total > 0.0 { s.abundance / total } else { 1.0 / count as f32 };
+    }
+    species
+}
+
 /// Disposable, bounded caches. Equality ignores them because warming them cannot affect game state.
 #[derive(Clone, Default)]
 pub(crate) struct LifeCache {
@@ -51,6 +139,7 @@ struct Cache {
     regions: RegionCache,
     clades: Vec<Clade>,
     lives: VecDeque<RegionLife>,
+    deeps: VecDeque<(Town, Vec<DeepSpecies>)>,
 }
 
 impl PartialEq for LifeCache {
@@ -71,16 +160,21 @@ impl LifeCache {
         self.inner.is_none()
     }
 
-    pub(crate) fn draw(&mut self, seed: u64, at: (i64, i64), rng: &mut Rng) -> Wildlife {
+    fn cache(&mut self, seed: u64) -> &mut Cache {
         if self.inner.as_ref().is_none_or(|cache| cache.seed != seed) {
             self.inner = Some(Cache {
                 seed,
                 regions: RegionCache::new(World::new(seed)),
                 clades: clades(seed),
                 lives: VecDeque::new(),
+                deeps: VecDeque::new(),
             });
         }
-        let cache = self.inner.as_mut().expect("initialized above");
+        self.inner.as_mut().expect("initialized above")
+    }
+
+    pub(crate) fn draw(&mut self, seed: u64, at: (i64, i64), rng: &mut Rng) -> Wildlife {
+        let cache = self.cache(seed);
         let id = cache.regions.region_at(at.0, at.1);
         let index = if let Some(index) = cache.lives.iter().position(|life| life.region == id) {
             index
@@ -96,7 +190,33 @@ impl LifeCache {
         let weights: Vec<f32> = life.species.iter().map(|s| s.abundance).collect();
         let species = &life.species[rng.weighted(&weights)];
         Wildlife {
-            species: species.id,
+            lineage: Lineage::Region(species.id),
+            name: species.name.clone(),
+            genome: individual(&species.pool[rng.below(species.pool.len())], rng),
+        }
+    }
+
+    pub(crate) fn deep_species(&mut self, seed: u64, town: Town) -> &[DeepSpecies] {
+        let cache = self.cache(seed);
+        let index = if let Some(index) = cache.deeps.iter().position(|(t, _)| *t == town) {
+            index
+        } else {
+            if cache.deeps.len() == 8 {
+                cache.deeps.pop_front();
+            }
+            let species = grow_deep(seed, &cache.clades, town);
+            cache.deeps.push_back((town, species));
+            cache.deeps.len() - 1
+        };
+        &cache.deeps[index].1
+    }
+
+    pub(crate) fn draw_deep(&mut self, seed: u64, town: Town, rng: &mut Rng) -> Wildlife {
+        let life = self.deep_species(seed, town);
+        let weights: Vec<f32> = life.iter().map(|s| s.abundance).collect();
+        let species = &life[rng.weighted(&weights)];
+        Wildlife {
+            lineage: Lineage::Deep { town, clade: species.clade },
             name: species.name.clone(),
             genome: individual(&species.pool[rng.below(species.pool.len())], rng),
         }
@@ -120,7 +240,7 @@ mod tests {
         let species = &life.species[rng.weighted(&weights)];
         let genome = individual(&species.pool[rng.below(species.pool.len())], &mut rng);
         let actual = LifeCache::default().draw(seed, at, &mut Rng::new(42));
-        assert_eq!(actual.species, species.id);
+        assert_eq!(actual.lineage, Lineage::Region(species.id));
         assert_eq!(actual.name, species.name);
         assert_eq!(actual.genome, genome);
     }
@@ -129,13 +249,61 @@ mod tests {
     fn life_cache_is_bounded_and_eviction_changes_no_individuals() {
         let mut cache = LifeCache::default();
         let first = cache.draw(7, (0, 0), &mut Rng::new(99));
+        let Lineage::Region(species) = first.lineage else { panic!("surface life has a region") };
         for x in 1..=17 {
             cache.draw(7, (x * 500, 0), &mut Rng::new(99));
             assert!(cache.inner.as_ref().unwrap().lives.len() <= 16);
         }
-        assert!(!cache.inner.as_ref().unwrap().lives.iter().any(|l| l.region == first.species.region));
+        assert!(!cache.inner.as_ref().unwrap().lives.iter().any(|l| l.region == species.region));
         assert_eq!(cache.draw(7, (0, 0), &mut Rng::new(99)), first);
         let changed = cache.draw(8, (0, 0), &mut Rng::new(99));
         assert_eq!(changed, LifeCache::default().draw(8, (0, 0), &mut Rng::new(99)));
+    }
+
+    fn towns(seed: u64) -> Vec<Town> {
+        let mut game = crate::Game::new(seed);
+        game.answer("Ash");
+        game.answer("fighter");
+        game.level().towns().collect()
+    }
+
+    #[test]
+    fn deep_life_is_evolved_for_the_deep_and_walks_its_floors() {
+        let mut fitter = 0;
+        let mut total = 0;
+        for seed in [3, 7, 11] {
+            for town in towns(seed) {
+                let deep = grow_deep(seed, &clades(seed), town);
+                assert!((2..=4).contains(&deep.len()));
+                assert!((deep.iter().map(|s| s.abundance).sum::<f32>() - 1.0).abs() < 1e-4);
+                for species in &deep {
+                    let clade = &clades(seed)[species.clade.0 as usize];
+                    let evolved = species.pool.iter().map(|g| fitness(&Phenotype::of(g), &DEEP)).sum::<f32>();
+                    let base = fitness(&Phenotype::of(&clade.base), &DEEP) * species.pool.len() as f32;
+                    total += 1;
+                    fitter += usize::from(evolved > base);
+                    let walkers = species.pool.iter().filter(|g| Phenotype::of(g).access.allows(&DEEP)).count();
+                    assert!(walkers * 2 > species.pool.len(), "{} cannot walk the Deep", species.name);
+                    assert!(DEEP_EPITHETS.iter().any(|e| species.name == format!("{e} {}", clade.root)));
+                }
+            }
+        }
+        assert!(fitter * 10 >= total * 9, "evolution under the Deep makes pools fitter there: {fitter}/{total}");
+    }
+
+    #[test]
+    fn deep_draws_are_reproducible_after_eviction_and_differ_between_towns() {
+        let all = towns(7);
+        let mut cache = LifeCache::default();
+        let first = cache.draw_deep(7, all[0], &mut Rng::new(5));
+        assert!(matches!(first.lineage, Lineage::Deep { town, .. } if town == all[0]));
+        for &town in all.iter().cycle().skip(1).take(9) {
+            cache.draw_deep(7, town, &mut Rng::new(5));
+            assert!(cache.inner.as_ref().unwrap().deeps.len() <= 8);
+        }
+        assert_eq!(cache.draw_deep(7, all[0], &mut Rng::new(5)), first);
+        let names: std::collections::HashSet<Vec<String>> =
+            all.iter().map(|&t| cache.deep_species(7, t).iter().map(|s| s.name.clone()).collect()).collect();
+        assert!(names.len() > 1, "each town's Deep has its own life");
     }
 }

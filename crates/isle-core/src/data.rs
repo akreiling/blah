@@ -332,7 +332,7 @@ pub enum Kind {
     Orc,
     /// Old bones, hard to hurt with arrows.
     Skeleton,
-    /// The pit troll at the bottom of the undercroft.
+    /// A pit troll, kept as a fixed-table fixture.
     Troll,
     /// An individual drawn from a region's evolved life.
     Wild,

@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::command::{self, Command, Dir, Instant, Parsed, Target};
 use crate::data::{Armor, Bow, Class, Item, Kind, LEVELS, SHOP, Spell, Stats, Weapon, sale_price};
-use crate::map::{Level, LevelId, Place, Pos, SpawnKind, Terrain, Tile, Zone, distance};
+use crate::deep::Deep;
+use crate::map::{LevelId, Place, Pos, Terrain, Tile, Zone, distance};
 use crate::rng::Rng;
 use crate::town::{Town, Towns};
 use crate::wildlife::{LifeCache, Wildlife};
@@ -20,12 +21,12 @@ const NOTICE: i32 = 7;
 const PATIENCE: u32 = 12;
 /// How far from home woods beasts follow you; the town lies beyond it.
 const WILD_LEASH: i32 = 7;
-/// How far from home undercroft creatures follow you.
+/// How far from home Deep life follows you.
 const DEEP_LEASH: i32 = 14;
 /// Rounds before an emptied spawn point raises another creature.
 const RESPAWN: u64 = 60;
-/// Rounds before the troll returns.
-const LAIR_RESPAWN: u64 = 400;
+/// Rounds before a Deep's den has a new keeper.
+const DEN_RESPAWN: u64 = 400;
 /// Things the sack holds.
 pub const SACK: usize = 12;
 /// Log lines kept.
@@ -270,10 +271,18 @@ pub struct Pile {
     pub items: Vec<Item>,
 }
 
+/// What has been seen of one Deep, a bit per cell.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct DeepMemory {
+    town: Town,
+    seen: Vec<u64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct SpawnState {
     at: LevelId,
     index: usize,
+    den: bool,
     occupant: Option<u32>,
     ready: u64,
 }
@@ -294,7 +303,6 @@ pub struct Game {
     terrain: Terrain,
     towns: Towns,
     revival: Pos,
-    entrance: Pos,
     rng: Rng,
     round: u64,
     phase: Phase,
@@ -303,9 +311,9 @@ pub struct Game {
     next_id: u32,
     piles: Vec<Pile>,
     spawns: Vec<SpawnState>,
-    /// Per level, cells ever seen.
-    seen: Vec<Vec<bool>>,
-    /// Outside the authored maps, 16×16 chunks of remembered cells, including negative coordinates.
+    /// Cells ever seen in each Deep visited.
+    deeps: Vec<DeepMemory>,
+    /// On the surface, 16×16 chunks of remembered cells, including negative coordinates.
     explored: BTreeMap<i32, BTreeMap<i32, [u64; 4]>>,
     log: Vec<Line>,
     log_total: u64,
@@ -319,24 +327,13 @@ impl Game {
     pub fn new(seed: u64) -> Game {
         let mut rng = Rng::new(seed);
         let player = Player::roll(String::new(), Class::Fighter, &mut rng);
-        let mut spawns = Vec::new();
-        for id in LevelId::ALL {
-            if id == LevelId::Surface {
-                continue;
-            }
-            for index in 0..Level::get(id).spawns.len() {
-                spawns.push(SpawnState { at: id, index, occupant: None, ready: 0 });
-            }
-        }
         let terrain = Terrain::new(seed);
         let mut towns = Towns::new(seed, terrain);
         towns.ensure(seed, terrain, Town::START);
-        let seen = vec![Vec::new(), vec![false; Level::get(LevelId::Undercroft).cells()]];
         let mut game = Game {
             seed,
             terrain,
             revival: towns.home.respawn(),
-            entrance: towns.home.stairs(),
             towns,
             rng,
             round: 0,
@@ -345,8 +342,8 @@ impl Game {
             creatures: Vec::new(),
             next_id: 1,
             piles: Vec::new(),
-            spawns,
-            seen,
+            spawns: Vec::new(),
+            deeps: Vec::new(),
             explored: BTreeMap::new(),
             log: Vec::new(),
             log_total: 0,
@@ -396,16 +393,12 @@ impl Game {
 
     /// Whether the character has ever seen `pos` on their map.
     pub fn remembers(&self, pos: Pos) -> bool {
-        if let Some(i) = self.level().cell_index(pos) {
-            return self.seen[self.player.at.index()][i];
+        if let LevelId::Deep(town) = self.player.at {
+            let Some(i) = self.level().deep().and_then(|d| d.cell_index(pos)) else { return false };
+            return self.deeps.iter().any(|d| d.town == town && d.seen[i / 64] & 1 << (i % 64) != 0);
         }
         let (chunk, word, bit) = memory_cell(pos);
-        self.player.at == LevelId::Surface
-            && self
-                .explored
-                .get(&chunk.0)
-                .and_then(|column| column.get(&chunk.1))
-                .is_some_and(|words| words[word] & bit != 0)
+        self.explored.get(&chunk.0).and_then(|column| column.get(&chunk.1)).is_some_and(|words| words[word] & bit != 0)
     }
 
     /// Whether the character sees `pos` now.
@@ -502,7 +495,6 @@ impl Game {
                 self.say(Tone::Info, format!("You stand in {}.", self.towns.home.name()));
                 self.town_directions();
                 self.say(Tone::System, "Type help for the commands. Each command you enter takes one round.");
-                self.spawn_all();
                 self.update_seen();
             }
             Phase::Play => {}
@@ -956,26 +948,29 @@ impl Game {
         let dead = self.creatures.remove(index);
         let stats = dead.stats();
         self.say(Tone::Kill, format!("The {} dies! (+{} experience)", stats.name, stats.xp));
+        let den = dead.spawn.is_some_and(|spawn| self.spawns[spawn].den);
         if let Some(spawn) = dead.spawn {
-            let delay = if dead.kind == Kind::Troll { LAIR_RESPAWN } else { RESPAWN };
             self.spawns[spawn].occupant = None;
-            self.spawns[spawn].ready = self.round + delay;
+            self.spawns[spawn].ready = self.round + if den { DEN_RESPAWN } else { RESPAWN };
         }
         let gold = self.rng.range(stats.gold.0, stats.gold.1);
         if gold > 0 {
             self.drop_at(dead.at, dead.pos, Item::Gold(gold as u32));
         }
-        for item in self.loot(dead.kind) {
+        if den {
+            self.say(Tone::Gain, "Something glints among the bones of its den.");
+        }
+        for item in self.loot(dead.kind, den) {
             self.drop_at(dead.at, dead.pos, item);
         }
         self.gain_xp(stats.xp);
     }
 
-    fn loot(&mut self, kind: Kind) -> Vec<Item> {
-        if kind == Kind::Wild {
+    fn loot(&mut self, kind: Kind, den: bool) -> Vec<Item> {
+        if kind == Kind::Wild && !den {
             return Vec::new();
         }
-        if kind == Kind::Troll {
+        if den || kind == Kind::Troll {
             return vec![Item::Ring, Item::Potion];
         }
         let mut items = Vec::new();
@@ -1169,33 +1164,30 @@ impl Game {
     }
 
     fn stairs(&mut self, down: bool) {
-        let tile = self.level().tile(self.player.pos);
-        let destination = match (down, tile, self.player.at) {
-            (true, Tile::StairsDown, LevelId::Surface) => LevelId::Undercroft,
-            (false, Tile::StairsUp, LevelId::Undercroft) => LevelId::Surface,
+        let level = self.level();
+        let tile = level.tile(self.player.pos);
+        let (destination, arrive) = match (down, tile, self.player.at, level.town_at(self.player.pos)) {
+            (true, Tile::StairsDown, LevelId::Surface, Some(town)) => (LevelId::Deep(town), Deep::new(town).stairs()),
+            (false, Tile::StairsUp, LevelId::Deep(town), _) => (LevelId::Surface, town.stairs()),
             _ => {
                 let way = if down { "down" } else { "up" };
                 self.say(Tone::Info, format!("There are no stairs {way} here."));
                 return;
             }
         };
-        let arrive = if down {
-            self.entrance = self.player.pos;
-            Level::get(LevelId::Undercroft).stairs_up.expect("the dungeon has an exit")
-        } else {
-            self.entrance
-        };
+        if let LevelId::Deep(town) = destination {
+            self.open_deep(town);
+        }
         self.player.at = destination;
         self.player.pos = arrive;
         self.player.hidden = false;
         let text = if down {
-            "You descend into the Undercroft. The air is cold and smells of old stone.".to_owned()
+            format!("You descend into {}. The air is cool, damp, and still.", self.level().name_at(arrive))
         } else {
             format!("You climb back into the daylight of {}.", self.level().name_at(arrive))
         };
         self.say(Tone::Info, text);
     }
-
     fn buy(&mut self, what: &str) {
         if self.zone() != Zone::Shop {
             self.say(Tone::Info, "There is no one here to buy from.");
@@ -1264,7 +1256,7 @@ impl Game {
             return;
         }
         let me = self.player.pos;
-        self.creatures.retain(|c| c.kind != Kind::Wild || distance(c.pos, me) <= 32);
+        self.creatures.retain(|c| c.at != LevelId::Surface || c.kind != Kind::Wild || distance(c.pos, me) <= 32);
         let level = self.level();
         if level.authored(me) {
             return;
@@ -1354,7 +1346,7 @@ impl Game {
         let close = distance(pos, me) <= 1;
         let leash = if self.player.at == LevelId::Surface { WILD_LEASH } else { DEEP_LEASH };
         let home = self.creatures[index].home;
-        let in_reach = distance(me, home) <= leash + 1 && (phenotype.is_none() || !level.authored(me));
+        let in_reach = distance(me, home) <= leash + 1 && (phenotype.is_none() || !level.safe(me));
         let notice = phenotype.map_or(NOTICE, |p| p.sense as i32);
         let in_sight = in_reach && level.sees(pos, me, notice);
         let detects = in_sight && (!self.player.hidden || (close && self.rng.chance(30)));
@@ -1462,9 +1454,9 @@ impl Game {
         let access = self.creatures[index].phenotype().map_or_else(
             || level.tile(pos).walkable(),
             |p| {
-                !level.authored(pos)
+                !level.safe(pos)
                     && !matches!(level.tile(pos), Tile::Rock | Tile::Wall)
-                    && p.access.allows(self.terrain.biome(pos).biome())
+                    && p.access.allows(level.ground(pos))
             },
         );
         access
@@ -1531,61 +1523,65 @@ impl Game {
         }
     }
 
-    fn spawn_all(&mut self) {
-        for i in 0..self.spawns.len() {
-            self.spawn(i);
+    /// Remembers a Deep the first time anyone goes down, and gives it its spawn points.
+    fn open_deep(&mut self, town: Town) {
+        if self.deeps.iter().any(|d| d.town == town) {
+            return;
+        }
+        let cells = (Deep::WIDTH * Deep::HEIGHT) as usize;
+        self.deeps.push(DeepMemory { town, seen: vec![0; cells.div_ceil(64)] });
+        for (index, (_, den)) in Deep::new(town).spawns().into_iter().enumerate() {
+            self.spawns.push(SpawnState { at: LevelId::Deep(town), index, den, occupant: None, ready: 0 });
         }
     }
 
     fn respawn(&mut self) {
+        let LevelId::Deep(town) = self.player.at else { return };
+        let spawns = Deep::new(town).spawns();
         for i in 0..self.spawns.len() {
             let s = &self.spawns[i];
-            if s.occupant.is_some() || self.round < s.ready {
+            if s.at != self.player.at || s.occupant.is_some() || self.round < s.ready {
                 continue;
             }
-            let at = Level::get(s.at).spawns[s.index].0;
-            if s.at == self.player.at && distance(at, self.player.pos) <= SIGHT + 2 {
+            if distance(spawns[s.index].0, self.player.pos) <= SIGHT + 2 {
                 continue;
             }
-            self.spawn(i);
+            self.spawn(i, spawns[s.index].0);
         }
     }
 
-    fn spawn(&mut self, i: usize) {
+    fn spawn(&mut self, i: usize, pos: Pos) {
         let s = &self.spawns[i];
-        let (pos, kind) = Level::get(s.at).spawns[s.index];
-        let at = s.at;
-        let kind = match kind {
-            SpawnKind::Lair => Kind::Troll,
-            SpawnKind::Wild => [Kind::Wolf, Kind::Wolf, Kind::Rat][self.rng.below(3) as usize],
-            SpawnKind::Deep => {
-                const DEEP: [(Kind, u32); 5] = [
-                    (Kind::Rat, 25),
-                    (Kind::Goblin, 25),
-                    (Kind::GoblinArcher, 15),
-                    (Kind::Orc, 20),
-                    (Kind::Skeleton, 15),
-                ];
-                let mut roll = self.rng.below(100);
-                DEEP.iter()
-                    .find(|&&(_, w)| {
-                        let hit = roll < w;
-                        roll = roll.saturating_sub(w);
-                        hit
-                    })
-                    .map_or(Kind::Rat, |&(k, _)| k)
-            }
+        let LevelId::Deep(town) = s.at else { unreachable!("spawn points are below ground") };
+        let mut rng = blah_core::Rng::keyed(
+            self.seed,
+            b"deepborn",
+            &[town.origin.0 as u64, town.origin.1 as u64, s.index as u64, self.round],
+        );
+        // A den keeps the strongest of several individuals; anything that cannot walk stone is not born here.
+        let draws = if s.den { 4 } else { 1 };
+        let wild = (0..draws)
+            .map(|_| self.life.draw_deep(self.seed, town, &mut rng))
+            .filter(|w| w.phenotype().access.allows(&crate::wildlife::DEEP))
+            .max_by_key(|w| {
+                let p = w.phenotype().stats;
+                p.hp + p.attack
+            });
+        let Some(wild) = wild else {
+            self.spawns[i].ready = self.round + 1;
+            return;
         };
         let id = self.next_id;
         self.next_id += 1;
+        let hp = wild.stats().hp;
         self.creatures.push(Creature {
             id,
-            kind,
-            wild: None,
+            kind: Kind::Wild,
+            wild: Some(wild),
             energy: 0,
-            at,
+            at: LevelId::Deep(town),
             pos,
-            hp: kind.stats().hp,
+            hp,
             home: pos,
             hunting: false,
             last_seen: None,
@@ -1599,23 +1595,24 @@ impl Game {
     fn update_seen(&mut self) {
         let level = self.level();
         let me = self.player.pos;
-        let seen = &mut self.seen[self.player.at.index()];
+        let memory = self.deeps.iter().position(|d| LevelId::Deep(d.town) == self.player.at);
         for y in me.1 - SIGHT..=me.1 + SIGHT {
             for x in me.0 - SIGHT..=me.0 + SIGHT {
                 let pos = (x, y);
-                if level.contains(pos) && level.sees(me, pos, SIGHT) {
-                    if let Some(i) = level.cell_index(pos) {
-                        seen[i] = true;
-                    } else {
-                        let (chunk, word, bit) = memory_cell(pos);
-                        self.explored.entry(chunk.0).or_default().entry(chunk.1).or_default()[word] |= bit;
-                    }
+                if !level.contains(pos) || !level.sees(me, pos, SIGHT) {
+                    continue;
+                }
+                if let (Some(deep), Some(m)) = (level.deep(), memory) {
+                    let i = deep.cell_index(pos).expect("contained");
+                    self.deeps[m].seen[i / 64] |= 1 << (i % 64);
+                } else {
+                    let (chunk, word, bit) = memory_cell(pos);
+                    self.explored.entry(chunk.0).or_default().entry(chunk.1).or_default()[word] |= bit;
                 }
             }
         }
     }
 }
-
 fn memory_cell((x, y): Pos) -> (Pos, usize, u64) {
     let index = (y.rem_euclid(16) * 16 + x.rem_euclid(16)) as usize;
     ((x.div_euclid(16), y.div_euclid(16)), index / 64, 1_u64 << (index % 64))
@@ -1653,9 +1650,8 @@ impl Game {
     pub(crate) fn clear_creatures(&mut self) {
         self.creatures.clear();
         self.wild_ready = u64::MAX;
-        for s in &mut self.spawns {
-            s.occupant = Some(u32::MAX);
-        }
+        self.spawns.clear();
+        self.deeps.clear();
     }
 }
 
@@ -1729,7 +1725,8 @@ mod wildlife_tests {
             assert!(!game.level().authored(c.pos));
             let wild = c.wild.as_ref().unwrap();
             let home = game.terrain.world_pos(c.home);
-            assert_eq!(wild.species.region, World::new(7).region_at(home.0, home.1));
+            let crate::Lineage::Region(species) = wild.lineage else { panic!("surface life has a region") };
+            assert_eq!(species.region, World::new(7).region_at(home.0, home.1));
             assert!(wild.phenotype().access.allows(game.terrain.biome(c.pos).biome()));
             assert_eq!(c.stats().hp, wild.phenotype().stats.hp);
             assert!(distance(c.pos, c.home) <= WILD_LEASH);
@@ -1861,5 +1858,128 @@ mod wildlife_tests {
         assert!(game.creatures.is_empty());
         assert!(game.log.iter().any(|l| l.text.contains(&stats.name)));
         assert!(game.piles.iter().flat_map(|p| &p.items).all(|item| matches!(item, Item::Gold(_))));
+    }
+
+    fn descend(game: &mut Game, town: Town) {
+        game.player.at = LevelId::Surface;
+        game.player.pos = town.stairs();
+        game.round(Some(Command::Down));
+        assert_eq!(game.player.at, LevelId::Deep(town));
+        game.round(Some(Command::Rest));
+    }
+
+    fn other_town(game: &mut Game) -> Town {
+        game.level().towns().find(|t| *t != game.towns.home).expect("seed 7 has a neighboring town")
+    }
+
+    #[test]
+    fn each_town_has_its_own_deep_whose_life_items_and_memory_persist() {
+        let mut game = made();
+        let (home, other) = (game.towns.home, other_town(&mut game));
+        descend(&mut game, home);
+        assert_eq!(game.player.pos, Deep::new(home).stairs());
+        assert!(game.log.iter().any(|l| l.text.contains(&format!("the Deep beneath {}", home.name()))));
+        let below: Vec<Creature> = game.creatures.clone();
+        assert!(!below.is_empty(), "the Deep is inhabited");
+        for c in &below {
+            assert_eq!((c.kind, c.at), (Kind::Wild, LevelId::Deep(home)));
+            assert!(matches!(c.wild.as_ref().unwrap().lineage, crate::Lineage::Deep { town, .. } if town == home));
+            assert!(!Deep::new(home).landing(c.pos));
+        }
+        let stairs = game.player.pos;
+        game.drop_at(game.player.at, stairs, Item::Gold(5));
+        assert!(game.remembers(stairs));
+        game.round(Some(Command::Up));
+        assert_eq!((game.player.at, game.player.pos), (LevelId::Surface, home.stairs()));
+
+        game.player.pos = other.start();
+        game.wild_ready = 0;
+        game.round(Some(Command::Rest));
+        descend(&mut game, other);
+        assert_ne!(Deep::new(other), Deep::new(home));
+        assert!(game.creatures.iter().any(|c| c.at == LevelId::Deep(other)));
+        assert!(game.pile_at(game.player.pos).is_none(), "another town's Deep has its own floor");
+        let mut game: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        let kept: Vec<Creature> = game.creatures.iter().filter(|c| c.at == LevelId::Deep(home)).cloned().collect();
+        assert_eq!(kept, below, "nothing below an unvisited town moves or vanishes");
+
+        game.round(Some(Command::Up));
+        descend(&mut game, home);
+        assert!(game.remembers(stairs) && game.pile_at(stairs).is_some());
+        for c in &below {
+            assert!(game.creatures.iter().any(|now| now.id == c.id), "the same individuals are still down here");
+        }
+    }
+
+    #[test]
+    fn deep_life_keeps_off_the_landing_and_cannot_strike_into_it() {
+        let mut game = made();
+        let home = game.towns.home;
+        descend(&mut game, home);
+        let deep = Deep::new(home);
+        let mut edge = None;
+        for y in 0..Deep::HEIGHT {
+            for x in 0..Deep::WIDTH {
+                if deep.landing((x, y)) {
+                    for (dx, dy) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+                        let out = (x + dx, y + dy);
+                        if !deep.landing(out) && deep.tile(out).walkable() {
+                            edge = Some(((x, y), out));
+                        }
+                    }
+                }
+            }
+        }
+        let (inside, outside) = edge.expect("corridors leave the landing");
+        game.creatures.truncate(1);
+        game.creatures[0].pos = outside;
+        game.creatures[0].home = outside;
+        game.creatures[0].wild.as_mut().unwrap().genome = genome(0.5, 1.0, 0.1);
+        game.player.pos = inside;
+        game.provoke(0);
+        for _ in 0..30 {
+            game.round(Some(Command::Rest));
+            assert!(!deep.landing(game.creatures[0].pos));
+        }
+        assert_eq!(game.player.hp, 100_000);
+        // Off the landing, the same creature crosses the Deep's floor to fight.
+        game.player.pos = outside;
+        let level = game.level();
+        let start = (0..Deep::HEIGHT)
+            .flat_map(|y| (0..Deep::WIDTH).map(move |x| (x, y)))
+            .find(|&p| {
+                (3..=5).contains(&distance(p, outside))
+                    && !deep.landing(p)
+                    && level.tile(p) == Tile::Floor
+                    && level.sees(p, outside, 5)
+                    && crate::map::line(p, outside).iter().all(|&c| !deep.landing(c) && level.tile(c).walkable())
+            })
+            .expect("some floor off the landing has a clear walk to its edge");
+        game.creatures[0].pos = start;
+        game.creatures[0].home = start;
+        for _ in 0..15 {
+            game.round(Some(Command::Wait));
+        }
+        assert!(game.log.iter().any(|l| matches!(l.tone, Tone::Hurt | Tone::Miss)), "off the landing it fights");
+    }
+
+    #[test]
+    fn the_den_keeper_is_the_strongest_draw_and_guards_the_ring() {
+        let mut game = made();
+        let home = game.towns.home;
+        descend(&mut game, home);
+        let den = game.spawns.iter().position(|s| s.den).expect("every Deep has a den");
+        let deep = Deep::new(game.towns.home);
+        if game.spawns[den].occupant.is_none() {
+            game.player.pos = deep.stairs();
+            game.spawn(den, deep.spawns()[game.spawns[den].index].0);
+        }
+        let id = game.spawns[den].occupant.unwrap();
+        let index = game.creatures.iter().position(|c| c.id == id).unwrap();
+        let at = game.creatures[index].pos;
+        game.wound(index, 999);
+        let pile = game.piles.iter().find(|p| p.pos == at && p.at == game.player.at).unwrap();
+        assert!(pile.items.contains(&Item::Ring));
+        assert_eq!(game.spawns[den].ready, game.round + DEN_RESPAWN);
     }
 }

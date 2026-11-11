@@ -1,6 +1,6 @@
 [package]
 name = "isle-core"
-description = "The rules of Isle: an island, its town and undercroft, and the rounds a command resolves in."
+description = "The rules of Isle: an island, its towns and the Deeps below them, and the rounds a command resolves in."
 edition.workspace = true
 version.workspace = true
 publish.workspace = true

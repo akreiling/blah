@@ -205,10 +205,10 @@ impl IsleView {
         }
         let level = game.level();
         let labels: Vec<(Pos, char)> = game.sighted().iter().map(|s| (s.creature.pos, s.label)).collect();
-        // Keep authored map coordinates stable; in the wilderness return a bounded local window.
+        // Keep town and Deep coordinates stable; in the wilderness return a bounded local window.
         let (ox, oy) = if let Some(town) = level.town_at(game.player().pos) {
             town.origin
-        } else if level.id == isle_core::LevelId::Undercroft {
+        } else if level.deep().is_some() {
             (0, 0)
         } else {
             (game.player().pos.0 - level.width / 2, game.player().pos.1 - level.height / 2)
@@ -257,7 +257,9 @@ impl IsleView {
             report["map"] = map;
         }
         if view.game {
-            report["game"] = serde_json::json!(game);
+            // Through text, as the save file is, so genome f32s keep their short form rather than widened f64 digits.
+            report["game"] =
+                serde_json::from_str(&serde_json::to_string(game).expect("games serialize")).expect("and parse back");
         }
         report
     }
@@ -934,15 +936,13 @@ mod tests {
         let game = made(seed);
         let (x, y) = game.player().pos;
         let mut save = serde_json::to_value(&game).unwrap();
-        let mut creature = save["creatures"][0].clone();
-        creature["kind"] = serde_json::to_value(kind).unwrap();
-        creature["at"] = serde_json::json!("Surface");
-        creature["pos"] = serde_json::json!([x + offset, y]);
-        creature["home"] = creature["pos"].clone();
-        creature["hp"] = serde_json::json!(kind.stats().hp);
-        creature["hunting"] = serde_json::json!(false);
-        creature["spawn"] = serde_json::Value::Null;
-        save["creatures"] = serde_json::json!([creature]);
+        let id = save["next_id"].clone();
+        save["next_id"] = serde_json::json!(id.as_u64().unwrap() + 1);
+        save["creatures"] = serde_json::json!([{
+            "id": id, "kind": kind, "wild": null, "energy": 0, "at": "Surface",
+            "pos": [x + offset, y], "home": [x + offset, y], "hp": kind.stats().hp,
+            "hunting": false, "last_seen": null, "lost": 0, "stunned": 0, "spawn": null,
+        }]);
         save["spawns"] = serde_json::json!([]);
         save["player"]["hp"] = serde_json::json!(hp);
         serde_json::from_value(save).unwrap()
@@ -1007,8 +1007,9 @@ mod tests {
             let mut game: Game = serde_json::from_value(save).unwrap();
             let (gold, arrows, sack) = (game.player().gold, game.player().arrows, game.player().sack.len());
             let mut input = CommandLine::default();
+            let town = game.level().town_at(stairs).unwrap();
             for (i, (punctuation, level)) in [
-                (">", isle_core::LevelId::Undercroft),
+                (">", isle_core::LevelId::Deep(town)),
                 ("<", isle_core::LevelId::Surface),
                 (",", isle_core::LevelId::Surface),
             ]
