@@ -447,7 +447,18 @@ impl Game {
         }
     }
 
+    /// Prefer a dry-land route. Only when none exists may the route wade through passable water, so
+    /// island starts get a site while every earlier dry-land definition stays exactly the same.
     fn cinder_watch_site(world: &World, home: Point) -> Option<EncounterDefinition> {
+        Self::cinder_watch_search(world, home, is_land)
+            .or_else(|| Self::cinder_watch_search(world, home, |biome| biome.passable))
+    }
+
+    fn cinder_watch_search(
+        world: &World,
+        home: Point,
+        traversable: fn(&crate::Biome) -> bool,
+    ) -> Option<EncounterDefinition> {
         let mut queue = VecDeque::from([home]);
         let mut seen = HashSet::from([home]);
         while let Some(at) = queue.pop_front() {
@@ -468,7 +479,7 @@ impl Game {
                 let next = (at.0 + dx, at.1 + dy);
                 if chebyshev(next, home) <= ENCOUNTER_SEARCH_RADIUS
                     && !seen.contains(&next)
-                    && is_land(world.tile(next.0, next.1).biome.biome())
+                    && traversable(world.tile(next.0, next.1).biome.biome())
                 {
                     seen.insert(next);
                     queue.push_back(next);

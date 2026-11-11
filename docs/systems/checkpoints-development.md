@@ -143,7 +143,21 @@ specialist shuts both braziers, runs out of Focus, rests at home, returns to the
 braziers, and finishes with touch bursts. That route uses the spring afterward. This route found and
 fixed a rule bug: the tender's fire burned the warden standing in its lane. Sentries no longer burn
 each other. The route knows terrain and current actors; it is engine evidence, not a human or
-uninformed-play measurement, and it covers one seed. Checkboxes remain unchecked by convention.
+uninformed-play measurement, and the default test covers one seed.
+
+A fresh, untrained character on seed 42 is warned of the warden's Health and damage on investigating.
+It then presses toward the warden while ignoring lanes. Every fire hit followed a lane aimed before the
+action, the warden's strongest shot (12) is below fresh starting Health (30), and the character walks
+away alive with the site reset to investigated.
+
+Two diagnostic probes run on request (`--ignored`). Over seeds 0–199, the dry-land search found a site
+on 181. A wading fallback, used only when dry land fails, raises that to 196; the other 4 start on
+islands enclosed by impassable water. Every authored object was reachable on foot, and the walk to the
+warning stone had a median of 30 steps (max 81). On seeds 0–23, the three-identity route passed on 18
+of the 22 seeds with a site. Two failures were deaths to ambient creatures on the way, one was a long
+wading walk spent fighting water creatures, and one was an ambient creature on a sentry station that
+attacked while the route waited. None showed an encounter rule fault, but the route is not robust travel
+play. Checkboxes remain unchecked by convention.
 
 **Work**
 

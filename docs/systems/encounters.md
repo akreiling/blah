@@ -108,7 +108,9 @@ Cache eviction, death, and application restart cannot substitute a newly rolled 
 ## Implemented CP6 slice: Cinder Watch
 
 One opt-in authored arc. `Z` charts it from home without passing time. A bounded search from home picks
-the first land site at least 24 tiles away, within 64, with open land around it. The definition (template,
+the first land site at least 24 tiles away, within 64, with open land around it. The search first follows
+dry land; only when that finds nothing (small island starts) may it route through passable water. The
+site itself is always on dry ground. The definition (template,
 mechanics version, and origin) depends only on the world and home, never on the character, and the save
 loader rejects any other definition.
 

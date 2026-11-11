@@ -140,6 +140,7 @@ uses and unsafe attunement do not spend time or supplies.
 `Z` charts Cinder Watch without passing time; FIELD SIGNS shows the hint until it is charted. The
 CINDER WATCH panel then gives directions to the warning stone `!`. `X` on the stone investigates, and
 on a brazier `B`, the alcove `A`, the heart `E`, or the spring `W` uses that object; lowercase marks
-are spent, shut, or recovering. Tiles in a committed fire lane get a red fill and orange border, and the
+are spent, shut, or recovering. The tender and warden share an ambient sprite, so they carry a bordered
+`t` or `W` badge that the panel also uses. Tiles in a committed fire lane get a red fill and orange border, and the
 panel names each sentry's Health and cycle, the aimed direction, lit braziers, costs, and the exit
 distance. Lanes fire after the player's next accepted action.

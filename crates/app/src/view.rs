@@ -465,6 +465,8 @@ impl Render for GameView {
 
 /// The viewport: terrain, the monsters on it, and the wanderer at the center, tinted red if just hurt.
 fn map(game: &Game, sprites: &mut SpriteCache, hurt: bool) -> Div {
+    let sentries: Vec<_> =
+        game.encounter().map(|info| info.sentries.iter().map(|s| (s.id, s.kind)).collect()).unwrap_or_default();
     let (px0, py0) = game.position();
     let world = game.world();
     let rows = (-VIEW_RADIUS..=VIEW_RADIUS).map(|dy| {
@@ -475,7 +477,8 @@ fn map(game: &Game, sprites: &mut SpriteCache, hurt: bool) -> Div {
                 let cell = if dx == 0 && dy == 0 {
                     wanderer_cell(&tile, hurt)
                 } else if let Some(monster) = game.monster_at(x, y) {
-                    monster_cell(&tile, (x, y), monster, sprites, game.cache_at(x, y).is_some())
+                    let role = sentries.iter().find(|(id, _)| *id == monster.id).map(|&(_, kind)| kind);
+                    monster_cell(&tile, (x, y), monster, sprites, game.cache_at(x, y).is_some(), role)
                 } else if let Some(object) = game.encounter_tile((x, y)) {
                     encounter_cell(&tile, (x, y), object)
                 } else if let Some(cache) = game.cache_at(x, y) {
@@ -610,12 +613,37 @@ fn wanderer_cell(tile: &Tile, hurt: bool) -> Div {
         .child("@")
 }
 
-/// A monster's own sprite on its tile, with a health pip under it once it's hurt.
-fn monster_cell(tile: &Tile, at: (i64, i64), monster: &Monster, sprites: &mut SpriteCache, cache: bool) -> Div {
+/// A monster's own sprite on its tile, with a health pip under it once it's hurt. Encounter sentries
+/// share an ambient species sprite, so a role badge and border tell the tender from the warden.
+fn monster_cell(
+    tile: &Tile,
+    at: (i64, i64),
+    monster: &Monster,
+    sprites: &mut SpriteCache,
+    cache: bool,
+    role: Option<blah_core::SentryKind>,
+) -> Div {
     let image = sprites.get(Key::Monster(monster.id), &monster.sprite);
     let base = tile_base(tile.biome.biome().color, at);
-    let base = if cache { base.border_2().border_color(rgb(HEADING)) } else { base };
-    let cell = base.relative().child(img(image).size(px(SPRITE_PX)));
+    let tint = role.map(|kind| sentry_badge(kind).1).or(cache.then_some(HEADING));
+    let base = if let Some(tint) = tint { base.border_2().border_color(rgb(tint)) } else { base };
+    let mut cell = base.relative().child(img(image).size(px(SPRITE_PX)));
+    if let Some(kind) = role {
+        let (badge, tint) = sentry_badge(kind);
+        cell = cell.child(
+            div()
+                .absolute()
+                .top(px(0.0))
+                .left(px(1.0))
+                .px(px(2.0))
+                .bg(rgb(0x20_12_0c))
+                .text_size(px(13.0))
+                .line_height(px(14.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(tint))
+                .child(badge),
+        );
+    }
     let max = monster.max_hp().max(1);
     if monster.hp >= max {
         return cell;
@@ -792,6 +820,14 @@ fn trails_panel(game: &Game) -> Div {
     panel.child(small_line("Directions only; scout the route and guards."))
 }
 
+/// Map badge and tint for a sentry role, also named in the encounter panel.
+const fn sentry_badge(kind: blah_core::SentryKind) -> (&'static str, u32) {
+    match kind {
+        blah_core::SentryKind::Tender => ("t", 0xd0_70_10),
+        blah_core::SentryKind::Warden => ("W", 0xff_50_20),
+    }
+}
+
 fn encounter_lines(game: &Game) -> Vec<String> {
     use blah_core::{EncounterPhase, SentryCycle};
     let Some(info) = game.encounter() else { return Vec::new() };
@@ -807,8 +843,9 @@ fn encounter_lines(game: &Game) -> Vec<String> {
         for sentry in info.sentries {
             let state = if sentry.hp == 0 { "dead" } else { sentry.cycle.name() };
             lines.push(format!(
-                "{}: {} HP, {state}",
+                "{} ({}): {} HP, {state}",
                 if sentry.kind == blah_core::SentryKind::Warden { "Warden" } else { "Tender" },
+                sentry_badge(sentry.kind).0,
                 sentry.hp
             ));
             if let SentryCycle::Aiming(dir) = sentry.cycle {
