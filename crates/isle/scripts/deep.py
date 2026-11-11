@@ -37,7 +37,7 @@ def descend(isle, town, depth=1):
 def deep():
     began = time.perf_counter()
     with Isle(seed=7) as isle:
-        reply = isle.batch("Wren\n", "fighter\n", game=True, map="rows")
+        reply = isle.batch("Wren\n", game=True, map="rows")
         known = reply["map"]["towns"]
         home = next(t for t in known if t["origin"] == [0, 0])
         other = next(t for t in known if t["origin"] != [0, 0])

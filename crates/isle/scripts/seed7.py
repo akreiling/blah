@@ -1,10 +1,13 @@
-"""Play seed 7's starting town and the Deep beneath it with a frail fighter (12 health, armor class 10).
+"""Play seed 7's starting town and the Deep beneath it with a fresh classless wanderer.
 
 Run after `cargo build -p isle`:  python3 crates/isle/scripts/seed7.py
 Uses the omniscient maps to plan walks, and only the window's panel to make combat decisions.
 """
 
 import collections
+import json
+import pathlib
+import tempfile
 
 from isle import Isle, hp, sighted, panel_value
 from smoke import route
@@ -31,7 +34,7 @@ def farthest(level, start):
         x, y = todo.popleft()
         for nxt in [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]:
             if 0 <= nxt[0] < level["width"] and 0 <= nxt[1] < level["height"] and nxt not in dist \
-                    and level["terrain"][nxt[1]][nxt[0]] in ".<":
+                    and level["terrain"][nxt[1]][nxt[0]] in ".<>":
                 dist[nxt] = dist[(x, y)] + 1
                 todo.append(nxt)
     return max(dist, key=lambda p: (dist[p], p))
@@ -70,7 +73,7 @@ def explore(isle, level, retreat_at):
 
 def main():
     with Isle(seed=7) as isle:
-        say(isle.batch("Wren\n", "fighter\n"), "create")
+        say(isle.batch("Wren\n"), "create")
         level = isle.request("state", map="rows")["map"]
         town = next(t for t in level["towns"] if t["name"] == level["name"])
         start, stairs, temple = (tuple(town[k]) for k in ["start", "stairs_down", "temple"])
@@ -80,8 +83,8 @@ def main():
             deep = isle.request("state", state=False, map="rows")["map"]
             print(f"trip {trip + 1}: {deep['name']}")
             # Retreat before another strong blow can kill this frail character.
-            outcome = explore(isle, deep, retreat_at=6)
-            print(f"trip {trip + 1}: {outcome}; {panel_value(isle.screen(), 'Level')}; HP {hp(isle.screen())}")
+            outcome = explore(isle, deep, retreat_at=hp(isle.screen())[1] // 2)
+            print(f"trip {trip + 1}: {outcome}; rank {panel_value(isle.screen(), 'Rank')}; HP {hp(isle.screen())}")
             if outcome != "retreat":
                 break
             walk(isle, route(level, stairs, temple), "to the temple")
@@ -90,7 +93,19 @@ def main():
         screen = isle.screen()
         print("\n".join(screen["view"]))
         print("\n".join(screen["panel"]))
+        save = isle.request("state", game=True)["game"]
+        assert save["player"]["deaths"] == 0, "the fresh wanderer can retreat and recover"
+        assert panel_value(screen, "Hand") == "short sword · practiced", "ordinary fights teach blades"
+        assert save["player"]["xp"] >= 100 and save["player"]["level"] == 2
         isle.quit()
+    with tempfile.TemporaryDirectory(prefix="isle-seed7-", dir="/tmp") as directory:
+        path = pathlib.Path(directory) / "save.json"
+        path.write_text(json.dumps(save))
+        with Isle(save=path) as isle:
+            assert isle.request("state", game=True)["game"] == save
+            assert panel_value(isle.screen(), "Hand") == "short sword · practiced"
+            isle.quit()
+    print("PASS seed7: fresh fights earn blades practice and adventuring rank; learned state survives reload")
 
 
 if __name__ == "__main__":

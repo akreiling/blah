@@ -1,7 +1,7 @@
 """Drive a real Isle window through its opt-in control socket.
 
     with Isle(seed=7) as isle:
-        isle.batch("Wren\n", "fighter\n")
+        isle.batch("Wren\n")
         print(isle.screen()["panel"])
 
 Requests return only what they did (steps run, interruption, round, new log lines) unless asked for more.

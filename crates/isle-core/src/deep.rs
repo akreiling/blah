@@ -194,7 +194,6 @@ mod tests {
         for seed in 0..24 {
             let mut game = crate::Game::new(seed);
             game.answer("Ash");
-            game.answer("fighter");
             found.extend(game.level().towns().flat_map(|town| [1, 2, 9].map(|depth| Deep::new(town, depth))));
         }
         found

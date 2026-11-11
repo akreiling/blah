@@ -6,9 +6,10 @@ use blah_core::{Phenotype, Temperament};
 use serde::{Deserialize, Serialize};
 
 use crate::command::{self, Command, Dir, Instant, Parsed, Target};
-use crate::data::{Armor, Bow, Class, Item, Kind, LEVELS, SHOP, Spell, Stats, Weapon, sale_price, treasure};
+use crate::data::{Armor, Bow, Item, Kind, SHOP, Spell, Stats, Weapon, sale_price, treasure};
 use crate::deep::Deep;
 use crate::map::{LevelId, Place, Pos, Terrain, Tile, Zone, distance};
+use crate::practice::{Practice, Practices, rank_steps};
 use crate::rng::Rng;
 use crate::town::{Town, Towns};
 use crate::wildlife::{LifeCache, Wildlife};
@@ -31,6 +32,11 @@ const DEN_RESPAWN: u64 = 400;
 pub const SACK: usize = 12;
 /// Log lines kept.
 const LOG_KEEP: usize = 300;
+/// Outstanding or spent injury ledgers retained for individual damage sources.
+const MAX_INJURY_SOURCES: usize = 64;
+/// Total XP needed to reach adventuring ranks 1 through 10. Each step after rank 2 roughly doubles.
+const EXPERIENCE_RANKS: [u32; 10] = [0, 100, 300, 700, 1_500, 3_100, 6_300, 12_700, 25_500, 51_100];
+const MAX_FOCUS: i32 = 24;
 
 /// How a log line should stand out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,7 +53,7 @@ pub enum Tone {
     Kill,
     /// You died.
     Death,
-    /// Gains: gold, levels, healing.
+    /// Gains: gold, adventuring ranks, healing.
     Gain,
     /// The game talking to you.
     System,
@@ -67,10 +73,24 @@ pub struct Line {
 pub enum Phase {
     /// Waiting for a name.
     Name,
-    /// Waiting for a calling.
-    Calling(String),
     /// Playing.
     Play,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct InjurySource {
+    creature_id: u32,
+    threat: u32,
+    capacity: i32,
+    spent: i32,
+    remaining: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HealedInjury {
+    creature_id: u32,
+    threat: u32,
+    amount: u32,
 }
 
 /// The character.
@@ -78,11 +98,9 @@ pub enum Phase {
 pub struct Player {
     /// What they are called.
     pub name: String,
-    /// Their calling.
-    pub class: Class,
-    /// Experience level, from 1.
+    /// Adventuring rank, from 1 to 10. Rank is a summary of earned XP, not a power source.
     pub level: u32,
-    /// Experience earned.
+    /// Experience earned from killing creatures.
     pub xp: u32,
     /// Strength: melee hits and damage.
     pub str: i32,
@@ -96,10 +114,12 @@ pub struct Player {
     pub hp: i32,
     /// Health at full.
     pub max_hp: i32,
-    /// Mana now.
-    pub mp: i32,
-    /// Mana at full.
-    pub max_mp: i32,
+    /// Focus available for spells.
+    pub focus: i32,
+    /// Focus capacity, raised by Focus practice.
+    pub max_focus: i32,
+    /// Doing-based practice, retained across equipment changes and death.
+    pub practice: Practices,
     /// Which map they are on.
     pub at: LevelId,
     /// Where on it.
@@ -126,9 +146,15 @@ pub struct Player {
     pub hidden: bool,
     /// Times fallen.
     pub deaths: u32,
-    /// Rounds the wizard's shield has left.
+    /// Rounds the Focus ward has left.
     #[serde(default)]
     pub shield: u32,
+    /// Focus paid for the ward's next actual prevention.
+    #[serde(default)]
+    shield_focus_credit: u32,
+    /// Bounded injury provenance, consumed by every source of healing.
+    #[serde(default)]
+    injuries: Vec<InjurySource>,
 }
 
 /// The bonus a stat gives.
@@ -137,40 +163,16 @@ pub const fn modifier(stat: i32) -> i32 {
 }
 
 impl Player {
-    fn roll(name: String, class: Class, rng: &mut Rng) -> Player {
+    fn roll(name: String, rng: &mut Rng) -> Player {
         let mut stat = || {
             let mut dice = [rng.range(1, 6), rng.range(1, 6), rng.range(1, 6), rng.range(1, 6)];
             dice.sort_unstable();
             dice[1] + dice[2] + dice[3]
         };
-        let (mut str, mut dex, mut int, mut con) = (stat(), stat(), stat(), stat());
-        match class {
-            Class::Fighter => {
-                str += 2;
-                con += 1;
-            }
-            Class::Thief => dex += 2,
-            Class::Wizard => int += 2,
-            Class::Thaumaturge => {
-                int += 1;
-                con += 1;
-            }
-        }
-        let max_hp = (class.base_hp() + modifier(con)).max(6);
-        let max_mp = match class {
-            Class::Wizard => 10 + modifier(int).max(0) * 2,
-            Class::Thaumaturge => 8 + modifier(int).max(0) * 2,
-            _ => 0,
-        };
-        let (weapon, bow, arrows, armor, gold) = match class {
-            Class::Fighter => (Weapon::ShortSword, None, 0, Some(Armor::Leather), 50),
-            Class::Thief => (Weapon::Dagger, Some(Bow::Shortbow), 12, Some(Armor::Leather), 30),
-            Class::Wizard => (Weapon::Staff, None, 0, None, 40),
-            Class::Thaumaturge => (Weapon::Mace, None, 0, Some(Armor::Leather), 30),
-        };
+        let (str, dex, int, con) = (stat(), stat(), stat(), stat());
+        let max_hp = (24 + modifier(con)).max(6);
         Player {
             name,
-            class,
             level: 1,
             xp: 0,
             str,
@@ -179,22 +181,25 @@ impl Player {
             con,
             hp: max_hp,
             max_hp,
-            mp: max_mp,
-            max_mp,
+            focus: MAX_FOCUS,
+            max_focus: MAX_FOCUS,
+            practice: Practices::default(),
             at: LevelId::Surface,
             pos: Town::START,
-            weapon,
-            bow,
-            arrows,
-            armor,
+            weapon: Weapon::ShortSword,
+            bow: Some(Bow::Shortbow),
+            arrows: 12,
+            armor: Some(Armor::Leather),
             ring: false,
-            sack: vec![Item::Potion],
-            gold,
+            sack: vec![Item::Weapon(Weapon::Staff), Item::Potion],
+            gold: 50,
             nocked: false,
             chanted: None,
             hidden: false,
             deaths: 0,
             shield: 0,
+            shield_focus_credit: 0,
+            injuries: Vec::new(),
         }
     }
 
@@ -204,16 +209,63 @@ impl Player {
     }
 
     fn melee_bonus(&self) -> i32 {
-        self.class.melee_bonus() + self.level as i32 / 2 + modifier(self.str) + self.weapon.accuracy()
+        modifier(self.str)
+            + self.weapon.accuracy()
+            + rank_steps(self.practice.get(Practice::weapon(self.weapon)).rank())
     }
 
     fn missile_bonus(&self) -> i32 {
-        self.level as i32 / 2 + modifier(self.dex) + i32::from(self.class == Class::Thief)
+        modifier(self.dex) + rank_steps(self.practice.get(Practice::Archery).rank())
     }
 
-    /// Experience needed for the next level, if there is one.
+    fn baseline_max_hp(&self) -> i32 {
+        (24 + modifier(self.con)).max(6)
+    }
+
+    fn record_injury(&mut self, creature_id: u32, threat: u32, capacity: i32, amount: i32) {
+        let Some(amount) = (amount.max(0) > 0).then_some(amount.max(0)) else { return };
+        if let Some(source) = self.injuries.iter_mut().find(|source| source.creature_id == creature_id) {
+            let accepted = amount.min((source.capacity - source.spent).max(0));
+            source.spent += accepted;
+            source.remaining += accepted;
+        } else if self.injuries.len() < MAX_INJURY_SOURCES {
+            let accepted = amount.min(capacity.max(0));
+            if accepted > 0 {
+                self.injuries.push(InjurySource {
+                    creature_id,
+                    threat,
+                    capacity: capacity.max(0),
+                    spent: accepted,
+                    remaining: accepted,
+                });
+            }
+        }
+    }
+
+    fn consume_injuries(&mut self, amount: i32) -> Vec<HealedInjury> {
+        let mut left = amount.max(0);
+        let mut healed = Vec::new();
+        for source in &mut self.injuries {
+            if left == 0 {
+                break;
+            }
+            let restored = source.remaining.min(left);
+            if restored > 0 {
+                source.remaining -= restored;
+                left -= restored;
+                healed.push(HealedInjury {
+                    creature_id: source.creature_id,
+                    threat: source.threat,
+                    amount: restored as u32,
+                });
+            }
+        }
+        healed
+    }
+
+    /// Total experience needed for the next adventuring rank, if there is one.
     pub fn next_level(&self) -> Option<u32> {
-        LEVELS.get(self.level as usize).copied()
+        EXPERIENCE_RANKS.get(self.level as usize).copied()
     }
 }
 
@@ -245,6 +297,21 @@ pub struct Creature {
     /// Rounds it stays stunned.
     #[serde(default)]
     pub stunned: u32,
+    /// Remaining useful damage this individual can teach across physical and magical attacks.
+    #[serde(default)]
+    learning_damage_left: i32,
+    /// Remaining incoming-damage evidence for Vitality.
+    #[serde(default)]
+    vitality_lessons_left: i32,
+    /// Remaining concealed-movement, opening, and escape lessons.
+    #[serde(default)]
+    stealth_lessons_left: u8,
+    /// Remaining effective healing, warding, and binding lessons.
+    #[serde(default)]
+    utility_lessons_left: u8,
+    /// An attack revealed the player; merely running away from that reveal is not a stealth escape.
+    #[serde(default)]
+    revealed_by_attack: bool,
     spawn: Option<usize>,
 }
 
@@ -257,6 +324,41 @@ impl Creature {
     /// The individual phenotype, if this creature comes from evolved life.
     pub fn phenotype(&self) -> Option<Phenotype> {
         self.wild.as_ref().map(Wildlife::phenotype)
+    }
+
+    fn speed(&self) -> i32 {
+        self.phenotype().map_or(blah_core::ACTION_COST, |p| p.stats.speed)
+    }
+
+    fn teaches_anything(&self) -> bool {
+        self.speed() > 0 && !self.phenotype().is_some_and(|p| p.temperament == Temperament::Skittish)
+    }
+
+    fn spend_damage(&mut self, damage: i32) -> u32 {
+        let spent = damage.max(0).min(self.hp.max(0)).min(self.learning_damage_left.max(0));
+        self.learning_damage_left -= spent;
+        spent as u32
+    }
+
+    fn spend_vitality(&mut self, damage: i32) -> u32 {
+        let spent = damage.max(0).min(self.vitality_lessons_left.max(0));
+        self.vitality_lessons_left -= spent;
+        spent as u32
+    }
+
+    fn spend_stealth(&mut self, lessons: u8) -> u32 {
+        let spent = lessons.min(self.stealth_lessons_left);
+        self.stealth_lessons_left -= spent;
+        u32::from(spent)
+    }
+
+    fn spend_utility_lesson(&mut self) -> bool {
+        if self.utility_lessons_left == 0 {
+            false
+        } else {
+            self.utility_lessons_left -= 1;
+            true
+        }
     }
 }
 
@@ -326,7 +428,7 @@ impl Game {
     /// A fresh island for `seed`, waiting for a character's name.
     pub fn new(seed: u64) -> Game {
         let mut rng = Rng::new(seed);
-        let player = Player::roll(String::new(), Class::Fighter, &mut rng);
+        let player = Player::roll(String::new(), &mut rng);
         let terrain = Terrain::new(seed);
         let mut towns = Towns::new(seed, terrain);
         towns.ensure(seed, terrain, Town::START);
@@ -467,29 +569,12 @@ impl Game {
                 }
                 let mut chars = name.chars();
                 let name: String = chars.next().into_iter().flat_map(char::to_uppercase).chain(chars).collect();
-                self.say(Tone::System, format!("{name}, choose your calling: fighter, thief, thaumaturge, or wizard."));
-                self.phase = Phase::Calling(name);
-            }
-            Phase::Calling(name) => {
-                let typed = line.to_lowercase();
-                let matches: Vec<Class> =
-                    Class::ALL.into_iter().filter(|c| !typed.is_empty() && c.name().starts_with(&typed)).collect();
-                let [class] = matches[..] else {
-                    self.say(Tone::System, "Fighter, thief, thaumaturge, or wizard?");
-                    return;
-                };
-                self.player = Player::roll(name, class, &mut self.rng);
+                self.player = Player::roll(name, &mut self.rng);
                 self.phase = Phase::Play;
                 let p = &self.player;
                 let line = format!(
-                    "{} the {}: Str {} Dex {} Int {} Con {}, {} health.",
-                    p.name,
-                    class.name(),
-                    p.str,
-                    p.dex,
-                    p.int,
-                    p.con,
-                    p.max_hp
+                    "{}: Str {} Dex {} Int {} Con {}, {} health and {} Focus.",
+                    p.name, p.str, p.dex, p.int, p.con, p.max_hp, p.max_focus,
                 );
                 self.say(Tone::Gain, line);
                 self.say(Tone::Info, format!("You stand in {}.", self.towns.home.name()));
@@ -547,6 +632,15 @@ impl Game {
                     .collect();
                 self.say(Tone::Info, format!("\"Have a look,\" says the outfitter. {}.", wares.join(", ")));
             }
+            Instant::Skills => {
+                for practice in Practice::ALL {
+                    let skill = self.player.practice.get(practice);
+                    self.say(
+                        Tone::Info,
+                        format!("{}: {} — {}", practice.name(), skill.rank().name(), self.practice_benefit(practice)),
+                    );
+                }
+            }
             Instant::Look => {
                 let place = match self.zone() {
                     Zone::Shop => "the outfitter's shop".to_owned(),
@@ -580,13 +674,36 @@ impl Game {
         }
     }
 
+    fn practice_benefit(&self, practice: Practice) -> String {
+        let skill = self.player.practice.get(practice);
+        let steps = rank_steps(skill.rank());
+        match practice {
+            Practice::Dagger | Practice::Blades | Practice::Blunt | Practice::Staff | Practice::Archery => {
+                format!("+{steps} accuracy, +{} damage", skill.bonus())
+            }
+            Practice::Evocation => format!("Spark: +{steps} accuracy, +{} damage", skill.bonus()),
+            Practice::Warding => format!("ward: +{steps} protection, +{} rounds", 5 * steps),
+            Practice::Restoration => format!("Heal: +{} health restored", 2 * steps),
+            Practice::Binding => format!("Stun: +{steps} rounds"),
+            Practice::Stealth => format!("+{}% hiding chance, +{} opening damage", 5 * steps, skill.bonus()),
+            Practice::Vitality => format!("+{} maximum Health (currently {})", 4 * steps, self.player.max_hp),
+            Practice::Focus => format!("maximum Focus: {}", skill.focus_capacity()),
+        }
+    }
+
     // ----- The round -----
 
-    /// Resolves one round: your command if any, then every creature, then healing and new arrivals.
+    /// Resolves one round: your command if any, then every creature, ward decay, and new arrivals.
     pub fn round(&mut self, command: Option<Command>) {
         if self.phase != Phase::Play {
             return;
         }
+        let tracking: Vec<u32> =
+            self.creatures.iter().filter(|c| c.hunting && c.last_seen.is_some()).map(|c| c.id).collect();
+        let start = self.player.pos;
+        let began_hidden = self.player.hidden;
+        let hide_action = command.as_ref().is_some_and(|c| matches!(c, Command::Hide));
+        let stealth_action = command.as_ref().is_some_and(|c| matches!(c, Command::Move(_) | Command::Hide));
         self.round += 1;
         match command {
             Some(command) => self.perform(command),
@@ -600,6 +717,17 @@ impl Game {
         self.creatures_act();
         if self.player.hp <= 0 {
             self.die();
+        } else {
+            if began_hidden && self.player.pos != start && self.player.hidden {
+                self.learn_unseen_movement();
+            }
+            let moved = stealth_action && self.player.pos != start;
+            let entered_hiding = hide_action && !began_hidden && self.player.hidden;
+            let hide_broke_tracking =
+                hide_action && tracking.iter().any(|id| self.creatures.iter().any(|c| c.id == *id && !c.hunting));
+            if moved || entered_hiding || hide_broke_tracking {
+                self.learn_escapes(&tracking);
+            }
         }
         self.recover();
         self.respawn();
@@ -750,6 +878,13 @@ impl Game {
         }
         self.player.nocked = false;
         let ambush = std::mem::take(&mut self.player.hidden);
+        if ambush {
+            self.creatures[index].revealed_by_attack = true;
+        }
+        let opening = ambush && !self.creatures[index].hunting;
+        let practice = Practice::weapon(self.player.weapon);
+        let weapon_skill = self.player.practice.get(practice);
+        let stealth_skill = self.player.practice.get(Practice::Stealth);
         let ac = self.creatures[index].stats().ac;
         let roll = self.rng.d20() + self.player.melee_bonus() + if ambush { 4 } else { 0 };
         if roll < ac && roll - self.player.melee_bonus() != 20 {
@@ -758,14 +893,20 @@ impl Game {
             return;
         }
         let (lo, hi) = self.player.weapon.damage();
-        let mut damage = (self.rng.range(lo, hi) + modifier(self.player.str)).max(1);
+        let mut damage = (self.rng.range(lo, hi) + modifier(self.player.str) + weapon_skill.bonus()).max(1);
         if ambush {
+            if opening {
+                damage += stealth_skill.bonus();
+            }
             damage *= 3;
             self.say(Tone::Hit, format!("You strike the {name} from the shadows for {damage}!"));
         } else {
             self.say(Tone::Hit, format!("You hit the {name} for {damage}."));
         }
-        self.wound(index, damage);
+        if opening {
+            self.teach_stealth(index, 3);
+        }
+        self.wound(index, damage, practice, 0);
     }
 
     fn nock(&mut self) {
@@ -820,6 +961,12 @@ impl Game {
         self.player.nocked = false;
         self.player.arrows -= 1;
         let ambush = std::mem::take(&mut self.player.hidden);
+        if ambush {
+            self.creatures[index].revealed_by_attack = true;
+        }
+        let opening = ambush && !self.creatures[index].hunting;
+        let archery = self.player.practice.get(Practice::Archery);
+        let stealth = self.player.practice.get(Practice::Stealth);
         let stats = self.creatures[index].stats();
         let to = self.creatures[index].pos;
         let close = distance(self.player.pos, to) <= 1;
@@ -834,8 +981,11 @@ impl Game {
             return;
         }
         let (lo, hi) = bow.damage();
-        let mut damage = (self.rng.range(lo, hi) + modifier(self.player.dex).max(0)).max(1);
+        let mut damage = (self.rng.range(lo, hi) + modifier(self.player.dex).max(0) + archery.bonus()).max(1);
         if ambush {
+            if opening {
+                damage += stealth.bonus();
+            }
             damage *= 2;
         }
         if stats.arrow_proof {
@@ -846,18 +996,13 @@ impl Game {
         if self.rng.chance(50) {
             self.drop_at(self.player.at, to, Item::Arrows(1));
         }
-        self.wound(index, damage);
+        if opening {
+            self.teach_stealth(index, 3);
+        }
+        self.wound(index, damage, Practice::Archery, 0);
     }
 
     fn chant(&mut self, spell: Spell) {
-        if self.player.class != spell.class() {
-            self.say(Tone::Info, format!("Only a {} knows the words of {}.", spell.class().name(), spell.name()));
-            return;
-        }
-        if self.player.class == Class::Wizard && self.player.armor.is_some_and(Armor::metal) {
-            self.say(Tone::Info, "Your metal armor smothers the words. Wizards cast in leather or cloth.");
-            return;
-        }
         self.player.chanted = Some(spell);
         self.say(Tone::Info, format!("You chant the words of {}.", spell.name()));
     }
@@ -867,19 +1012,30 @@ impl Game {
             self.say(Tone::Info, "You have no spell chanted.");
             return;
         };
-        if self.player.mp < spell.cost() {
-            self.say(Tone::Info, format!("You lack the mana for {} ({} needed).", spell.name(), spell.cost()));
+        let metal_penalty = self.player.armor.is_some_and(Armor::metal) && spell != Spell::Shield;
+        let cost = spell.cost() + if metal_penalty { 2 } else { 0 };
+        if self.player.focus < cost {
+            self.say(Tone::Info, format!("You lack the Focus for {} ({cost} needed).", spell.name()));
             return;
         }
         if !spell.aimed() {
-            self.player.mp -= spell.cost();
+            self.player.focus -= cost;
             self.player.chanted = None;
             if spell == Spell::Heal {
-                let healed = self.rng.range(4, 12) + 2 * self.player.level as i32;
-                self.player.hp = (self.player.hp + healed).min(self.player.max_hp);
+                let skill = self.player.practice.get(Practice::Restoration);
+                let before = self.player.hp;
+                let healing = self.rng.range(4, 12) + 2 * rank_steps(skill.rank());
+                self.player.hp = (self.player.hp + healing).min(self.player.max_hp);
+                let healed = self.player.hp - before;
                 self.say(Tone::Gain, format!("Warmth knits your wounds. (+{healed} health)"));
+                let injuries = self.consume_injuries(healed);
+                if healed > 0 {
+                    self.teach_heal(cost, injuries);
+                }
             } else {
-                self.player.shield = 20 + 2 * self.player.level;
+                let skill = self.player.practice.get(Practice::Warding);
+                self.player.shield = 20 + 5 * rank_steps(skill.rank()) as u32;
+                self.player.shield_focus_credit = cost as u32;
                 self.say(Tone::Gain, "A shimmering ward settles around you.");
             }
             return;
@@ -888,12 +1044,17 @@ impl Game {
         if !self.in_line(index, SIGHT) {
             return;
         }
-        self.player.mp -= spell.cost();
+        self.player.focus -= cost;
         self.player.chanted = None;
-        self.player.hidden = false;
+        let revealed = std::mem::take(&mut self.player.hidden);
+        if revealed {
+            self.creatures[index].revealed_by_attack = true;
+        }
         let stats = self.creatures[index].stats();
         let natural = self.rng.d20();
-        let roll = natural + self.player.level as i32 / 2 + modifier(self.player.int) + 2;
+        let discipline = Practice::spell(spell);
+        let rank_accuracy = rank_steps(self.player.practice.get(discipline).rank());
+        let roll = natural + modifier(self.player.int) + 2 + rank_accuracy;
         if roll < stats.ac && natural != 20 {
             let text = match spell {
                 Spell::Stun => format!("The {} shrugs off your stun.", stats.name),
@@ -904,33 +1065,43 @@ impl Game {
             return;
         }
         if spell == Spell::Stun {
-            // The troll is too big to hold for long.
-            let rounds = if self.creatures[index].kind == Kind::Troll { 1 } else { self.rng.range(2, 3) as u32 };
-            self.creatures[index].stunned = rounds;
+            // Larger creatures resist being held; Binding practice adds a few rounds.
+            let base = if self.creatures[index].kind == Kind::Troll { 1 } else { self.rng.range(2, 3) as u32 };
+            let rounds = base + rank_accuracy as u32;
+            let prior = self.creatures[index].stunned;
+            self.creatures[index].stunned = self.creatures[index].stunned.max(rounds);
             self.say(Tone::Hit, format!("The {} reels, stunned!", stats.name));
             self.provoke(index);
+            let gained = self.creatures[index].stunned.saturating_sub(prior);
+            if gained > 0 && self.teach_utility(index, Practice::Binding, gained) {
+                let threat = self.threat(index, Practice::Focus);
+                if threat >= 10 {
+                    self.learn_practice(Practice::Focus, (cost as u32).saturating_mul(threat), threat);
+                }
+            }
             return;
         }
-        let damage = (self.rng.range(2, 8) + modifier(self.player.int).max(0) + self.player.level as i32 / 2).max(1);
+        let skill = self.player.practice.get(Practice::Evocation);
+        let damage = (self.rng.range(2, 8) + modifier(self.player.int).max(0) + skill.bonus()).max(1);
         self.say(Tone::Hit, format!("A spark leaps from your hand and burns the {} for {damage}!", stats.name));
-        self.wound(index, damage);
+        self.wound(index, damage, Practice::Evocation, cost);
     }
 
     fn hide(&mut self) {
-        if self.player.class != Class::Thief {
-            self.say(Tone::Info, "You have no knack for hiding.");
-            return;
-        }
         if let Some(c) = self.hunter_adjacent() {
             let name = c.stats().name;
             self.say(Tone::Info, format!("The {name} is watching you too closely."));
             return;
         }
         let watchers = self.creatures.iter().filter(|c| c.at == self.player.at && c.hunting).count() as i32;
-        if self.rng.chance(60 + modifier(self.player.dex) * 5 - watchers * 15) {
+        let stealth = self.player.practice.get(Practice::Stealth);
+        if self.rng.chance(60 + modifier(self.player.dex) * 5 + 5 * rank_steps(stealth.rank()) - watchers * 15) {
             self.player.hidden = true;
             for c in self.creatures.iter_mut().filter(|c| c.at == self.player.at) {
                 c.hunting = false;
+                c.last_seen = None;
+                c.lost = 0;
+                c.revealed_by_attack = false;
             }
             self.say(Tone::Info, "You melt into the shadows.");
         } else {
@@ -938,14 +1109,24 @@ impl Game {
         }
     }
 
-    /// Hurts the creature at `index`, killing it at zero health.
-    fn wound(&mut self, index: usize, damage: i32) {
+    /// Hurts a creature and spends its shared finite allowance for useful damage.
+    fn wound(&mut self, index: usize, damage: i32, discipline: Practice, focus_spent: i32) {
+        let threat = self.threat(index, discipline);
+        let useful = self.creatures[index].spend_damage(damage);
         self.creatures[index].hp -= damage;
+        if useful > 0 && threat >= 10 {
+            let evidence = useful.saturating_mul(threat);
+            self.learn_practice(discipline, evidence, threat);
+            if focus_spent > 0 {
+                self.learn_practice(Practice::Focus, (focus_spent as u32).saturating_mul(threat), threat);
+            }
+        }
         if self.creatures[index].hp > 0 {
             self.provoke(index);
             return;
         }
         let dead = self.creatures.remove(index);
+        self.prune_injury_sources();
         let stats = dead.stats();
         self.say(Tone::Kill, format!("The {} dies! (+{} experience)", stats.name, stats.xp));
         let den = dead.spawn.is_some_and(|spawn| self.spawns[spawn].den);
@@ -966,6 +1147,186 @@ impl Game {
         self.gain_xp(stats.xp);
     }
 
+    fn learn_practice(&mut self, discipline: Practice, evidence: u32, threat: u32) {
+        let Some(rank) = self.player.practice.learn(discipline, evidence, threat) else { return };
+        let skill = self.player.practice.get(discipline);
+        match discipline {
+            Practice::Vitality => {
+                self.player.max_hp = self.player.baseline_max_hp() + 4 * rank_steps(rank);
+            }
+            Practice::Focus => {
+                self.player.max_focus = skill.focus_capacity();
+            }
+            _ => {}
+        }
+        self.say(Tone::Gain, format!("Your {} practice is now {}.", discipline.name(), rank.name()));
+    }
+
+    fn teach_utility(&mut self, index: usize, discipline: Practice, effect: u32) -> bool {
+        let threat = self.threat(index, discipline);
+        self.teach_utility_at_threat(index, discipline, effect, threat)
+    }
+
+    fn teach_utility_at_threat(&mut self, index: usize, discipline: Practice, effect: u32, threat: u32) -> bool {
+        if threat < 10 || effect == 0 || !self.creatures[index].spend_utility_lesson() {
+            return false;
+        }
+        self.learn_practice(discipline, effect.saturating_mul(threat), threat);
+        true
+    }
+
+    fn teach_heal(&mut self, cost: i32, injuries: Vec<HealedInjury>) {
+        let mut focus_threat = 0;
+        for injury in injuries {
+            if let Some(index) = self
+                .creatures
+                .iter()
+                .position(|creature| creature.id == injury.creature_id && creature.at == self.player.at)
+                && self.encounter_active(index)
+                && self.teach_utility_at_threat(index, Practice::Restoration, injury.amount, injury.threat)
+            {
+                focus_threat = focus_threat.max(injury.threat);
+            }
+        }
+        if cost > 0 && focus_threat >= 10 {
+            self.learn_practice(Practice::Focus, (cost as u32).saturating_mul(focus_threat), focus_threat);
+        }
+    }
+
+    fn consume_injuries(&mut self, amount: i32) -> Vec<HealedInjury> {
+        let healed = self.player.consume_injuries(amount);
+        self.prune_injury_sources();
+        healed
+    }
+
+    fn prune_injury_sources(&mut self) {
+        self.player.injuries.retain(|source| {
+            source.remaining > 0 || self.creatures.iter().any(|creature| creature.id == source.creature_id)
+        });
+    }
+
+    fn teach_stealth(&mut self, index: usize, lessons: u8) {
+        let threat = self.threat(index, Practice::Stealth);
+        if threat < 10 {
+            return;
+        }
+        let earned = self.creatures[index].spend_stealth(lessons);
+        if earned > 0 {
+            self.learn_practice(Practice::Stealth, earned.saturating_mul(threat).saturating_mul(2), threat);
+        }
+    }
+
+    fn encounter_active(&self, index: usize) -> bool {
+        let creature = &self.creatures[index];
+        if !creature.teaches_anything() {
+            return false;
+        }
+        if creature.hunting {
+            return true;
+        }
+        if self.player.hidden || self.zone() != Zone::Open {
+            return false;
+        }
+        self.creature_can_sense(index, self.player.pos)
+    }
+
+    fn creature_can_sense(&self, index: usize, target: Pos) -> bool {
+        let creature = &self.creatures[index];
+        let leash = if creature.at == LevelId::Surface { WILD_LEASH } else { DEEP_LEASH };
+        if distance(target, creature.home) > leash + 1 || (creature.phenotype().is_some() && self.level().safe(target))
+        {
+            return false;
+        }
+        let notice = creature.phenotype().map_or(NOTICE, |p| p.sense as i32);
+        distance(creature.pos, target) <= notice && self.level().sees(creature.pos, target, notice)
+    }
+
+    fn learn_unseen_movement(&mut self) {
+        let candidates: Vec<u32> = self
+            .creatures
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| {
+                c.at == self.player.at
+                    && !c.hunting
+                    && !c.phenotype().is_some_and(|p| p.temperament == Temperament::Skittish)
+                    && c.teaches_anything()
+                    && self.creature_can_sense(*i, self.player.pos)
+            })
+            .map(|(_, c)| c.id)
+            .collect();
+        for id in candidates {
+            if let Some(index) = self.creatures.iter().position(|c| c.id == id) {
+                self.teach_stealth(index, 1);
+            }
+        }
+    }
+
+    fn learn_escapes(&mut self, tracking: &[u32]) {
+        for id in tracking {
+            if let Some(index) = self
+                .creatures
+                .iter()
+                .position(|c| c.id == *id && !c.hunting && c.teaches_anything() && !c.revealed_by_attack)
+            {
+                self.teach_stealth(index, 3);
+            }
+        }
+    }
+
+    /// Threat is the approximate share of unskilled full Health a creature deals during a fair fight.
+    /// Injury, Focus, earned practice, and adventuring rank do not enter the calculation.
+    fn threat(&self, index: usize, discipline: Practice) -> u32 {
+        let creature = &self.creatures[index];
+        if !creature.teaches_anything() {
+            return 0;
+        }
+        let stats = creature.stats();
+        let (damage, accuracy) = match discipline {
+            Practice::Dagger => (Weapon::Dagger.damage(), modifier(self.player.str) + Weapon::Dagger.accuracy()),
+            Practice::Blades => {
+                (Weapon::ShortSword.damage(), modifier(self.player.str) + Weapon::ShortSword.accuracy())
+            }
+            Practice::Blunt => (Weapon::Mace.damage(), modifier(self.player.str) + Weapon::Mace.accuracy()),
+            Practice::Staff => (Weapon::Staff.damage(), modifier(self.player.str) + Weapon::Staff.accuracy()),
+            Practice::Archery => (Bow::Shortbow.damage(), modifier(self.player.dex)),
+            Practice::Evocation | Practice::Warding | Practice::Restoration | Practice::Binding | Practice::Focus => {
+                ((2, 8), modifier(self.player.int) + 2)
+            }
+            Practice::Stealth => {
+                let weapon = self.player.weapon;
+                (weapon.damage(), modifier(self.player.str) + weapon.accuracy())
+            }
+            Practice::Vitality => {
+                let weapon = self.player.weapon;
+                (weapon.damage(), modifier(self.player.str) + weapon.accuracy())
+            }
+        };
+        let output = ((damage.0 + damage.1) / 2
+            + match discipline {
+                Practice::Archery => modifier(self.player.dex).max(0),
+                Practice::Evocation
+                | Practice::Warding
+                | Practice::Restoration
+                | Practice::Binding
+                | Practice::Focus => modifier(self.player.int).max(0),
+                _ => modifier(self.player.str),
+            })
+        .max(1);
+        let player_hit = (21 + accuracy - stats.ac).clamp(1, 20) as i128 * 5;
+        let incoming_damage = stats.shot.map_or(stats.damage, |(_, shot)| {
+            if (shot.0 + shot.1) > (stats.damage.0 + stats.damage.1) { shot } else { stats.damage }
+        });
+        let enemy_output = ((incoming_damage.0 + incoming_damage.1) / 2).max(1);
+        let enemy_hit = (21 + stats.hit - self.player.ac()).clamp(1, 20) as i128 * 5;
+        let speed = creature.speed().clamp(0, blah_core::ACTION_COST * blah_core::MAX_ACTIONS as i32) as i128;
+        let numerator = 100_i128 * i128::from(stats.hp.max(0)) * i128::from(enemy_output) * enemy_hit * speed;
+        let denominator = i128::from(output)
+            * player_hit
+            * i128::from(blah_core::ACTION_COST)
+            * i128::from(self.player.baseline_max_hp());
+        if denominator <= 0 { 0 } else { (numerator / denominator).clamp(0, 200) as u32 }
+    }
     /// What a kill leaves besides its coins. Evolved life drops what it has gathered or swallowed: likelier,
     /// and better, the more experience it is worth; a den keeper sits on a hoard.
     fn loot(&mut self, kind: Kind, den: bool, xp: u32) -> Vec<Item> {
@@ -1007,21 +1368,12 @@ impl Game {
     }
 
     fn gain_xp(&mut self, xp: u32) {
-        self.player.xp += xp;
+        self.player.xp = self.player.xp.saturating_add(xp);
         while let Some(needed) = self.player.next_level()
             && self.player.xp >= needed
         {
-            let p = &mut self.player;
-            p.level += 1;
-            let more = (p.class.hp_per_level() + modifier(p.con)).max(1);
-            p.max_hp += more;
-            p.hp += more;
-            if p.class == Class::Wizard {
-                p.max_mp += 4;
-                p.mp += 4;
-            }
-            let level = p.level;
-            self.say(Tone::Gain, format!("You feel more capable. You are now level {level}!"));
+            self.player.level += 1;
+            self.say(Tone::Gain, format!("You reach adventuring rank {}.", self.player.level));
         }
     }
 
@@ -1157,8 +1509,9 @@ impl Game {
             return;
         };
         self.player.sack.remove(i);
-        let healed = self.rng.range(10, 16) + 2 * self.player.level as i32;
+        let healed = self.rng.range(10, 16);
         self.player.hp = (self.player.hp + healed).min(self.player.max_hp);
+        self.consume_injuries(healed);
         self.say(Tone::Gain, format!("You drink the potion. (+{healed} health)"));
     }
 
@@ -1168,10 +1521,16 @@ impl Game {
             self.say(Tone::Info, format!("You can't rest with a {name} hunting you."));
             return;
         }
-        let p = &mut self.player;
-        p.hp = (p.hp + 2).min(p.max_hp);
-        p.mp = (p.mp + 2).min(p.max_mp);
-        self.say(Tone::Info, "You rest a while.");
+        let (health, focus) = {
+            let p = &mut self.player;
+            let health = (p.max_hp - p.hp).min(2);
+            let focus = (p.max_focus - p.focus).min(6);
+            p.hp += health;
+            p.focus += focus;
+            (health, focus)
+        };
+        self.consume_injuries(health);
+        self.say(Tone::Info, format!("You rest a while. (+{health} health, +{focus} Focus)"));
     }
 
     fn stairs(&mut self, down: bool) {
@@ -1261,16 +1620,21 @@ impl Game {
             self.say(Tone::Info, "Only the temple's priests can heal you.");
             return;
         }
-        let p = &mut self.player;
-        if p.hp == p.max_hp && p.mp == p.max_mp {
+        if self.player.hp == self.player.max_hp && self.player.focus == self.player.max_focus {
             self.say(Tone::Info, "\"You are whole already,\" the priest says.");
             return;
         }
-        let cost = (p.level * 5).min(p.gold);
-        p.gold -= cost;
-        p.hp = p.max_hp;
-        p.mp = p.max_mp;
-        self.say(Tone::Gain, format!("The priest lays hands on you. You are healed. ({cost} gold)"));
+        let (cost, health) = {
+            let p = &mut self.player;
+            let cost = 5.min(p.gold);
+            p.gold -= cost;
+            let health = p.max_hp - p.hp;
+            p.hp = p.max_hp;
+            p.focus = p.max_focus;
+            (cost, health)
+        };
+        self.consume_injuries(health);
+        self.say(Tone::Gain, format!("The priest lays hands on you. Health and Focus restored. ({cost} gold)"));
     }
 
     // ----- Creatures -----
@@ -1324,6 +1688,11 @@ impl Game {
                 last_seen: None,
                 lost: 0,
                 stunned: 0,
+                learning_damage_left: hp,
+                vitality_lessons_left: hp,
+                stealth_lessons_left: 12,
+                utility_lessons_left: 12,
+                revealed_by_attack: false,
                 spawn: None,
             });
             self.next_id += 1;
@@ -1451,21 +1820,52 @@ impl Game {
     fn creature_strike(&mut self, index: usize, hit: i32, (lo, hi): (i32, i32), missile: Option<&str>) {
         let name = self.creatures[index].stats().name;
         let natural = self.rng.d20();
+        let warding = rank_steps(self.player.practice.get(Practice::Warding).rank());
         let ward = match (self.player.shield > 0, missile.is_some()) {
-            (true, true) => 6,
-            (true, false) => 3,
+            (true, true) => 6 + warding,
+            (true, false) => 3 + warding,
             (false, _) => 0,
         };
-        if natural + hit < self.player.ac() + ward && natural != 20 {
-            let text = match missile {
-                Some(m) => format!("The {name}'s {m} whistles past you."),
-                None => format!("The {name} misses you."),
-            };
-            self.say(Tone::Miss, text);
+        let roll = natural + hit;
+        let ac = self.player.ac();
+        if natural != 20 && roll < ac + ward {
+            let prevented = ward > 0 && roll >= ac;
+            if prevented {
+                let text = match missile {
+                    Some(m) => format!("Your ward turns aside the {name}'s {m}."),
+                    None => format!("Your ward turns aside the {name}'s blow."),
+                };
+                self.say(Tone::Miss, text);
+                let useful = self.teach_utility(index, Practice::Warding, 5);
+                let credit = std::mem::take(&mut self.player.shield_focus_credit);
+                let threat = self.threat(index, Practice::Focus);
+                if useful && credit > 0 && threat >= 10 {
+                    self.learn_practice(Practice::Focus, credit.saturating_mul(threat), threat);
+                }
+            } else {
+                let text = match missile {
+                    Some(m) => format!("The {name}'s {m} whistles past you."),
+                    None => format!("The {name} misses you."),
+                };
+                self.say(Tone::Miss, text);
+            }
             return;
         }
         let damage = self.rng.range(lo, hi);
+        let threat = self.threat(index, Practice::Vitality);
+        let restoration_threat = self.threat(index, Practice::Restoration);
+        let creature_id = self.creatures[index].id;
+        let capacity = self.creatures[index].stats().hp;
+        let taken = damage.min(self.player.hp.max(0));
         self.player.hp -= damage;
+        self.prune_injury_sources();
+        self.player.record_injury(creature_id, restoration_threat, capacity, taken);
+        if threat >= 10 {
+            let useful = self.creatures[index].spend_vitality(taken);
+            if useful > 0 {
+                self.learn_practice(Practice::Vitality, useful.saturating_mul(threat), threat);
+            }
+        }
         let text = match missile {
             Some(m) => format!("The {name}'s {m} hits you for {damage}!"),
             None => format!("The {name} hits you for {damage}!"),
@@ -1513,10 +1913,12 @@ impl Game {
         p.deaths += 1;
         let (at, pos, gold) = (p.at, p.pos, std::mem::take(&mut p.gold));
         p.hp = p.max_hp;
-        p.mp = p.max_mp;
+        p.focus = p.max_focus;
         p.nocked = false;
         p.chanted = None;
         p.hidden = false;
+        p.shield_focus_credit = 0;
+        p.injuries.clear();
         p.at = LevelId::Surface;
         p.pos = self.revival;
         if gold > 0 {
@@ -1535,15 +1937,9 @@ impl Game {
         if p.shield > 0 {
             p.shield -= 1;
             if p.shield == 0 {
+                p.shield_focus_credit = 0;
                 self.say(Tone::Info, "Your ward fades.");
             }
-        }
-        let p = &mut self.player;
-        if self.round.is_multiple_of(5) {
-            p.hp = (p.hp + 1).min(p.max_hp);
-        }
-        if self.round.is_multiple_of(3) {
-            p.mp = (p.mp + 1).min(p.max_mp);
         }
     }
 
@@ -1625,6 +2021,11 @@ impl Game {
             last_seen: None,
             lost: 0,
             stunned: 0,
+            learning_damage_left: hp,
+            vitality_lessons_left: hp,
+            stealth_lessons_left: 12,
+            utility_lessons_left: 12,
+            revealed_by_attack: false,
             spawn: Some(i),
         });
         self.spawns[i].occupant = Some(id);
@@ -1667,6 +2068,7 @@ impl Game {
         let id = self.next_id;
         self.next_id += 1;
         let at = self.player.at;
+        let hp = kind.stats().hp;
         self.creatures.push(Creature {
             id,
             kind,
@@ -1674,12 +2076,17 @@ impl Game {
             energy: 0,
             at,
             pos,
-            hp: kind.stats().hp,
+            hp,
             home: pos,
             hunting: false,
             last_seen: None,
             lost: 0,
             stunned: 0,
+            learning_damage_left: hp,
+            vitality_lessons_left: hp,
+            stealth_lessons_left: 12,
+            utility_lessons_left: 12,
+            revealed_by_attack: false,
             spawn: None,
         });
         id
@@ -1701,7 +2108,6 @@ mod wildlife_tests {
     fn made() -> Game {
         let mut game = Game::new(7);
         game.answer("Wren");
-        game.answer("fighter");
         game.clear_creatures();
         game.player.hp = 100_000;
         game.player.max_hp = 100_000;
@@ -1891,7 +2297,7 @@ mod wildlife_tests {
         game.creatures[0].hp -= 1;
         let saved: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
         assert_eq!(saved.creatures[0], game.creatures[0]);
-        game.wound(0, 999);
+        game.wound(0, 999, Practice::weapon(game.player.weapon), 0);
         assert_eq!(game.player.xp, stats.xp);
         assert!(game.creatures.is_empty());
         assert!(game.log.iter().any(|l| l.text.contains(&stats.name)));
@@ -2015,7 +2421,7 @@ mod wildlife_tests {
         let id = game.spawns[den].occupant.unwrap();
         let index = game.creatures.iter().position(|c| c.id == id).unwrap();
         let at = game.creatures[index].pos;
-        game.wound(index, 999);
+        game.wound(index, 999, Practice::weapon(game.player.weapon), 0);
         let pile = game.piles.iter().find(|p| p.pos == at && p.at == game.player.at).unwrap();
         assert!(pile.items.contains(&Item::Potion));
         assert!(pile.items.iter().any(|i| !matches!(i, Item::Potion | Item::Gold(_))), "a hoard holds gear");
@@ -2080,5 +2486,544 @@ mod wildlife_tests {
         let before = game.piles.clone();
         game.open_deep(Deep::new(home, 1));
         assert_eq!(game.piles, before, "a floor is stocked once");
+    }
+}
+
+#[cfg(test)]
+mod progression_tests {
+    use super::*;
+    use crate::practice::ceiling;
+    use blah_core::{Rank, Skill};
+
+    fn made(seed: u64) -> Game {
+        let mut game = Game::new(seed);
+        game.answer("Wren");
+        game.clear_creatures();
+        game
+    }
+
+    fn expected_skill(evidence: u32, threat: u32) -> Skill {
+        let mut skill = Skill::default();
+        skill.learn(evidence, ceiling(threat));
+        skill
+    }
+
+    fn rng_for_d20(natural: i32) -> Rng {
+        (0..10_000)
+            .find(|seed| {
+                let mut rng = Rng::new(*seed);
+                rng.d20() == natural
+            })
+            .map(Rng::new)
+            .expect("a seed for the requested d20 roll")
+    }
+
+    fn rng_for_attack(natural: i32, damage: i32) -> Rng {
+        (0..100_000)
+            .find(|seed| {
+                let mut rng = Rng::new(*seed);
+                rng.d20() == natural && rng.range(4, 12) == damage
+            })
+            .map(Rng::new)
+            .expect("a seed for the requested attack")
+    }
+
+    fn rng_for_heal_and_attack(healing: i32, natural: i32, damage: i32) -> Rng {
+        (0..100_000)
+            .find(|seed| {
+                let mut rng = Rng::new(*seed);
+                rng.range(4, 12) == healing && rng.d20() == natural && rng.range(4, 12) == damage
+            })
+            .map(Rng::new)
+            .expect("a seed for the requested healing round")
+    }
+
+    fn add_hunting_troll(game: &mut Game, offset: Pos) -> usize {
+        let id = game.place(Kind::Troll, (game.player.pos.0 + offset.0, game.player.pos.1 + offset.1));
+        let index = game.creatures.iter().position(|creature| creature.id == id).unwrap();
+        game.provoke(index);
+        index
+    }
+
+    fn injury_fixture(seed: u64) -> Game {
+        let mut game = made(seed);
+        game.player.dex = 3;
+        game.player.int = 50;
+        game.player.con = 18;
+        game.player.armor = None;
+        game.player.max_hp = game.player.baseline_max_hp();
+        game.player.hp = game.player.max_hp;
+        let index = add_hunting_troll(&mut game, (1, 0));
+        let threat = game.threat(index, Practice::Restoration);
+        assert!(threat >= 10, "the troll is a real Restoration teacher ({threat})");
+        let before = game.player.hp;
+        game.rng = rng_for_attack(1, 4);
+        game.round(Some(Command::Rest));
+        assert_eq!(game.player.hp, before - 4);
+        assert_eq!(game.player.injuries[0].remaining, 4);
+        game
+    }
+
+    #[test]
+    fn exponential_experience_changes_summary_rank_only() {
+        assert_eq!(EXPERIENCE_RANKS, [0, 100, 300, 700, 1_500, 3_100, 6_300, 12_700, 25_500, 51_100]);
+        let mut game = made(11);
+        game.player.hp = 7;
+        game.player.focus = 3;
+        let powers =
+            (game.player.max_hp, game.player.max_focus, game.player.melee_bonus(), game.player.missile_bonus());
+        assert_eq!(game.player.next_level(), Some(100));
+        game.gain_xp(99);
+        assert_eq!((game.player.level, game.player.next_level()), (1, Some(100)));
+        game.gain_xp(1);
+        assert_eq!((game.player.level, game.player.next_level()), (2, Some(300)));
+        game.gain_xp(51_000);
+        assert_eq!(game.player.level, 10);
+        assert_eq!(game.player.xp, 51_100);
+        assert_eq!(game.player.next_level(), None);
+        assert_eq!(game.player.hp, 7);
+        assert_eq!(game.player.focus, 3);
+        assert_eq!(
+            (game.player.max_hp, game.player.max_focus, game.player.melee_bonus(), game.player.missile_bonus(),),
+            powers,
+            "XP rank grants no combat bonus, capacity, or refill",
+        );
+        assert!(game.log.iter().any(|line| line.text.contains("adventuring rank 10")));
+    }
+
+    #[test]
+    fn vitality_and_focus_raise_capacity_without_refilling_current_resources() {
+        let mut game = made(12);
+        game.player.hp = 5;
+        game.player.focus = 4;
+        let old_hp = game.player.max_hp;
+        game.learn_practice(Practice::Vitality, 1_000, 10);
+        assert_eq!(game.player.max_hp, old_hp + 4);
+        assert_eq!(game.player.hp, 5);
+        game.learn_practice(Practice::Focus, 1_000, 10);
+        assert_eq!(game.player.max_focus, 26);
+        assert_eq!(game.player.focus, 4);
+    }
+
+    #[test]
+    fn vitality_is_trained_by_real_incoming_damage_without_a_rank_heal() {
+        let mut game = made(12);
+        game.player.str = 3;
+        game.player.dex = 3;
+        game.player.con = 3;
+        game.player.max_hp = game.player.baseline_max_hp();
+        game.player.hp = game.player.max_hp;
+        game.place(Kind::Troll, (game.player.pos.0 + 1, game.player.pos.1));
+        game.provoke(0);
+        let threat = game.threat(0, Practice::Vitality);
+        assert!(threat >= 100, "the troll is a serious Vitality teacher ({threat})");
+        let initial_max = game.player.max_hp;
+        for _ in 0..3 {
+            game.creature_strike(0, 100, (3, 3), None);
+        }
+        assert_eq!(game.player.practice.get(Practice::Vitality).rank(), Rank::Practiced);
+        assert_eq!(game.player.max_hp, initial_max + 4);
+        assert_eq!(game.player.hp, initial_max - 9, "growing the cap does not restore Health");
+        assert_eq!(game.creatures[0].vitality_lessons_left, game.creatures[0].stats().hp - 9);
+    }
+
+    #[test]
+    fn weak_creatures_teach_nothing_but_damage_still_uses_the_shared_allowance() {
+        let mut game = made(13);
+        game.player.str = 18;
+        game.player.dex = 18;
+        game.player.con = 18;
+        game.place(Kind::Rat, (game.player.pos.0 + 1, game.player.pos.1));
+        game.place(Kind::Troll, (game.player.pos.0 + 2, game.player.pos.1));
+        let threat = game.threat(0, Practice::Blades);
+        let stronger_threat = game.threat(1, Practice::Blades);
+        assert!(threat < 10, "a rat is harmless practice (threat {threat})");
+        assert!(stronger_threat > threat, "stronger threats teach higher ceilings");
+        game.wound(0, 3, Practice::Blades, 0);
+        assert_eq!(game.player.practice.get(Practice::Blades).rank(), Rank::Novice);
+        assert_eq!(game.creatures[0].learning_damage_left, 2);
+        assert_eq!(game.creatures[0].stealth_lessons_left, 12);
+    }
+
+    #[test]
+    fn useful_damage_is_capped_shared_across_magic_and_survives_healing_reload_and_death() {
+        let mut game = made(14);
+        game.player.int = 30;
+        game.place(Kind::Troll, (game.player.pos.0 + 1, game.player.pos.1));
+        let full_hp = game.creatures[0].stats().hp;
+        let magic_threat = game.threat(0, Practice::Evocation);
+        let blade_threat = game.threat(0, Practice::Dagger);
+        assert!(magic_threat >= 10 && blade_threat >= 10);
+
+        game.wound(0, 20, Practice::Evocation, 3);
+        assert_eq!(game.creatures[0].learning_damage_left, full_hp - 20);
+        let mut resumed: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        assert_eq!(resumed, game);
+
+        // A troll can heal, but its remaining lesson is still only its original HP minus prior useful damage.
+        game.creatures[0].hp = full_hp;
+        resumed.creatures[0].hp = full_hp;
+        game.wound(0, i32::MAX, Practice::Dagger, 0);
+        resumed.wound(0, i32::MAX, Practice::Dagger, 0);
+        assert_eq!(resumed, game, "a save/reload replays remaining claims exactly");
+        assert!(game.creatures.is_empty());
+        assert_eq!(game.player.practice.get(Practice::Evocation), expected_skill(20 * magic_threat, magic_threat),);
+        assert_eq!(game.player.practice.get(Practice::Focus), expected_skill(3 * magic_threat, magic_threat),);
+        assert_eq!(
+            game.player.practice.get(Practice::Dagger),
+            expected_skill((full_hp as u32 - 20) * blade_threat, blade_threat),
+            "overkill only credits remaining useful damage",
+        );
+
+        let learned = game.player.practice;
+        game.die();
+        let saved: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        assert_eq!(saved.player.practice, learned, "death and save preserve practice claims");
+    }
+
+    #[test]
+    fn weapon_and_evocation_practice_change_landed_damage() {
+        let mut novice = made(15);
+        novice.player.str = 50;
+        novice.player.int = 50;
+        novice.place(Kind::Troll, (novice.player.pos.0 + 1, novice.player.pos.1));
+        novice.creatures[0].hp = 1_000;
+        let mut practiced = novice.clone();
+        practiced.learn_practice(Practice::Blades, 1_000, 100);
+        novice.attack(Some(Target::Label('A')));
+        practiced.attack(Some(Target::Label('A')));
+        assert_eq!(novice.creatures[0].hp - practiced.creatures[0].hp, 1, "blades practice adds real damage");
+
+        let mut novice = made(16);
+        novice.player.int = 50;
+        novice.place(Kind::Troll, (novice.player.pos.0 + 1, novice.player.pos.1));
+        novice.creatures[0].hp = 1_000;
+        novice.player.chanted = Some(Spell::Spark);
+        let mut practiced = novice.clone();
+        practiced.learn_practice(Practice::Evocation, 1_000, 100);
+        novice.cast(Some(Target::Label('A')));
+        practiced.cast(Some(Target::Label('A')));
+        assert_eq!(novice.creatures[0].hp - practiced.creatures[0].hp, 1, "Evocation practice adds real spell damage",);
+    }
+
+    #[test]
+    fn utility_practice_requires_effective_encounters_and_cannot_be_farmed() {
+        let mut safe = made(17);
+        safe.player.chanted = Some(Spell::Heal);
+        safe.round(Some(Command::Cast(None)));
+        assert_eq!(safe.player.practice.get(Practice::Restoration).rank(), Rank::Novice);
+        assert_eq!(safe.player.practice.get(Practice::Focus).rank(), Rank::Novice);
+
+        let mut game = made(18);
+        game.player.dex = 3;
+        game.player.int = 50;
+        game.player.con = 18;
+        game.player.armor = None;
+        game.player.max_hp = game.player.baseline_max_hp();
+        game.player.hp = game.player.max_hp;
+        let index = add_hunting_troll(&mut game, (1, 0));
+        let threat = game.threat(index, Practice::Restoration);
+        let lessons = game.creatures[index].utility_lessons_left;
+        let before = game.player.hp;
+        game.rng = rng_for_attack(1, 4);
+        game.round(Some(Command::Rest));
+        assert_eq!(game.player.hp, before - 4, "combat, not fixture injury, causes the wound");
+
+        game.player.chanted = Some(Spell::Heal);
+        game.rng = rng_for_heal_and_attack(4, 13, 4);
+        game.round(Some(Command::Cast(None)));
+        assert_eq!(game.creatures[index].utility_lessons_left, lessons - 1);
+        assert_eq!(game.player.practice.get(Practice::Restoration), expected_skill(4 * threat, threat));
+        assert_eq!(game.player.practice.get(Practice::Focus), expected_skill(4 * threat, threat));
+
+        let lessons = game.creatures[index].utility_lessons_left;
+        let restoration = game.player.practice.get(Practice::Restoration);
+        let focus = game.player.practice.get(Practice::Focus);
+        game.player.hp = game.player.max_hp;
+        game.player.chanted = Some(Spell::Heal);
+        game.round(Some(Command::Cast(None)));
+        assert_eq!(game.creatures[index].utility_lessons_left, lessons, "a full-health cast did nothing");
+        assert_eq!(game.player.practice.get(Practice::Restoration), restoration);
+        assert_eq!(game.player.practice.get(Practice::Focus), focus);
+    }
+
+    #[test]
+    fn warding_requires_preventing_a_real_hit_and_focus_is_once_per_paid_cast() {
+        let mut game = made(23);
+        game.player.dex = 20;
+        game.player.int = 3;
+        game.player.con = 18;
+        game.player.armor = Some(Armor::Leather);
+        game.player.max_hp = game.player.baseline_max_hp();
+        game.player.hp = game.player.max_hp;
+        let index = add_hunting_troll(&mut game, (1, 0));
+        let ward_threat = game.threat(index, Practice::Warding);
+        let focus_threat = game.threat(index, Practice::Focus);
+        assert!(ward_threat >= 10 && focus_threat >= 10);
+        let lessons = game.creatures[index].utility_lessons_left;
+
+        game.player.chanted = Some(Spell::Shield);
+        game.rng = rng_for_d20(10);
+        game.round(Some(Command::Cast(None)));
+        assert!(game.log.iter().any(|line| line.text.contains("misses you")));
+        assert_eq!(game.player.practice.get(Practice::Warding), Skill::default());
+        assert_eq!(game.player.practice.get(Practice::Focus), Skill::default());
+        assert_eq!(game.creatures[index].utility_lessons_left, lessons);
+        assert_eq!(game.player.shield_focus_credit, Spell::Shield.cost() as u32);
+
+        for spent in 1..=2 {
+            game.rng = rng_for_d20(13); // 13 + the troll's 6 hits AC 17, but not warded AC 20.
+            game.round(Some(Command::Rest));
+            assert!(game.log.iter().any(|line| line.text.contains("ward turns aside")));
+            assert_eq!(game.creatures[index].utility_lessons_left, lessons - spent);
+            assert_eq!(
+                game.player.practice.get(Practice::Warding),
+                expected_skill(5 * spent as u32 * ward_threat, ward_threat),
+            );
+            assert_eq!(
+                game.player.practice.get(Practice::Focus),
+                expected_skill(Spell::Shield.cost() as u32 * focus_threat, focus_threat),
+                "later preventions from the same paid cast do not multiply Focus",
+            );
+        }
+        assert_eq!(game.player.shield_focus_credit, 0);
+
+        while game.creatures[index].utility_lessons_left > 0 {
+            game.rng = rng_for_d20(13);
+            game.round(Some(Command::Rest));
+        }
+        assert_eq!(game.player.practice.get(Practice::Warding), expected_skill(60 * ward_threat, ward_threat));
+        game.rng = rng_for_d20(13);
+        game.round(Some(Command::Rest));
+        assert_eq!(game.creatures[index].utility_lessons_left, 0, "one troll has a finite prevention lesson budget");
+        assert_eq!(
+            game.player.practice.get(Practice::Focus),
+            expected_skill(Spell::Shield.cost() as u32 * focus_threat, focus_threat),
+        );
+
+        let mut hit = made(24);
+        hit.player.dex = 20;
+        hit.player.int = 3;
+        hit.player.con = 18;
+        hit.player.armor = Some(Armor::Leather);
+        hit.player.max_hp = hit.player.baseline_max_hp();
+        hit.player.hp = hit.player.max_hp;
+        let index = add_hunting_troll(&mut hit, (1, 0));
+        let lessons = hit.creatures[index].utility_lessons_left;
+        hit.player.chanted = Some(Spell::Shield);
+        hit.rng = rng_for_d20(15); // This roll hits even through the ward.
+        hit.round(Some(Command::Cast(None)));
+        assert!(hit.log.iter().any(|line| line.text.contains("hits you for")));
+        assert_eq!(hit.creatures[index].utility_lessons_left, lessons);
+        assert_eq!(hit.player.practice.get(Practice::Warding), Skill::default());
+        assert_eq!(hit.player.practice.get(Practice::Focus), Skill::default());
+        assert_eq!(hit.player.shield_focus_credit, Spell::Shield.cost() as u32);
+    }
+
+    #[test]
+    fn effective_stun_teaches_binding_and_focus_only_when_its_duration_grows() {
+        let mut game = made(25);
+        game.player.int = 50;
+        game.player.con = 18;
+        game.player.max_hp = game.player.baseline_max_hp();
+        game.player.hp = game.player.max_hp;
+        let index = add_hunting_troll(&mut game, (1, 0));
+        let binding_threat = game.threat(index, Practice::Binding);
+        let focus_threat = game.threat(index, Practice::Focus);
+        let lessons = game.creatures[index].utility_lessons_left;
+        game.player.chanted = Some(Spell::Stun);
+        game.rng = rng_for_d20(10);
+        game.round(Some(Command::Cast(Some(Target::Label('A')))));
+        assert_eq!(game.creatures[index].utility_lessons_left, lessons - 1);
+        assert_eq!(game.player.practice.get(Practice::Binding), expected_skill(binding_threat, binding_threat));
+        assert_eq!(
+            game.player.practice.get(Practice::Focus),
+            expected_skill(Spell::Stun.cost() as u32 * focus_threat, focus_threat),
+        );
+        assert_eq!(game.creatures[index].stunned, 0, "the effective one-round stun elapses in its action");
+
+        let binding = game.player.practice.get(Practice::Binding);
+        let focus = game.player.practice.get(Practice::Focus);
+        game.creatures[index].stunned = 5;
+        game.player.chanted = Some(Spell::Stun);
+        game.rng = rng_for_d20(10);
+        game.round(Some(Command::Cast(Some(Target::Label('A')))));
+        assert_eq!(game.creatures[index].utility_lessons_left, lessons - 1);
+        assert_eq!(game.player.practice.get(Practice::Binding), binding);
+        assert_eq!(game.player.practice.get(Practice::Focus), focus);
+        assert_eq!(game.creatures[index].stunned, 4, "an unchanged duration is not credited");
+    }
+
+    #[test]
+    fn potion_rest_and_temple_healing_consume_real_injury_provenance() {
+        for source in 0..4 {
+            let mut game = injury_fixture(30 + source);
+            game.clear_creatures();
+            match source {
+                0 => {
+                    game.player.chanted = Some(Spell::Heal);
+                    game.rng = rng_for_heal_and_attack(4, 1, 4);
+                    game.round(Some(Command::Cast(None)));
+                }
+                1 => {
+                    game.rng = Rng::new(91);
+                    game.round(Some(Command::Quaff));
+                }
+                2 => {
+                    game.round(Some(Command::Rest));
+                    game.round(Some(Command::Rest));
+                }
+                _ => {
+                    let town = game.level().town_at(game.player.pos).unwrap();
+                    game.player.pos = town.respawn();
+                    game.round(Some(Command::Heal));
+                }
+            }
+            assert!(
+                game.player.injuries.is_empty(),
+                "healing source {source} consumes the injury record left by real combat",
+            );
+            assert_eq!(game.player.practice.get(Practice::Restoration).rank(), Rank::Novice);
+
+            let before = game.player.practice;
+            game.player.hp = game.player.max_hp - 4; // Manufactured missing Health has no combat provenance.
+            game.player.chanted = Some(Spell::Heal);
+            game.rng = rng_for_heal_and_attack(4, 1, 4);
+            game.round(Some(Command::Cast(None)));
+            assert_eq!(game.player.practice, before, "the same untracked injury cannot be claimed later");
+        }
+    }
+
+    #[test]
+    fn exhausted_utility_lessons_cannot_train_focus_through_new_paid_casts() {
+        for spell in [Spell::Shield, Spell::Stun, Spell::Heal] {
+            let mut game = injury_fixture(35);
+            game.player.dex = 20;
+            game.player.int = 20;
+            game.player.armor = Some(Armor::Leather);
+            game.creatures[0].utility_lessons_left = 0;
+            game.player.chanted = Some(spell);
+            game.rng = if spell == Spell::Heal { rng_for_heal_and_attack(4, 13, 4) } else { rng_for_d20(13) };
+            let before = game.player.practice;
+            let focus = game.player.focus;
+            game.round(Some(Command::Cast(spell.aimed().then_some(Target::Label('A')))));
+            assert!(game.player.focus < focus, "{spell:?} was actually paid for");
+            for discipline in [Practice::Warding, Practice::Binding, Practice::Restoration, Practice::Focus] {
+                assert_eq!(
+                    game.player.practice.get(discipline),
+                    before.get(discipline),
+                    "{spell:?} cannot reopen a spent utility allowance for {discipline:?}",
+                );
+            }
+            assert_eq!(game.creatures[0].utility_lessons_left, 0);
+        }
+    }
+
+    #[test]
+    fn injury_and_ward_focus_provenance_survive_saving_and_loading() {
+        let mut game = injury_fixture(35);
+        game.player.dex = 20;
+        game.player.armor = Some(Armor::Leather);
+        let index = 0;
+        let focus_threat = game.threat(index, Practice::Focus);
+        game.player.chanted = Some(Spell::Shield);
+        game.rng = rng_for_d20(10);
+        game.round(Some(Command::Cast(None)));
+        assert_eq!(game.player.shield_focus_credit, Spell::Shield.cost() as u32);
+
+        let mut loaded: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        assert_eq!(loaded, game);
+        game.rng = rng_for_d20(13);
+        loaded.rng = game.rng.clone();
+        game.round(Some(Command::Rest));
+        loaded.round(Some(Command::Rest));
+        assert_eq!(loaded, game);
+        assert_eq!(game.player.shield_focus_credit, 0);
+        assert_eq!(
+            game.player.practice.get(Practice::Focus),
+            expected_skill(Spell::Shield.cost() as u32 * focus_threat, focus_threat),
+        );
+
+        let restoration_threat = game.player.injuries[0].threat;
+        let lessons = game.creatures[index].utility_lessons_left;
+        game.player.chanted = Some(Spell::Heal);
+        loaded.player.chanted = Some(Spell::Heal);
+        game.rng = rng_for_heal_and_attack(4, 13, 4);
+        loaded.rng = game.rng.clone();
+        game.round(Some(Command::Cast(None)));
+        loaded.round(Some(Command::Cast(None)));
+        assert_eq!(loaded, game);
+        assert_eq!(game.player.injuries[0].remaining, 0, "the loaded injury source is consumed by Heal");
+        assert_eq!(
+            game.creatures[index].utility_lessons_left,
+            lessons - 2,
+            "the heal and the ward's next prevention are separate utility lessons",
+        );
+        assert_eq!(
+            game.player.practice.get(Practice::Restoration),
+            expected_skill(4 * restoration_threat, restoration_threat),
+        );
+    }
+
+    #[test]
+    fn stealth_practice_uses_unseen_movement_openings_and_finite_escapes() {
+        let mut movement = made(20);
+        movement.player.dex = 50;
+        movement.player.hidden = true;
+        movement.place(Kind::Troll, (movement.player.pos.0 + 4, movement.player.pos.1));
+        let threat = movement.threat(0, Practice::Stealth);
+        assert!(threat >= 10);
+        movement.learn_unseen_movement();
+        assert_eq!(movement.creatures[0].stealth_lessons_left, 11);
+        assert_eq!(movement.player.practice.get(Practice::Stealth), expected_skill(2 * threat, threat),);
+
+        let mut opening = made(21);
+        opening.player.str = 50;
+        opening.player.hidden = true;
+        let id = opening.place(Kind::Troll, (opening.player.pos.0 + 1, opening.player.pos.1));
+        opening.creatures[0].hp = 1_000;
+        let threat = opening.threat(0, Practice::Stealth);
+        opening.attack(Some(Target::Label('A')));
+        assert_eq!(opening.creatures[0].stealth_lessons_left, 9);
+        assert!(opening.creatures[0].revealed_by_attack);
+        assert_eq!(opening.player.practice.get(Practice::Stealth), expected_skill(6 * threat, threat),);
+
+        opening.provoke(0);
+        opening.creatures[0].hunting = false;
+        opening.learn_escapes(&[id]);
+        assert_eq!(opening.creatures[0].stealth_lessons_left, 9, "an attack reveal is not an escape");
+
+        let mut escape = made(22);
+        let id = escape.place(Kind::Troll, (escape.player.pos.0 + 4, escape.player.pos.1));
+        let threat = escape.threat(0, Practice::Stealth);
+        escape.provoke(0);
+        escape.creatures[0].hunting = false;
+        for expected_left in [9, 6, 3, 0, 0] {
+            escape.learn_escapes(&[id]);
+            assert_eq!(escape.creatures[0].stealth_lessons_left, expected_left);
+        }
+        assert_eq!(
+            escape.player.practice.get(Practice::Stealth),
+            expected_skill(12 * 2 * threat, threat),
+            "one individual pays at most twelve shared lessons",
+        );
+    }
+
+    #[test]
+    fn ordinary_waiting_does_not_regenerate_health_or_focus() {
+        let mut game = made(19);
+        game.player.hp -= 5;
+        game.player.focus -= 5;
+        let before = (game.player.hp, game.player.focus);
+        for _ in 0..10 {
+            game.round(None);
+        }
+        assert_eq!((game.player.hp, game.player.focus), before);
+        game.player.hp = game.player.max_hp - 10;
+        game.player.focus = game.player.max_focus - 10;
+        let before = (game.player.hp, game.player.focus);
+        game.round(Some(Command::Rest));
+        assert_eq!(game.player.hp, before.0 + 2);
+        assert_eq!(game.player.focus, before.1 + 6);
     }
 }

@@ -15,7 +15,7 @@ def at(level, pos):
 
 def wilderness():
     with Isle(seed=7) as isle:
-        save = isle.batch("Wren\n", "fighter\n", game=True)["game"]
+        save = isle.batch("Wren\n", game=True)["game"]
         assert isle.quit() == 0
     # Isolate terrain from combat, and begin at the west edge so this test stays short.
     save["player"]["pos"] = [-1, 9]

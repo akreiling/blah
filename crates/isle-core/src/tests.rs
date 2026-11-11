@@ -1,11 +1,12 @@
 //! Whole-round behavior: commands through creatures, deaths, and saves.
 
-use crate::{Bow, Class, Command, Game, Item, Kind, LevelId, Parsed, Phase, Spell, Target, Tone, Zone, parse};
+use crate::{
+    Armor, Bow, Command, Game, Item, Kind, LevelId, Parsed, Phase, Practice, Spell, Target, Tone, Zone, parse,
+};
 
-fn made(class: &str) -> Game {
+fn made() -> Game {
     let mut game = Game::new(7);
     game.answer("Tamsin");
-    game.answer(class);
     assert_eq!(game.phase(), &Phase::Play);
     game
 }
@@ -22,25 +23,42 @@ fn said(game: &Game, needle: &str) -> bool {
 }
 
 #[test]
-fn creation_asks_name_then_a_unique_calling() {
+fn creation_asks_only_for_a_name_and_grants_neutral_starter_gear() {
     let mut game = Game::new(1);
     game.answer("");
     assert_eq!(game.phase(), &Phase::Name);
     game.answer("tamsin");
-    assert_eq!(game.phase(), &Phase::Calling("Tamsin".into()));
-    game.answer("th");
-    assert!(matches!(game.phase(), Phase::Calling(_)), "th is both thief and thaumaturge");
-    game.answer("tha");
-    assert_eq!(game.player().class, Class::Thaumaturge);
-    assert!(game.player().max_mp > 0);
+    assert_eq!(game.phase(), &Phase::Play);
+    assert_eq!(game.player().name, "Tamsin");
+    assert_eq!(game.player().weapon, crate::Weapon::ShortSword);
+    assert_eq!(game.player().armor, Some(Armor::Leather));
+    assert_eq!(game.player().bow, Some(Bow::Shortbow));
+    assert_eq!(game.player().arrows, 12);
+    assert_eq!(game.player().sack, vec![Item::Weapon(crate::Weapon::Staff), Item::Potion]);
+    assert_eq!(game.player().gold, 50);
+    assert_eq!((game.player().focus, game.player().max_focus), (24, 24));
+    assert!(Practice::ALL.iter().all(|&s| game.player().practice.get(s).rank() == blah_core::Rank::Novice));
+}
+
+#[test]
+fn skills_is_a_no_time_practice_and_benefits_listing() {
+    let mut game = made();
+    let turn = game.round_number();
+    let lines = game.log_total();
+    round(&mut game, "sk");
+    assert_eq!(game.round_number(), turn);
+    assert_eq!(game.log_total(), lines + Practice::ALL.len() as u64);
+    assert!(said(&game, "blades: novice"));
+    assert!(said(&game, "maximum Focus: 24"));
 }
 
 #[test]
 fn nock_then_shoot_kills_a_rat_and_drops_arrows_nearby() {
-    let mut game = made("thief");
+    let mut game = made();
     game.clear_creatures();
     let me = game.player().pos;
     game.place(Kind::Rat, (me.0 + 3, me.1));
+    game.player_mut().dex = 18;
     round(&mut game, "shoot rat");
     assert!(said(&game, "You must nock an arrow first."));
     let arrows = game.player().arrows;
@@ -58,7 +76,7 @@ fn nock_then_shoot_kills_a_rat_and_drops_arrows_nearby() {
 
 #[test]
 fn creatures_hunt_and_strike_you() {
-    let mut game = made("fighter");
+    let mut game = made();
     game.clear_creatures();
     let me = game.player().pos;
     game.place(Kind::Orc, (me.0 + 4, me.1));
@@ -74,7 +92,7 @@ fn creatures_hunt_and_strike_you() {
 
 #[test]
 fn standing_ready_strikes_back_at_an_adjacent_hunter() {
-    let mut game = made("fighter");
+    let mut game = made();
     game.clear_creatures();
     let me = game.player().pos;
     game.place(Kind::Rat, (me.0 + 1, me.1));
@@ -90,7 +108,7 @@ fn standing_ready_strikes_back_at_an_adjacent_hunter() {
 
 #[test]
 fn explicit_wait_matches_standing_ready_on_the_clock() {
-    let mut clocked = made("fighter");
+    let mut clocked = made();
     clocked.clear_creatures();
     let me = clocked.player().pos;
     clocked.place(Kind::Rat, (me.0 + 1, me.1));
@@ -105,7 +123,7 @@ fn explicit_wait_matches_standing_ready_on_the_clock() {
 
 #[test]
 fn surface_life_does_not_spawn_inside_town() {
-    let mut game = made("thief");
+    let mut game = made();
     game.player_mut().max_hp = 999;
     game.player_mut().hp = 999;
     for _ in 0..300 {
@@ -117,14 +135,15 @@ fn surface_life_does_not_spawn_inside_town() {
 
 #[test]
 fn shopping_buys_a_bow_and_arrows_and_sells_back() {
-    let mut game = made("fighter");
+    let mut game = made();
     game.clear_creatures();
     game.player_mut().pos = game.level().town_at(game.player().pos).unwrap().shop();
     assert_eq!(game.zone(), Zone::Shop);
     round(&mut game, "buy shortbow");
     round(&mut game, "buy arrows");
     let p = game.player();
-    assert_eq!((p.bow, p.arrows, p.gold), (Some(Bow::Shortbow), 10, 0));
+    assert_eq!((p.bow, p.arrows, p.gold), (Some(Bow::Shortbow), 22, 0));
+    assert!(p.sack.contains(&Item::Bow(Bow::Shortbow)));
     round(&mut game, "sell potion");
     assert_eq!(game.player().gold, 12);
     round(&mut game, "buy long sword");
@@ -133,7 +152,7 @@ fn shopping_buys_a_bow_and_arrows_and_sells_back() {
 
 #[test]
 fn stairs_lead_down_and_back_up() {
-    let mut game = made("fighter");
+    let mut game = made();
     game.clear_creatures();
     game.player_mut().pos = game.level().stairs_down.unwrap();
     round(&mut game, "d");
@@ -146,7 +165,7 @@ fn stairs_lead_down_and_back_up() {
 
 #[test]
 fn death_wakes_you_in_the_temple_and_leaves_your_gold() {
-    let mut game = made("wizard");
+    let mut game = made();
     game.clear_creatures();
     let me = game.player().pos;
     game.player_mut().hp = 1;
@@ -164,43 +183,38 @@ fn death_wakes_you_in_the_temple_and_leaves_your_gold() {
 }
 
 #[test]
-fn spells_belong_to_their_callings() {
-    let mut wizard = made("wizard");
-    wizard.clear_creatures();
-    wizard.round(Some(Command::Chant(Spell::Heal)));
-    assert!(said(&wizard, "Only a thaumaturge"));
-    wizard.round(Some(Command::Chant(Spell::Shield)));
-    wizard.round(Some(Command::Cast(None)));
-    assert!(wizard.player().shield > 0);
-    wizard.player_mut().armor = Some(crate::Armor::Chainmail);
-    wizard.round(Some(Command::Chant(Spell::Spark)));
-    assert!(said(&wizard, "metal armor smothers"));
+fn everyone_can_cast_every_spell_and_metal_only_penalizes_non_wards() {
+    let mut game = made();
+    game.clear_creatures();
+    let me = game.player().pos;
+    game.place(Kind::Orc, (me.0 + 1, me.1));
+    game.player_mut().armor = Some(Armor::Chainmail);
 
-    let mut thaum = made("thaumaturge");
-    thaum.clear_creatures();
-    let me = thaum.player().pos;
-    thaum.place(Kind::Goblin, (me.0 + 2, me.1));
-    thaum.player_mut().max_hp = 999;
-    thaum.player_mut().hp = 999;
-    for _ in 0..10 {
-        thaum.player_mut().mp = 99;
-        round(&mut thaum, "chant stun");
-        round(&mut thaum, "cast goblin");
-        if thaum.creatures()[0].stunned > 0 {
-            break;
-        }
-    }
-    assert!(thaum.creatures()[0].stunned > 0, "stun lands within a few tries");
-    thaum.player_mut().mp = thaum.player().max_mp;
-    thaum.player_mut().hp = 3;
-    round(&mut thaum, "chant heal");
-    round(&mut thaum, "cast");
-    assert!(said(&thaum, "Warmth knits your wounds"));
+    round(&mut game, "chant heal");
+    assert_eq!(game.player().chanted, Some(Spell::Heal));
+    round(&mut game, "cast");
+    assert_eq!(game.player().focus, 18, "metal adds two Focus to Heal");
+
+    round(&mut game, "chant shield");
+    round(&mut game, "cast");
+    assert!(game.player().shield > 0);
+    assert_eq!(game.player().focus, 14, "Warding has no metal penalty");
+
+    round(&mut game, "chant spark");
+    round(&mut game, "cast orc");
+    assert_eq!(game.player().focus, 9, "Spark costs three plus two in metal");
+
+    round(&mut game, "chant stun");
+    round(&mut game, "cast orc");
+    assert_eq!(game.player().focus, 2, "Stun costs five plus two in metal");
+
+    game.round(Some(Command::Hide));
+    assert!(!said(&game, "no knack for hiding"));
 }
 
 #[test]
 fn targets_by_letter_and_by_ordinal_name() {
-    let mut game = made("thief");
+    let mut game = made();
     game.clear_creatures();
     let me = game.player().pos;
     let near = game.place(Kind::Goblin, (me.0 + 2, me.1));
@@ -220,7 +234,7 @@ fn targets_by_letter_and_by_ordinal_name() {
 
 #[test]
 fn a_saved_game_resumes_exactly() {
-    let mut game = made("thief");
+    let mut game = made();
     for line in ["s s s", "nock", "e e", "look", "i"] {
         round(&mut game, line);
     }
@@ -236,7 +250,7 @@ fn a_saved_game_resumes_exactly() {
 
 #[test]
 fn get_all_takes_gold_arrows_and_items() {
-    let mut game = made("fighter");
+    let mut game = made();
     game.clear_creatures();
     let me = game.player().pos;
     game.place(Kind::Rat, (me.0 + 1, me.1));
@@ -263,7 +277,7 @@ fn you_can_walk_from_the_town_square_into_the_wilderness_and_back() {
     use crate::Dir;
     use std::collections::{BTreeMap, VecDeque};
 
-    let mut game = made("fighter");
+    let mut game = made();
     game.clear_creatures();
     let start = game.player().pos;
     let mut queue = VecDeque::from([start]);
@@ -308,7 +322,7 @@ fn you_can_walk_from_the_town_square_into_the_wilderness_and_back() {
 
 #[test]
 fn wilderness_memory_spans_signed_chunks_and_survives_saving_and_level_changes() {
-    let mut game = made("fighter");
+    let mut game = made();
     game.clear_creatures();
     let positions = [(-17, -17), (-16, -16), (-1, -1), (0, -1), (15, -1), (16, -1), (1_000_000, -1_000_000)];
     for pos in positions {
@@ -350,7 +364,7 @@ fn another_town(game: &mut Game) -> crate::Town {
 
 #[test]
 fn other_towns_trade_heal_and_return_you_to_the_correct_stairs_after_reload() {
-    let mut game = made("fighter");
+    let mut game = made();
     game.clear_creatures();
     let first = game.level().town_at(game.player().pos).unwrap();
     let second = another_town(&mut game);
@@ -384,7 +398,7 @@ fn other_towns_trade_heal_and_return_you_to_the_correct_stairs_after_reload() {
 
 #[test]
 fn visiting_another_temple_changes_revival_and_death_keeps_the_new_town() {
-    let mut game = made("wizard");
+    let mut game = made();
     game.clear_creatures();
     let town = another_town(&mut game);
     let temple = town.respawn();

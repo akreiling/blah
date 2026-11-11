@@ -3,7 +3,7 @@
 Isle is a solo island adventure in the manner of *Island of Kesmai* (Kesmai, 1985), being merged with
 blah one system at a time. Its wilderness now uses blah's seeded procedural terrain and evolved regional
 life. Towns are generated on dry ground, each over its own generated Deep, floor after floor down.
-Callings are still Isle's original system.
+Characters are classless: practice grants power, while experience records adventuring rank.
 
 - `crates/isle-core`: the rules. Pure and deterministic; the whole `Game` serializes, dice included.
 - `crates/isle`: the GPUI window. Run it with `just isle`.
@@ -25,7 +25,7 @@ while you *stand ready*, striking back at anything hunting you from the next cel
 - Rounds chain with `;` (`nock; shoot a`), at most five per line. A chain stops if you are hurt, die,
   or a new creature comes into sight. The rest is discarded, not queued for later.
 - Enter on an empty line repeats the last typed command line, not arrow movement. `quit` saves and leaves.
-  `look`, `inventory`, `list`, and `help` take no time.
+  `look`, `inventory`, `skills`, `list`, and `help` take no time.
 
 For the original clock-driven pace, use `just isle --round 10` (0.5–60 seconds per round). Commands
 queue up to five rounds ahead instead of resolving immediately. With nothing queued you stand ready.
@@ -49,25 +49,44 @@ Printable keys, spaces, and punctuation insert at the cursor. Editing takes no t
 | Ctrl-P / Ctrl-N | Previous / next typed command; next past the newest restores your draft |
 | Escape | Clear the line |
 
-## Callings
+## Practice and experience
 
-Following Legends of Kesmai's classes:
+Give your name and start playing. There is no class choice. Everyone starts with a short sword, leather,
+a shortbow and twelve arrows, a staff and healing potion in the sack, and fifty gold. Everyone can fight,
+shoot, hide, and use all four spells: `spark`, `shield`, `heal`, and `stun`. Ordinary attacks and movement
+cost no Focus. `chant <spell>` prepares a spell; `cast [who]` releases it.
 
-| Calling | Health | Notes |
-|---|---|---|
-| Fighter | most | short sword, leather, best melee |
-| Thief | low | dagger, shortbow and arrows; `hide`, then triple damage in melee, double with arrows |
-| Thaumaturge | good | warrior-priest: mace, leather; `heal` (self) and `stun` (target) |
-| Wizard | least | staff, no armor; `spark` (target) and `shield` (self, turns arrows); metal armor stops chanting |
+`skills` shows all twelve character-owned practice ranks in the side panel; Escape or another command
+returns to the ordinary view. The ordinary panel shows the current weapon's rank, Focus, and stealth.
+Changing equipment does not transfer or erase practice. Overall XP and the displayed adventuring rank
+record what you have overcome; they grant no combat bonus, health, Focus, or free healing.
 
-Kesmai's martial artist and knight are not in yet.
+Practice uses five bands: novice, practiced, skilled, adept, and expert, at 0, 1,000, 4,000, 12,000,
+and 30,000 evidence. Daggers, blades (both swords), blunt weapons, staves, archery, and each spell's
+discipline grow separately. Weapon and Spark ranks improve accuracy and damage. Stealth improves hiding
+and opening strikes. Vitality grows from real incoming damage and adds four maximum Health per rank;
+Focus practice adds two capacity per rank, from 24 to 32. Growing a capacity never refills it.
+
+Landed damage earns evidence proportional to the danger of the opponent. Each individual can teach only
+its original full Health in useful damage, shared across weapons and magic. Overkill, misses, healing the
+creature, and save/reload never renew this allowance. Harmless, inert, and skittish creatures teach nothing;
+weak threats plateau at lower ranks. Stealth has twelve shared lessons per creature for unseen movement,
+opening strikes, and genuine escapes. Utility magic has another twelve shared lessons: a ward must prevent
+a blow, a stun must extend its hold, and healing must restore tracked injury from an active encounter.
+These useful paid casts also teach Focus, once per cast and only while the encounter has lessons left.
+
+Spells share Focus. Metal armor adds two Focus to a spell's cost, except Shield. `rest` explicitly recovers
+two Health and six Focus per round, but leaves you exposed outside safety. Walking and ordinary waiting
+restore neither. The temple restores both resources. Experience thresholds for ranks 2–10 are 100, 300,
+700, 1,500, 3,100, 6,300, 12,700, 25,500, and 51,100. This is a prototype curve, not a measured promise of
+time-to-depth-10.
 
 ## The island
 
 Beyond towns, the surface continues into blah's seeded biomes, with trees that hide what
 lies beyond and rocks that block movement and sight. Deep water and snow peaks are impassable; shallow
 water can be waded. Explored wilderness stays remembered across saves, including west and north of town.
-Every town guarantees an outfitter (`buy`, `sell`, `list`), a temple (`heal` for five gold a level),
+Every town guarantees an outfitter (`buy`, `sell`, `list`), a temple (`heal` for up to five gold),
 a revival spot, dungeon stairs, and a safe central arrival square. Paths connect all services and the
 town's edges. Names, building sizes, service placement, and layout orientation vary with the seed.
 The entire town footprint sits on passable dry land; ocean sectors need not contain a town.
@@ -134,7 +153,7 @@ Requests are limited to 64 KiB and handled one at a time.
 
 ```json
 {"op":"state"}
-{"op":"text","text":"Wren\nfighter\n"}
+{"op":"text","text":"Wren\n"}
 {"op":"key","key":"ctrl-a"}
 {"op":"batch","steps":[{"text":"s s s\n"},{"key":"right"},{"text":">"}]}
 ```
@@ -169,6 +188,8 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
 `cargo build -p isle`:
 
 - `python3 crates/isle/scripts/smoke.py` checks the protocol against a real window in both pacing modes.
+- `python3 crates/isle/scripts/progression.py` checks name-only creation, the practice panel, no-time
+  `skills`, shared Focus, explicit recovery, and exact save/reload.
 - `python3 crates/isle/scripts/wilderness.py` checks leaving town, biome rendering, local map origins,
   wilderness memory, and save/reload.
 - `python3 crates/isle/scripts/wildlife.py` checks evolved population, reload, the IN SIGHT panel,
@@ -179,5 +200,6 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
   layouts, evolved life off the landings, tougher life deeper down, stair returns, and that each floor's life
   and memory persist across visits and reloads.
 - `python3 crates/isle/scripts/seed7.py` plans routes from the map and fights from the window's panel. It
-  walks to the stairs, heads for the far end of the Deep, and retreats to the temple to heal. Games are deterministic per seed and input, so its
-  output repeats exactly.
+  walks to the stairs, heads for the far end of the Deep, and retreats to the temple to heal. It checks that
+  ordinary fights earn blades practice and adventuring rank, then reloads the learned state. Games are
+  deterministic per seed and input, so its output repeats exactly.

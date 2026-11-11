@@ -290,7 +290,6 @@ mod tests {
     fn towns(seed: u64) -> Vec<Town> {
         let mut game = crate::Game::new(seed);
         game.answer("Ash");
-        game.answer("fighter");
         game.level().towns().collect()
     }
 

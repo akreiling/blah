@@ -185,7 +185,6 @@ mod tests {
         };
         let (mut game, _) = launch(&["--seed", "4"]);
         game.answer("Wren");
-        game.answer("fighter");
         save::write(&path, &game).unwrap();
         let (resumed, _) = launch(&[]);
         assert_eq!(resumed, game);

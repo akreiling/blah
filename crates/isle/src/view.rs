@@ -10,7 +10,10 @@ use gpui::{
     Task, Window, div, prelude::*, px, rgb,
 };
 
-use isle_core::{Command, Creature, Game, Item, Kind, Parsed, Phase, Player, Pos, SIGHT, Tile, Tone, Zone, distance};
+use isle_core::{
+    Command, Creature, Game, Instant, Item, Kind, Parsed, Phase, Player, Pos, Practice, SIGHT, Tile, Tone, Zone,
+    distance,
+};
 
 use crate::input::{CommandLine, InputAction};
 
@@ -50,7 +53,7 @@ const FAINT: u32 = 0x45_47_52;
 const HEADING: u32 = 0xf0_c0_4a;
 const YOU: u32 = 0xff_f2_7a;
 const HP: u32 = 0xd0_48_48;
-const MP: u32 = 0x5c_8c_f0;
+const FOCUS: u32 = 0x5c_8c_f0;
 const CLOCK: u32 = 0x8c_c0_6a;
 const EMPTY_BAR: u32 = 0x20_22_2a;
 
@@ -66,6 +69,7 @@ pub struct IsleView {
     round: Option<Duration>,
     started: Clock,
     paused: bool,
+    show_skills: bool,
     /// Log total before the latest round: lines past it are news.
     mark: u64,
     _ticker: Option<Task<()>>,
@@ -105,6 +109,7 @@ impl IsleView {
             round,
             started: Clock::now(),
             paused: false,
+            show_skills: false,
             mark,
             _ticker: ticker,
             control: None,
@@ -133,6 +138,9 @@ impl IsleView {
     }
 
     fn key(&mut self, stroke: &Keystroke, cx: &mut Context<IsleView>) {
+        if stroke.key == "escape" {
+            self.show_skills = false;
+        }
         match self.input.key(stroke, self.game.phase() == &Phase::Play) {
             InputAction::Submit => self.submit(cx),
             InputAction::Move(dir) => self.play_line(dir.short(), cx),
@@ -276,6 +284,7 @@ impl IsleView {
     }
 
     fn play_line(&mut self, line: &str, cx: &mut Context<IsleView>) {
+        self.show_skills = matches!(self.game.parse(line), Ok(Parsed::Instant(Instant::Skills)));
         let turn_based = self.round.is_none();
         if turn_based {
             self.mark = self.game.log_total();
@@ -425,31 +434,42 @@ impl IsleView {
         let game = &self.game;
         let p = game.player();
         let mut panel = frame().w(px(PANEL)).h(px(MAP_H)).p(px(INSET)).flex().flex_col().overflow_hidden();
+        if self.show_skills {
+            return panel
+                .child(heading("PRACTICE"))
+                .children(
+                    skill_lines(p)
+                        .into_iter()
+                        .map(|line| div().h(px(LINE)).flex_none().text_color(rgb(TEXT)).child(line)),
+                )
+                .child(rule())
+                .child(dim_line("Practice grants power. XP records rank."))
+                .child(dim_line("Weak threats stop teaching as you grow."))
+                .child(dim_line("Escape or another command returns."));
+        }
         if game.phase() != &Phase::Play {
             return panel
                 .child(heading("A NEW ARRIVAL"))
                 .child(dim_line("Type your answer below and press Enter."))
                 .child(rule())
-                .child(dim_line("Fighter: the most health; sword and armor."))
-                .child(dim_line("Thief: hides, strikes from hiding,"))
-                .child(dim_line("  starts with a shortbow."))
-                .child(dim_line("Thaumaturge: warrior-priest; heal, stun."))
-                .child(dim_line("Wizard: spark and shield; no metal armor."));
+                .child(dim_line("No classes. What you do shapes you."))
+                .child(dim_line("Fight, shoot, hide, or learn magic."))
+                .child(dim_line("Practice grants power; XP records your rank."))
+                .child(dim_line("Type skills to review your practice."));
         }
         panel = panel
-            .child(heading_owned(format!("{} the {}", p.name, p.class.name())))
-            .child(pair("Level", level_text(p)))
-            .child(bar("HP", p.hp, p.max_hp, HP));
-        if p.class.casts() {
-            panel = panel.child(bar("MP", p.mp, p.max_mp, MP));
-        }
+            .child(heading_owned(p.name.clone()))
+            .child(pair("Rank", level_text(p)))
+            .child(bar("HP", p.hp, p.max_hp, HP))
+            .child(bar("Focus", p.focus, p.max_focus, FOCUS));
         panel = panel
             .child(pair("Armor class", format!("{}", p.ac())))
             .child(pair("Gold", format!("{}", p.gold)))
             .child(rule())
-            .child(pair("Hand", p.weapon.name().into()))
+            .child(pair("Hand", hand_text(p)))
             .child(pair("Bow", bow_text(p)))
-            .child(pair("Worn", worn_text(p)));
+            .child(pair("Worn", worn_text(p)))
+            .child(dim_line_owned(practice_text(p)));
         if let Some(states) = states_text(p) {
             panel = panel.child(div().h(px(LINE)).text_color(rgb(HEADING)).child(states));
         }
@@ -473,27 +493,30 @@ impl IsleView {
         let game = &self.game;
         let p = game.player();
         panel = panel.child(rule()).child(heading("IN SIGHT"));
+        let mut list = div().id("sighted").flex_1().min_h_0().flex().flex_col().overflow_y_scroll();
         let sighted = game.sighted();
         if sighted.is_empty() {
-            panel = panel.child(dim_line("Nothing stirs."));
+            list = list.child(dim_line("Nothing stirs."));
         }
         for s in sighted.iter().take(if sighted.iter().any(|s| s.creature.wild.is_some()) { 3 } else { 6 }) {
             let c = s.creature;
             let stats = c.stats();
             if let Some(phenotype) = c.phenotype() {
-                panel = panel
+                list = list
                     .child(
                         div()
                             .h(px(LINE))
+                            .flex_none()
                             .text_color(rgb(creature_color(c.kind, c.hunting)))
                             .child(format!("{} {}", s.label, stats.name)),
                     )
                     .child(dim_line_owned(format!("  {} · {}", sight_notes(p, c), phenotype.temperament.word())));
                 continue;
             }
-            panel = panel.child(
+            list = list.child(
                 div()
                     .h(px(LINE))
+                    .flex_none()
                     .flex()
                     .flex_row()
                     .gap(px(8.0))
@@ -505,7 +528,7 @@ impl IsleView {
                     .child(div().text_color(rgb(DIM)).child(sight_notes(p, c))),
             );
         }
-        panel
+        panel.child(list)
     }
 
     /// The window's contents as text: the map, the panel, the log, and the prompt.
@@ -519,17 +542,16 @@ impl IsleView {
             .collect();
         let mut panel = Vec::new();
         if game.phase() == &Phase::Play {
-            panel.push(format!("{} the {}", p.name, p.class.name()));
-            panel.push(format!("Level {}", level_text(p)));
+            panel.push(p.name.clone());
+            panel.push(format!("Rank {}", level_text(p)));
             panel.push(format!("HP {}/{}", p.hp, p.max_hp));
-            if p.class.casts() {
-                panel.push(format!("MP {}/{}", p.mp, p.max_mp));
-            }
+            panel.push(format!("Focus {}/{}", p.focus, p.max_focus));
             panel.push(format!("Armor class {}", p.ac()));
             panel.push(format!("Gold {}", p.gold));
-            panel.push(format!("Hand {}", p.weapon.name()));
+            panel.push(format!("Hand {}", hand_text(p)));
             panel.push(format!("Bow {}", bow_text(p)));
             panel.push(format!("Worn {}", worn_text(p)));
+            panel.push(practice_text(p));
             panel.extend(states_text(p));
             panel.push(format!("Place {}", place_text(game)));
             let number = game.round_number() + 1;
@@ -559,6 +581,15 @@ impl IsleView {
             }
         } else {
             panel.push("A NEW ARRIVAL".into());
+        }
+        if self.show_skills {
+            panel = vec!["PRACTICE".into()];
+            panel.extend(skill_lines(p));
+            panel.extend([
+                "Practice grants power. XP records rank.".into(),
+                "Weak threats stop teaching as you grow.".into(),
+                "Escape or another command returns.".into(),
+            ]);
         }
         let log = game.log();
         let (before, after) = self.input.halves();
@@ -661,6 +692,25 @@ fn level_text(p: &Player) -> String {
         Some(next) => format!("{} · {}/{next} xp", p.level, p.xp),
         None => format!("{} · {} xp", p.level, p.xp),
     }
+}
+
+fn hand_text(p: &Player) -> String {
+    format!("{} · {}", p.weapon.name(), p.practice.get(Practice::weapon(p.weapon)).rank().name())
+}
+
+fn skill_lines(p: &Player) -> Vec<String> {
+    Practice::ALL
+        .into_iter()
+        .map(|practice| format!("{}: {}", practice.name(), p.practice.get(practice).rank().name()))
+        .collect()
+}
+
+fn practice_text(p: &Player) -> String {
+    format!(
+        "Focus {} · stealth {}",
+        p.practice.get(Practice::Focus).rank().name(),
+        p.practice.get(Practice::Stealth).rank().name(),
+    )
 }
 
 fn bow_text(p: &Player) -> String {
@@ -857,28 +907,29 @@ fn frame() -> Div {
 }
 
 fn heading(text: &'static str) -> Div {
-    div().h(px(LINE)).text_color(rgb(HEADING)).font_weight(FontWeight::BOLD).child(text)
+    div().h(px(LINE)).flex_none().text_color(rgb(HEADING)).font_weight(FontWeight::BOLD).child(text)
 }
 
 fn heading_owned(text: String) -> Div {
-    div().h(px(LINE)).text_color(rgb(HEADING)).font_weight(FontWeight::BOLD).child(SharedString::from(text))
+    div().h(px(LINE)).flex_none().text_color(rgb(HEADING)).font_weight(FontWeight::BOLD).child(SharedString::from(text))
 }
 
 fn dim_line(text: &'static str) -> Div {
-    div().h(px(LINE)).text_size(px(12.0)).text_color(rgb(DIM)).child(text)
+    div().h(px(LINE)).flex_none().text_size(px(12.0)).text_color(rgb(DIM)).child(text)
 }
 
 fn dim_line_owned(text: String) -> Div {
-    div().h(px(LINE)).text_size(px(12.0)).text_color(rgb(DIM)).child(text)
+    div().h(px(LINE)).flex_none().text_size(px(12.0)).text_color(rgb(DIM)).child(text)
 }
 
 fn rule() -> Div {
-    div().my(px(5.0)).h(px(1.0)).w_full().bg(rgb(FAINT))
+    div().my(px(5.0)).h(px(1.0)).flex_none().w_full().bg(rgb(FAINT))
 }
 
 fn pair(label: &'static str, value: String) -> Div {
     div()
         .h(px(LINE))
+        .flex_none()
         .flex()
         .flex_row()
         .justify_between()
@@ -897,6 +948,7 @@ fn gauge(label: &str, fraction: f32, fill: u32, value: &str) -> Div {
     const WIDTH: f32 = 130.0;
     div()
         .h(px(LINE))
+        .flex_none()
         .flex()
         .flex_row()
         .items_center()
@@ -920,7 +972,6 @@ mod tests {
     fn made(seed: u64) -> Game {
         let mut game = Game::new(seed);
         game.answer("Ash");
-        game.answer("fighter");
         game
     }
 
@@ -956,7 +1007,7 @@ mod tests {
         assert_eq!(game.round_number(), 2);
         assert_eq!(game.player().pos, (pos.0 + 2, pos.1 + 1));
         let creatures = game.creatures().to_vec();
-        submit(&mut game, "look; inventory; help; list; nonsense; pause; stop");
+        submit(&mut game, "look; inventory; skills; help; list; nonsense; pause; stop");
         assert_eq!(game.round_number(), 2);
         assert_eq!(game.creatures(), creatures);
         submit(&mut game, "wait; wait; wait; wait; wait; wait");
@@ -1115,7 +1166,6 @@ mod tests {
     fn unseen_cells_are_blank_and_remembered_ones_dim() {
         let mut game = Game::new(3);
         game.answer("Ash");
-        game.answer("fighter");
         let me = game.player().pos;
         assert_eq!(cell(&game, me, &[]).0, "@ ");
         assert_eq!(cell(&game, (me.0 + 40, me.1 + 40), &[]).0, "  ");
@@ -1135,5 +1185,16 @@ mod tests {
     #[test]
     fn the_window_fits_a_laptop_screen() {
         assert!(f32::from(WINDOW_WIDTH) <= 1000.0 && f32::from(WINDOW_HEIGHT) <= 860.0);
+    }
+
+    #[test]
+    fn every_practice_fits_the_inspection_panel() {
+        let game = made(7);
+        let lines = skill_lines(game.player());
+        assert_eq!(lines.len(), Practice::ALL.len());
+        for practice in Practice::ALL {
+            assert!(lines.contains(&format!("{}: novice", practice.name())));
+        }
+        assert!((lines.len() as f32 + 4.0) * LINE + 11.0 + 2.0 * INSET < MAP_H);
     }
 }

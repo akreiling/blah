@@ -148,6 +148,8 @@ pub enum Instant {
     Inventory,
     /// The outfitter's wares.
     List,
+    /// All practice ranks and their effects.
+    Skills,
     /// The commands.
     Help,
 }
@@ -184,11 +186,12 @@ enum Verb {
     Look,
     Inventory,
     List,
+    Skills,
     Help,
 }
 
 /// Verbs with the shortest prefix each accepts. Earlier entries win, so `we` is wear and `w` is west.
-const VERBS: [(&str, usize, Verb); 27] = [
+const VERBS: [(&str, usize, Verb); 28] = [
     ("attack", 1, Verb::Attack),
     ("fight", 1, Verb::Attack),
     ("kill", 1, Verb::Attack),
@@ -214,6 +217,7 @@ const VERBS: [(&str, usize, Verb); 27] = [
     ("look", 1, Verb::Look),
     ("inventory", 1, Verb::Inventory),
     ("list", 2, Verb::List),
+    ("skills", 2, Verb::Skills),
     ("help", 3, Verb::Help),
     ("?", 1, Verb::Help),
 ];
@@ -274,6 +278,7 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
         Verb::Look => return Ok(Parsed::Instant(Instant::Look)),
         Verb::Inventory => return Ok(Parsed::Instant(Instant::Inventory)),
         Verb::List => return Ok(Parsed::Instant(Instant::List)),
+        Verb::Skills => return Ok(Parsed::Instant(Instant::Skills)),
         Verb::Help => return Ok(Parsed::Instant(Instant::Help)),
     }))
 }
@@ -301,14 +306,14 @@ fn capitalized(word: &str) -> String {
 pub const HELP: [&str; 10] = [
     "Move: n s e w ne nw se sw, up to three a round (n n e). Each command takes one round.",
     "Fight: attack <who>, nock then shoot <who>. Who is a letter (shoot a) or a name (sh 2 orc).",
-    "Magic: chant <spell>, then cast [who]. Wizard: spark, shield. Thaumaturge: heal, stun.",
-    "Thieves: hide, then strike or shoot from hiding for extra damage.",
+    "Magic: chant <spell>, then cast [who]. Spells: spark, shield, heal, stun. Metal adds 2 Focus except shield.",
+    "Hide: hide, then strike or shoot from hiding for extra damage. Anyone can hide and chant.",
     "Things: get <item>|all, drop, wield, wear, quaff, inventory, look.",
     "Town: buy <item>, sell <item>, list (in the shop); heal (in the temple).",
-    "Empty-line keys: < upstairs, > downstairs, comma gets all. Rest recovers; wait (wa) stands ready.",
+    "Growth: useful practice improves powers; kills raise adventuring rank. Skills lists practice. Rest recovers.",
     "Chain rounds with ;  (nock; shoot a). A chain stops if you are hurt or something new appears.",
     "Arrows move, keeping typed text. Ctrl-P/N recalls commands. Enter on an empty line repeats; quit leaves.",
-    "Commands abbreviate: a, sh, no, ch, ca, g, l, i, q, r, d, u.",
+    "Commands abbreviate: a, sh, no, ch, ca, g, l, i, sk, q, r, d, u.",
 ];
 
 #[cfg(test)]
@@ -345,6 +350,7 @@ mod tests {
         assert_eq!(round("dr dagger"), Command::Drop("dagger".into()));
         assert_eq!(parse("l"), Ok(Parsed::Instant(Instant::Look)));
         assert_eq!(parse("i"), Ok(Parsed::Instant(Instant::Inventory)));
+        assert_eq!(parse("sk"), Ok(Parsed::Instant(Instant::Skills)));
     }
 
     #[test]

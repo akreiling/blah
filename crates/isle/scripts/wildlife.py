@@ -11,7 +11,7 @@ from wilderness import at
 
 def wildlife():
     with Isle(seed=7) as isle:
-        save = isle.batch("Wren\n", "thief\n", game=True)["game"]
+        save = isle.batch("Wren\n", game=True)["game"]
         assert isle.quit() == 0
     # A scoped fixture puts the character at the starting town's west edge.
     save["player"]["pos"] = [-1, 12]

@@ -1,67 +1,8 @@
-//! The fixed tables: callings, creatures, gear, and spells.
+//! The fixed tables: creatures, gear, and spells.
 
 use serde::{Deserialize, Serialize};
 
 use crate::rng::Rng;
-
-/// A character's calling, chosen at creation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Class {
-    /// Hits hardest and lasts longest.
-    Fighter,
-    /// Hides, strikes from hiding, and starts with a bow.
-    Thief,
-    /// Chants attack and warding spells; metal armor smothers them.
-    Wizard,
-    /// A warrior-priest: fights in armor, heals, and stuns.
-    Thaumaturge,
-}
-
-impl Class {
-    /// Every calling, in the order creation lists them.
-    pub const ALL: [Class; 4] = [Class::Fighter, Class::Thief, Class::Thaumaturge, Class::Wizard];
-
-    /// The calling's name.
-    pub const fn name(self) -> &'static str {
-        match self {
-            Class::Fighter => "fighter",
-            Class::Thief => "thief",
-            Class::Wizard => "wizard",
-            Class::Thaumaturge => "thaumaturge",
-        }
-    }
-
-    /// Whether the calling casts spells.
-    pub const fn casts(self) -> bool {
-        matches!(self, Class::Wizard | Class::Thaumaturge)
-    }
-
-    pub(crate) const fn base_hp(self) -> i32 {
-        match self {
-            Class::Fighter => 14,
-            Class::Thief => 10,
-            Class::Wizard => 8,
-            Class::Thaumaturge => 12,
-        }
-    }
-
-    pub(crate) const fn hp_per_level(self) -> i32 {
-        match self {
-            Class::Fighter => 8,
-            Class::Thief => 6,
-            Class::Wizard => 4,
-            Class::Thaumaturge => 6,
-        }
-    }
-
-    pub(crate) const fn melee_bonus(self) -> i32 {
-        match self {
-            Class::Fighter => 2,
-            Class::Thief | Class::Thaumaturge => 1,
-            Class::Wizard => 0,
-        }
-    }
-}
 
 /// A hand weapon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,11 +11,11 @@ pub enum Weapon {
     Dagger,
     /// The common blade.
     ShortSword,
-    /// The fighter's pride.
+    /// A long and heavy blade.
     LongSword,
     /// Heavy and blunt.
     Mace,
-    /// A wizard's walking stick.
+    /// A walking stick.
     Staff,
 }
 
@@ -168,7 +109,7 @@ impl Armor {
         }
     }
 
-    /// Whether it is metal, which smothers a wizard's spells.
+    /// Whether it is metal, which raises the Focus cost of most spells.
     pub const fn metal(self) -> bool {
         !matches!(self, Armor::Leather)
     }
@@ -305,13 +246,13 @@ pub(crate) fn treasure(value: u32, item_chance: i32, rng: &mut Rng) -> Vec<Item>
 /// A spell, chanted one round and cast the next.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Spell {
-    /// Wizard: a crackling bolt at one target in sight.
+    /// A crackling bolt at one target in sight.
     Spark,
-    /// Wizard: a ward that turns arrows and blows aside for a while.
+    /// A ward that turns arrows and blows aside for a while.
     Shield,
-    /// Thaumaturge: closes the caster's own wounds.
+    /// Closes the caster's own wounds.
     Heal,
-    /// Thaumaturge: freezes one target in sight for a few rounds.
+    /// Freezes one target in sight for a few rounds.
     Stun,
 }
 
@@ -329,20 +270,12 @@ impl Spell {
         }
     }
 
-    /// The calling that knows it.
-    pub const fn class(self) -> Class {
-        match self {
-            Spell::Spark | Spell::Shield => Class::Wizard,
-            Spell::Heal | Spell::Stun => Class::Thaumaturge,
-        }
-    }
-
     /// Whether it needs a target.
     pub const fn aimed(self) -> bool {
         matches!(self, Spell::Spark | Spell::Stun)
     }
 
-    /// Mana spent when cast.
+    /// Base Focus spent when cast, before a metal-armor penalty.
     pub const fn cost(self) -> i32 {
         match self {
             Spell::Spark => 3,
@@ -460,9 +393,6 @@ impl Kind {
         }
     }
 }
-
-/// Experience needed to reach each level, from level 1.
-pub const LEVELS: [u32; 10] = [0, 60, 150, 300, 550, 900, 1400, 2100, 3000, 4200];
 
 #[cfg(test)]
 mod tests {

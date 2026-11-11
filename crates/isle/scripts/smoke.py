@@ -37,10 +37,12 @@ def turn_based():
         assert set(reply) == {"steps", "interrupted", "round", "news", "screen"}, reply.keys()
         assert len(json.dumps(reply)) < 4096, "the default state is what the window shows, not the whole island"
         assert isle.batch("A>,")["steps"] == 3 and isle.screen()["prompt"]["text"] == "A>,"
-        isle.batch("escape", "Wren\n", "fighter\n")
+        isle.batch("escape", "Wren\n")
         screen = isle.screen()
         assert len(screen["view"]) == 13 and all(len(row) == 26 for row in screen["view"])
-        assert screen["view"][6][12:14] == "@ " and hp(screen) == (12, 12) and not sighted(screen)
+        assert screen["view"][6][12:14] == "@ " and hp(screen)[0] == hp(screen)[1] and not sighted(screen)
+        assert hp(screen)[0] >= 20 and "Rank 1 · 0/" in "\n".join(screen["panel"])
+        assert "Focus 24/24" in screen["panel"] and "Hand short sword · novice" in screen["panel"]
         reply = isle.request("key", key="up")
         assert set(reply) == {"steps", "interrupted", "round", "news"}, "input replies carry no state unless asked"
 
@@ -60,7 +62,7 @@ def turn_based():
         isle.batch("escape", "drop potion\n")
         before = isle.request("state")["round"]
         reply = isle.batch(",", game=True)
-        assert reply["round"] == before + 1 and reply["game"]["player"]["sack"] == ["Potion"]
+        assert reply["round"] == before + 1 and "Potion" in reply["game"]["player"]["sack"]
 
         start = tuple(reply["game"]["player"]["pos"])
         keys = route(level, start, tuple(stairs))
@@ -96,7 +98,7 @@ def interruption(save, town):
 
 def clocked():
     with Isle(seed=7, round_seconds=0.5) as isle:
-        isle.batch("Wren\n", "fighter\n", "pause\n")
+        isle.batch("Wren\n", "pause\n")
         state = isle.request("state", game=True)
         assert state["screen"]["panel"][-4].endswith("PAUSED")
         before = state["round"]
