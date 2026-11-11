@@ -4,7 +4,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 /// Snapshot layout. Bump when serialized fields or their meaning change.
-pub const SNAPSHOT_VERSION: u32 = 5;
+pub const SNAPSHOT_VERSION: u32 = 6;
 /// Terrain, biome table, region, and naming compatibility. Bump for incompatible generation changes.
 pub const TERRAIN_VERSION: u32 = 1;
 /// Simulation, evolution, clade, and technique-catalog compatibility.
@@ -37,6 +37,8 @@ pub struct GameSnapshot {
     salves: u8,
     #[serde(default)]
     caches: Vec<CacheRecord>,
+    #[serde(default)]
+    encounter: Option<EncounterRecord>,
     #[serde(default)]
     landmarks: Vec<LandmarkRecord>,
     #[serde(default)]
@@ -157,6 +159,7 @@ impl Game {
             equipped: self.equipped,
             salves: self.salves,
             caches: self.caches.values().cloned().collect(),
+            encounter: self.encounter.clone(),
             landmarks: self.landmarks.values().cloned().collect(),
             relics: self.relics.clone(),
             attuned_relics: self.attuned_relics,
@@ -173,6 +176,9 @@ impl Game {
     /// Restore without taking an action or granting practice. Derived state is regenerated.
     /// Unsupported versions and invalid state are rejected, never repaired silently.
     pub fn from_snapshot(mut s: GameSnapshot) -> Result<Self, &'static str> {
+        if (1..=5).contains(&s.snapshot_version) {
+            s.encounter = None;
+        }
         // Versions 1–4 predate relics and landmarks. Version 1 predates commitments; version 2 also
         // predates equipment, salves, and caches; version 3 predates herbs and draughts.
         if (1..=3).contains(&s.snapshot_version) {
@@ -206,6 +212,7 @@ impl Game {
             }
             3 => s.snapshot_version = SNAPSHOT_VERSION,
             4 => s.snapshot_version = SNAPSHOT_VERSION,
+            5 => s.snapshot_version = SNAPSHOT_VERSION,
             _ => {}
         }
         if s.snapshot_version != SNAPSHOT_VERSION {
@@ -418,6 +425,7 @@ impl Game {
             equipped: s.equipped,
             salves: s.salves,
             caches: s.caches.into_iter().map(|cache| (cache.region, cache)).collect(),
+            encounter: s.encounter,
             cache_trails: BTreeMap::new(),
             landmarks: s.landmarks.into_iter().map(|landmark| (landmark.region, landmark)).collect(),
             relics: s.relics,
@@ -488,6 +496,7 @@ impl Game {
                 tracking: m.tracking,
             });
         }
+        game.validate_encounter()?;
         game.update_cache_trails();
         game.update_visible_herbs();
         game.update_visible_landmarks();
@@ -645,7 +654,8 @@ mod tests {
             assert_eq!(cache.guards, old.guards);
             assert!(!cache.ruin, "v4 caches retain their old ordinary-cache interpretation");
         }
-        assert_eq!(loaded.snapshot().snapshot_version, 5);
+        assert!(loaded.encounter.is_none());
+        assert_eq!(loaded.snapshot().snapshot_version, SNAPSHOT_VERSION);
     }
 
     #[test]

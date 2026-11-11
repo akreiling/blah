@@ -19,10 +19,10 @@ use crate::commitment::{self, CommitmentPanel, Enter as CommitmentEnter};
 use crate::sprites::{Key, SPRITE_PX, SpriteCache};
 use crate::workshop::{Edit, Workshop};
 use crate::{
-    Camp, CancelWorkshop, ClaimCache, CycleEarnedMove, CycleRelics, CycleTrade, DrinkDraught, EarnedMoveEast,
-    EarnedMoveNorth, EarnedMoveSouth, EarnedMoveWest, Gather, MoveEast, MoveNorth, MoveSouth, MoveWest, OpenCommitment,
-    OpenWorkshop, PrepareWorkshop, RecoverFocus, TechniqueEast, TechniqueNorth, TechniqueSouth, TechniqueWest,
-    ToggleSneak, TradeWeapon, Unleash, UseLandmark, UseSalve, Wait, WorkshopAim, WorkshopDaggerExample,
+    Camp, CancelWorkshop, ChartEncounter, ClaimCache, CycleEarnedMove, CycleRelics, CycleTrade, DrinkDraught,
+    EarnedMoveEast, EarnedMoveNorth, EarnedMoveSouth, EarnedMoveWest, Gather, MoveEast, MoveNorth, MoveSouth, MoveWest,
+    OpenCommitment, OpenWorkshop, PrepareWorkshop, RecoverFocus, TechniqueEast, TechniqueNorth, TechniqueSouth,
+    TechniqueWest, ToggleSneak, TradeWeapon, Unleash, UseLandmark, UseSalve, Wait, WorkshopAim, WorkshopDaggerExample,
     WorkshopDelivery, WorkshopElement, WorkshopPayload, WorkshopPowerDown, WorkshopPowerUp, WorkshopShape,
     WorkshopStaffExample, WorkshopTrigger, WorkshopWeapon,
 };
@@ -394,7 +394,8 @@ impl Render for GameView {
             .on_action(cx.listener(|this, _: &UseSalve, _, cx| this.act(|g| _ = g.use_salve(), cx)))
             .on_action(cx.listener(|this, _: &Gather, _, cx| this.act(|g| _ = g.gather(), cx)))
             .on_action(cx.listener(|this, _: &DrinkDraught, _, cx| this.act(|g| _ = g.drink_draught(), cx)))
-            .on_action(cx.listener(|this, _: &UseLandmark, _, cx| this.act(|g| _ = g.use_landmark(), cx)))
+            .on_action(cx.listener(|this, _: &UseLandmark, _, cx| this.act(|g| _ = g.use_site(), cx)))
+            .on_action(cx.listener(|this, _: &ChartEncounter, _, cx| this.act(|g| _ = g.chart_encounter(), cx)))
             .on_action(cx.listener(|this, _: &CycleRelics, _, cx| this.cycle_relics(cx)))
             .on_action(cx.listener(|this, _: &CycleTrade, _, cx| {
                 if this.workshop.is_none() && this.commitment.is_none() {
@@ -471,10 +472,12 @@ fn map(game: &Game, sprites: &mut SpriteCache, hurt: bool) -> Div {
             .map(|dx| {
                 let (x, y) = (px0 + dx, py0 + dy);
                 let tile = world.tile(x, y);
-                if dx == 0 && dy == 0 {
+                let cell = if dx == 0 && dy == 0 {
                     wanderer_cell(&tile, hurt)
                 } else if let Some(monster) = game.monster_at(x, y) {
                     monster_cell(&tile, (x, y), monster, sprites, game.cache_at(x, y).is_some())
+                } else if let Some(object) = game.encounter_tile((x, y)) {
+                    encounter_cell(&tile, (x, y), object)
                 } else if let Some(cache) = game.cache_at(x, y) {
                     cache_cell(&tile, (x, y), cache)
                 } else if let Some(landmark) = game.landmark_at(x, y) {
@@ -485,6 +488,11 @@ fn map(game: &Game, sprites: &mut SpriteCache, hurt: bool) -> Div {
                     herb_cell(&tile, (x, y), herb)
                 } else {
                     terrain_cell(&tile, (x, y))
+                };
+                if game.encounter_danger_at((x, y)) > 0 {
+                    cell.bg(rgb(0x70_18_10)).border_2().border_color(rgb(0xff_60_30))
+                } else {
+                    cell
                 }
             })
             .collect();
@@ -506,6 +514,24 @@ fn cache_cell(tile: &Tile, at: (i64, i64), cache: blah_core::CacheInfo) -> Div {
         .border_2()
         .border_color(rgb(if claimed { DIM } else { HEADING }))
         .text_color(rgb(if claimed { DIM } else { HEADING }))
+        .font_weight(FontWeight::BOLD)
+        .child(glyph)
+}
+
+fn encounter_cell(tile: &Tile, at: (i64, i64), object: blah_core::EncounterTile) -> Div {
+    use blah_core::EncounterTile;
+    let (glyph, ready) = match object {
+        EncounterTile::Warning => ("!", true),
+        EncounterTile::Brazier(lit) => (if lit { "B" } else { "b" }, lit),
+        EncounterTile::Salvage(ready) => (if ready { "A" } else { "a" }, ready),
+        EncounterTile::Heart(ready) => (if ready { "E" } else { "e" }, ready),
+        EncounterTile::Spring(ready) => (if ready { "W" } else { "w" }, ready),
+    };
+    tile_base(tile.biome.biome().color, at)
+        .bg(rgb(0x20_12_0c))
+        .border_2()
+        .border_color(rgb(if ready { HEADING } else { DIM }))
+        .text_color(rgb(if ready { HEADING } else { DIM }))
         .font_weight(FontWeight::BOLD)
         .child(glyph)
 }
@@ -645,9 +671,11 @@ fn panel(
     if let Some(commitment) = commitment {
         return panel.child(commitment_panel(commitment, game));
     }
+    let mut panel = panel.child(wanderer(game)).child(rule());
+    if game.encounter().is_some() {
+        panel = panel.child(encounter_panel(game)).child(rule());
+    }
     panel
-        .child(wanderer(game))
-        .child(rule())
         .child(trails_panel(game))
         .child(rule())
         .child(adaptations(game))
@@ -746,6 +774,9 @@ fn gathering(game: &Game) -> Div {
 
 fn trails_panel(game: &Game) -> Div {
     let mut panel = div().flex().flex_col().child(heading("FIELD SIGNS"));
+    if game.encounter().is_none() {
+        panel = panel.child(small_line("Z: trace the cinder smoke (authored arc)"));
+    }
     if let Some(at) = game.cache_trail()
         && game.cache_at(at.0, at.1).is_none_or(|cache| !cache.claimed)
     {
@@ -759,6 +790,64 @@ fn trails_panel(game: &Game) -> Div {
         }
     }
     panel.child(small_line("Directions only; scout the route and guards."))
+}
+
+fn encounter_lines(game: &Game) -> Vec<String> {
+    use blah_core::{EncounterPhase, SentryCycle};
+    let Some(info) = game.encounter() else { return Vec::new() };
+    let def = info.definition;
+    let mut lines = vec![format!("Warning/spring: {}", destination_hint(game.position(), def.entrance()))];
+    if info.phase == EncounterPhase::Revealed {
+        lines.extend([
+            "Scorched lanes; a powerful warden waits.".into(),
+            "X at ! investigates before commitment.".into(),
+            "Approach or leave freely. No locked exit.".into(),
+        ]);
+    } else {
+        for sentry in info.sentries {
+            let state = if sentry.hp == 0 { "dead" } else { sentry.cycle.name() };
+            lines.push(format!(
+                "{}: {} HP, {state}",
+                if sentry.kind == blah_core::SentryKind::Warden { "Warden" } else { "Tender" },
+                sentry.hp
+            ));
+            if let SentryCycle::Aiming(dir) = sentry.cycle {
+                lines.push(format!("{dir:?} red lane fires AFTER next action."));
+            }
+        }
+        if info.phase == EncounterPhase::Resolved {
+            lines.push(
+                if info.reward_claimed { "Heart claimed; spring restored." } else { "X at E: claim Hearth ember." }
+                    .into(),
+            );
+            lines.push(
+                if info.spring_ready {
+                    "X at W: refill salves and draughts."
+                } else {
+                    "Spring recovers after 300 turns."
+                }
+                .into(),
+            );
+        } else {
+            lines.push(format!(
+                "Lit braziers: {}. X shuts (4 Focus; 2 unseen).",
+                info.braziers.iter().filter(|&&lit| lit).count()
+            ));
+            lines.push("Fire: up to 12, range 4. Sidestep red lanes.".into());
+            lines.push("Two exposed actions; Shove interrupts.".into());
+            lines.push(format!(
+                "Alcove: {}{}",
+                destination_hint(game.position(), def.salvage()),
+                if info.salvage_claimed { " (taken)" } else { " (X: Hushstone)" }
+            ));
+            lines.push("Leave 7 tiles from the heart to abandon.".into());
+        }
+    }
+    lines.into_iter().flat_map(|line| wrap(&line, PANEL_CHARS)).collect()
+}
+
+fn encounter_panel(game: &Game) -> Div {
+    div().flex().flex_col().child(heading("CINDER WATCH")).children(encounter_lines(game).into_iter().map(small_line))
 }
 
 fn relics_panel(game: &Game) -> Div {

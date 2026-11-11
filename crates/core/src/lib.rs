@@ -71,6 +71,10 @@ pub use game::{
     SALVE_HEAL, SPAWN_MAX, SPAWN_MIN, SPRING_COOLDOWN_TURNS, Step, TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity,
     find_land, individual, ring, spawn_chance,
 };
+pub use game::{
+    CINDER_WATCH_VERSION, ENCOUNTER_SEARCH_RADIUS, EncounterDefinition, EncounterInfo, EncounterPhase,
+    EncounterTemplate, EncounterTile, SentryCycle, SentryInfo, SentryKind,
+};
 pub use game::{GameSnapshot, RULES_VERSION, SNAPSHOT_VERSION, TERRAIN_VERSION};
 pub use genome::{GENES, Gene, Genome, gene_delta};
 pub use hash::{Rng, hash_point};

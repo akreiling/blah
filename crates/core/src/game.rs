@@ -31,6 +31,7 @@ use crate::world::{Tile, World};
 
 #[cfg(test)]
 mod commitment_tests;
+mod encounter;
 mod gathering;
 #[cfg(test)]
 mod journey_tests;
@@ -40,6 +41,11 @@ mod snapshot;
 mod trading;
 
 use crate::Relic;
+use encounter::EncounterRecord;
+pub use encounter::{
+    CINDER_WATCH_VERSION, ENCOUNTER_SEARCH_RADIUS, EncounterDefinition, EncounterInfo, EncounterPhase,
+    EncounterTemplate, EncounterTile, SentryCycle, SentryInfo, SentryKind,
+};
 use gathering::HerbPatch;
 pub use gathering::{DRAUGHT_CAPACITY, DRAUGHT_FOCUS, HERB_CAPACITY, HERB_REGROW_TURNS, Herb, HerbInfo};
 use landmarks::LandmarkRecord;
@@ -88,7 +94,7 @@ pub const LOG_LIMIT: usize = 100;
 pub const LAND_SEARCH_RADIUS: i64 = 4_096;
 
 /// One of the four directions the wanderer can step.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Dir {
     /// Up the screen, toward smaller `y`.
     North,
@@ -421,6 +427,8 @@ pub struct Game {
     salves: u8,
     /// Caches revealed once and retained by region, including their named guards' living state.
     caches: BTreeMap<RegionId, CacheRecord>,
+    /// One opt-in authored arc, immutable after charting.
+    encounter: Option<EncounterRecord>,
     /// Regional trail destinations, derived without revealing guards or committing a cache.
     cache_trails: BTreeMap<RegionId, (i64, i64)>,
     /// Known landmarks and their durable use/cooldown state.
@@ -463,6 +471,7 @@ impl PartialEq for Game {
             && (self.herbs, self.draughts) == (other.herbs, other.draughts)
             && self.active_picks().eq(other.active_picks())
             && self.journey == other.journey
+            && self.encounter == other.encounter
     }
 }
 
@@ -501,6 +510,7 @@ impl Game {
             equipped: WeaponItem::Dagger,
             salves: SALVE_CAPACITY,
             caches: BTreeMap::new(),
+            encounter: None,
             cache_trails: BTreeMap::new(),
             landmarks: BTreeMap::new(),
             relics: Vec::new(),
@@ -1039,7 +1049,7 @@ impl Game {
         }
         let dead: Vec<_> = self.monsters.iter().filter(|monster| monster.hp <= 0).map(|monster| monster.id).collect();
         for id in dead {
-            self.mark_cache_guard_dead(id);
+            self.mark_guard_dead(id);
         }
         self.monsters.retain(|monster| monster.hp > 0);
         self.learn_focus(preview.focus, threat);
@@ -1326,12 +1336,16 @@ impl Game {
         let deaths = self.deaths;
         let crept = std::mem::take(&mut self.crept);
         self.monsters_act(crept, sheltered);
+        if self.deaths == deaths {
+            self.advance_encounter(sheltered);
+        }
         self.sync_cache_guards();
         if self.deaths != deaths {
             return;
         }
         let here = self.position;
-        self.monsters.retain(|m| chebyshev(m.position, here) <= DESPAWN_RADIUS);
+        let exceptional = self.encounter_actor_ids();
+        self.monsters.retain(|m| exceptional.contains(&m.id) || chebyshev(m.position, here) <= DESPAWN_RADIUS);
         let productivity = self.local_life().productivity();
         let mut rng = Rng::keyed(self.world.seed(), b"spawning", &[self.turn]);
         if self.monsters.len() < capacity(productivity) && rng.chance(spawn_chance(productivity)) {
@@ -1579,7 +1593,8 @@ impl Game {
         }
     }
 
-    fn mark_cache_guard_dead(&mut self, id: MonsterId) {
+    fn mark_guard_dead(&mut self, id: MonsterId) {
+        self.encounter_actor_died(id);
         for cache in self.caches.values_mut() {
             if let Some(guard) = cache.guards.iter_mut().find(|guard| guard.id == id) {
                 guard.hp = 0;
@@ -1842,7 +1857,7 @@ impl Game {
             }
         };
         if let Some(id) = dead {
-            self.mark_cache_guard_dead(id);
+            self.mark_guard_dead(id);
             self.monsters.remove(index);
         }
         if improved {
@@ -1866,6 +1881,7 @@ impl Game {
     fn monsters_act(&mut self, crept: bool, sheltered: bool) {
         let deaths = self.deaths;
         let concealment = self.concealment();
+        let exceptional = self.encounter_actor_ids();
         for i in 0..self.monsters.len() {
             // Observation belongs to the turn, not to a speed-dependent opportunity to act.
             let now = self.monsters[i].detects(self.position, concealment);
@@ -1886,6 +1902,9 @@ impl Game {
                 && let Some(before) = self.stealth_lesson(i, lesson)
             {
                 self.announce("stealth", before, self.wanderer.stealth.rank(), crate::LearnedMove::SlipAway);
+            }
+            if exceptional.contains(&self.monsters[i].id) {
+                continue;
             }
             let mut rng = Rng::keyed(self.world.seed(), b"monsters", &[self.turn, self.monsters[i].id.0]);
             self.monsters[i].energy += self.monsters[i].phenotype.stats.speed;
@@ -1972,14 +1991,19 @@ impl Game {
         self.deaths += 1;
         self.turn += DEATH_TURNS;
         self.position = self.home;
+        self.retreat_encounter();
         self.wanderer.hp = self.death_health();
         self.wanderer.focus = 0;
         self.sneaking = false;
         self.last_attack = None;
         let home = self.home;
         self.sync_cache_guards();
-        let guards: HashSet<_> = self.caches.values().flat_map(|c| c.guards.iter().map(|g| g.id)).collect();
-        self.monsters.retain(|m| (VIEW_RADIUS + 1..=DESPAWN_RADIUS).contains(&chebyshev(m.position, home)));
+        let exceptional = self.encounter_actor_ids();
+        let mut guards: HashSet<_> = self.caches.values().flat_map(|c| c.guards.iter().map(|g| g.id)).collect();
+        guards.extend(exceptional.iter().copied());
+        self.monsters.retain(|m| {
+            exceptional.contains(&m.id) || (VIEW_RADIUS + 1..=DESPAWN_RADIUS).contains(&chebyshev(m.position, home))
+        });
         for monster in &mut self.monsters {
             if !guards.contains(&monster.id) {
                 monster.hp = monster.max_hp();

@@ -74,6 +74,8 @@ actions!(
         DrinkDraught,
         /// Use the landmark underfoot.
         UseLandmark,
+        /// Trace the smoke to the authored Cinder Watch arc without passing time.
+        ChartEncounter,
         /// Cycle active relics safely at home.
         CycleRelics,
         /// Select the next unequipped cache weapon for trade.
@@ -165,6 +167,7 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("e", Gather, None),
         KeyBinding::new("t", DrinkDraught, None),
         KeyBinding::new("x", UseLandmark, None),
+        KeyBinding::new("z", ChartEncounter, None),
         KeyBinding::new("y", CycleRelics, None),
         KeyBinding::new("i", CycleTrade, None),
         KeyBinding::new("u", TradeWeapon, None),

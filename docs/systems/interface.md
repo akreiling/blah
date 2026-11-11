@@ -134,3 +134,12 @@ lowercase markers are spent or regrowing. Cache ruins use `R`/`r` and show their
 relic reward in the cache panel. Two relic slots and their bounded effects appear in the status panel.
 New relics fill empty slots; `Y` cycles alternate owned pairs at home without passing a turn. Failed site
 uses and unsafe attunement do not spend time or supplies.
+
+## Implemented CP6 encounter controls
+
+`Z` charts Cinder Watch without passing time; FIELD SIGNS shows the hint until it is charted. The
+CINDER WATCH panel then gives directions to the warning stone `!`. `X` on the stone investigates, and
+on a brazier `B`, the alcove `A`, the heart `E`, or the spring `W` uses that object; lowercase marks
+are spent, shut, or recovering. Tiles in a committed fire lane get a red fill and orange border, and the
+panel names each sentry's Health and cycle, the aimed direction, lit braziers, costs, and the exit
+distance. Lanes fire after the player's next accepted action.

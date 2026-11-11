@@ -99,6 +99,7 @@ impl Game {
                 && let Some(m) = self.monsters.iter_mut().find(|m| m.id == id)
             {
                 m.position = push;
+                self.encounter_displaced(id);
             }
         }
         self.last_attack = Some(total);

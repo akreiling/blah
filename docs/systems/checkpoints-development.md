@@ -125,6 +125,26 @@ does not pass this gate.
 
 **Goal:** prove the dominance-to-apex contrast before remote drafting.
 
+**Implemented first slice:** [Cinder Watch](encounters.md#implemented-cp6-slice-cinder-watch), one
+opt-in authored arc charted from home. Its immutable definition depends only on the world and home. A
+lesser tender and a 54-Health warden share a readable draw, aim, fire, and exposed cycle; two braziers
+power the warden's shell and fire, and shutting them costs Focus rather than a specific weapon. A
+Hushstone alcove can be taken without kills. Retreat and death cancel pending fire but keep wounds,
+shutdowns, and claims. The warden's death restores a resupply spring. Sentries persist outside ambient
+despawn and save in snapshot v6.
+
+**Validation:** ten phase fixtures cover charting, exact lane timing, every cycle across reload,
+brazier armor, Shove interruption, retreat and death, the stealth objective, a blind stationary race
+the warden wins, claims, the spring cooldown, and malformed saves. One acceptance route on seed 42 uses
+public actions, with a reload after every action, for three injected mature identities at the same
+definition: a stealth dagger takes the Hushstone and leaves both sentries alive; an advanced club clears
+the tender in two strikes, then dodges marked lanes and strikes only during exposed windows; a Focus
+specialist shuts both braziers, runs out of Focus, rests at home, returns to the same wounds and shut
+braziers, and finishes with touch bursts. That route uses the spring afterward. This route found and
+fixed a rule bug: the tender's fire burned the warden standing in its lane. Sentries no longer burn
+each other. The route knows terrain and current actors; it is engine evidence, not a human or
+uninformed-play measurement, and it covers one seed. Checkboxes remain unchecked by convention.
+
 **Work**
 
 - [ ] Implement an encounter definition and runtime format.

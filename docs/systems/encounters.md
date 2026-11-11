@@ -104,3 +104,31 @@ Runtime state includes:
 - The last relevant simulation time.
 
 Cache eviction, death, and application restart cannot substitute a newly rolled encounter.
+
+## Implemented CP6 slice: Cinder Watch
+
+One opt-in authored arc. `Z` charts it from home without passing time. A bounded search from home picks
+the first land site at least 24 tiles away, within 64, with open land around it. The definition (template,
+mechanics version, and origin) depends only on the world and home, never on the character, and the save
+loader rejects any other definition.
+
+- **Attraction and warning:** charting reveals only the warning stone, six tiles west of the origin.
+  Investigating it costs one turn, explains the mechanics, and commits both sentries. A creature standing
+  on a sentry station blocks investigation instead of being displaced.
+- **Dominance:** the 8-Health tender has armor 1 and range 3. It demonstrates the same cycle as the apex
+  at low power.
+- **Capability cycle:** an alerted sentry draws heat, aims a straight lane at the player, and fires after
+  the player's next accepted action. Its shell then stays open (armor 0) for two actions. A landed Shove
+  during drawing or aiming interrupts the shot and opens the shell.
+- **Apex:** the 54-Health warden fires 12 damage at range 4 with both braziers lit. Each lit brazier adds
+  4 armor and 4 fire damage. Shutting a brazier costs 4 Focus, or 2 while sneaking unseen.
+- **Opportunities:** a Hushstone alcove needs no kills. Stealth avoids the sentries, force fights through
+  the exposed windows, and Focus spending shuts the braziers.
+- **Retreat:** moving more than 7 tiles from the origin, or dying, cancels pending fire and returns the
+  site to investigated. Wounds, shut braziers, lessons, and claims remain, and retreats are counted.
+- **Aftermath:** the warden's death resolves the arc. The heart yields a Hearth ember once, and the
+  warning stone becomes a spring that refills salves and draughts every 300 turns.
+
+Sentries are exempt from ambient despawn and do not wander. Their fire hits ambient creatures in the lane
+but not the other sentry. Pending lanes are saved, so a reload never retakes a turn. Charting is opt-in,
+so existing saves keep their journeys unchanged until the player chooses the arc.

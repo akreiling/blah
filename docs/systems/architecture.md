@@ -99,22 +99,24 @@ An overall package version alone is not a sufficient compatibility contract.
 ## Implemented first slice
 
 `blah-core` exposes `Game::snapshot` and `Game::from_snapshot`. A `GameSnapshot` carries snapshot, terrain,
-and rules versions (snapshot 5, terrain and rules 1), the seed, turn, position, home, visited regions, log,
+and rules versions (snapshot 6, terrain and rules 1), the seed, turn, position, home, visited regions, log,
 the wanderer's Health, Focus, practice, permanent adaptations and burst-release history, nearby creature
 state, the prepared composition, owned and equipped weapon items, salves, and durable cache claims and guard
 state, herb counts, draughts, recent patch-pick turns, landmark-use history, relic ownership, and two
-attunement slots. Herb sites, cache positions, field-sign destinations, and weapon rewards are
+attunement slots, and the Cinder Watch encounter record (definition, phase, sentry identities and cycles,
+braziers, claims, spring use, and retreats). Herb sites, cache positions, field-sign destinations, and weapon rewards are
 regenerated from the seed and region; region lives, labels, clades,
 and sprites are also regenerated. Loading checks versions and value ranges and rejects anything else.
 
-Version-1 through version-4 snapshots migrate to version 5. Migration from v1/v2 preserves existing practice and
+Version-1 through version-5 snapshots migrate to version 6; all of them start with no charted encounter. Migration from v1/v2 preserves existing practice and
 commitments, grants the four-item starting kit and two salves, equips the plain item matching the prepared
 weapon family, and starts with no cache claims. Version 1 also receives the version-2 adaptation defaults.
 Version 3 keeps its inventory, equipment, salves, claims, and guards. Versions 1–3 start with empty herb
 pouches and no draughts or picks; v4 keeps its supplies and picks. Versions 1–4 start with no Herbalism
 practice, relics, or landmark-use history. Version 5 validates capacity, slot order, exclusions,
 adaptation history, owned equipment, cache identity, guard state, supply caps, and unique recent picks at
-real herb sites.
+real herb sites. Version 6 also rejects an encounter whose definition differs from the one re-derived
+from the seed and home, or whose sentries, phase, claims, and timestamps disagree with the saved creatures.
 Only unregrown picks are authoritative; visible herb sites and cache-trail destinations can be evicted
 freely. Loading regenerates field signs without spawning guards or committing new encounters. Commitment
 is a no-time action through the same transactional save path; a failed write rolls it back.

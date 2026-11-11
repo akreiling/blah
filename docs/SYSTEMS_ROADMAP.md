@@ -92,6 +92,10 @@ remaining gate evidence are recorded in [CP5](systems/checkpoints-development.md
 the [whole-journey pass](systems/journey-playtest.md) records public-action routes, tuning, and remaining
 limits. CP5 checklists remain unchecked by convention and do not imply human playtesting is complete.
 
+The first CP6 slice adds one authored arc, [Cinder Watch](systems/encounters.md#implemented-cp6-slice-cinder-watch),
+with durable sentries, a telegraphed fire cycle, braziers, a stealth objective, retreat, and a restored
+spring, saved in snapshot v6.
+
 Then grow those identities through practice and commitment, preserve them in saves, and give them a
 worthwhile journey with treasure, recovery, and an authored apex encounter.
 
