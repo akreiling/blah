@@ -1,10 +1,12 @@
 //! Embedded 32×32 terrain and object artwork.
 //!
-//! Terrain comes from corner-matched (Wang) tilesets. Each map cell is drawn as four quarters, and each
+//! Terrain comes from corner-matched (Wang) tilesets. Each map cell is made of four quarters, and each
 //! quarter comes from the tile whose four corners are the terrains of the 2×2 block of cells meeting at that
-//! corner of the cell. Boundaries between terrains therefore fall on cell edges, a single cell of one terrain
-//! still shows, and every quarter keeps its own cell's visibility. Images are enlarged by integer
-//! nearest-neighbor duplication for the display scale and cached only while the visible map uses them.
+//! corner of the cell, so a single cell of one terrain still shows. Every world pixel then samples that layout
+//! through smooth world-space noise: textures stop repeating, boundaries wander off the cell grid, and since
+//! the warp depends only on world position, neighboring cells agree on every shared edge. Visibility stays per
+//! cell. Images are enlarged by integer nearest-neighbor duplication for the display scale and cached only
+//! while the visible map uses them.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -176,6 +178,8 @@ pub struct TerrainArt {
     pub object: Option<Object>,
     /// A gentle biome-color wash applied to water, if any.
     pub tint: Option<[u8; 3]>,
+    /// Whether a natural object is drawn mirrored, so repeated trees and boulders vary.
+    pub mirrored: bool,
 }
 
 /// Natural ground from biome traits, never its name or table index.
@@ -191,10 +195,13 @@ fn natural_ground(biome: &Biome) -> Terrain {
     }
 }
 
+fn mix(pos: (i32, i32)) -> u32 {
+    ((pos.0 as u32).wrapping_mul(0x9e37_79b9) ^ (pos.1 as u32).wrapping_mul(0x85eb_ca6b)).rotate_left(13)
+}
+
 /// A stable per-cell choice between two tree shapes, so woods are not uniform.
 fn tree_at(pos: (i32, i32)) -> Object {
-    let mix = (pos.0 as u32).wrapping_mul(0x9e37_79b9) ^ (pos.1 as u32).wrapping_mul(0x85eb_ca6b);
-    if mix.rotate_left(13) & 4 == 0 { Object::Pine } else { Object::Oak }
+    if mix(pos) & 4 == 0 { Object::Pine } else { Object::Oak }
 }
 
 /// Art layers for a tile. `deep` levels use the dungeon set; towns pave their floors with the dirt path and build
@@ -221,7 +228,8 @@ pub fn terrain_art(tile: Tile, biome: &Biome, deep: bool, pos: (i32, i32)) -> Te
     // Only water keeps its biome's color, which separates deep from shallow; elsewhere a per-biome wash makes
     // patchy blocks where neighboring biomes share a texture.
     let tint = (ground == Terrain::Water).then_some(biome.color);
-    TerrainArt { ground, object, tint }
+    let mirrored = matches!(object, Some(Object::Pine | Object::Oak | Object::Boulder)) && mix(pos) & 16 != 0;
+    TerrainArt { ground, object, tint, mirrored }
 }
 
 /// The ground-pile icon. Mixed piles use a single treasure mark, and empty piles have no icon.
@@ -280,22 +288,90 @@ pub fn ground_quarters(around: [[Terrain; 3]; 3]) -> [Quarter; 4] {
     })
 }
 
+/// The 5×5 block of grounds centered on a cell, rows north to south, and the 3×3 block of water tints. Callers
+/// pass the center's own ground and tint for cells the player does not know, so edges never reveal unexplored
+/// terrain. A warped sample reaches at most one cell away, and that cell needs its own 3×3 to pick quarters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GroundCell {
+    pub pos: (i32, i32),
+    pub around: [[Terrain; 5]; 5],
+    pub tints: [[Option<[u8; 3]>; 3]; 3],
+}
+
+/// Layers of the world-space warp as (period, amplitude) in source pixels. The amplitudes sum to well under a
+/// cell, so a warped sample never reaches past a neighboring cell.
+const WARP: [(f32, f32); 2] = [(24.0, 5.0), (9.0, 2.0)];
+#[cfg(test)]
+const WARP_REACH: i64 = 7;
+const SHADE_PERIOD: f32 = 72.0;
+const SHADE_PERCENT: f32 = 5.0;
+
+fn lattice(seed: u64, channel: u64, x: i64, y: i64) -> f32 {
+    let mut h = seed
+        ^ channel.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (x as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9)
+        ^ (y as u64).wrapping_mul(0x94d0_49bb_1331_11eb);
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94d0_49bb_1331_11eb);
+    h ^= h >> 31;
+    (h >> 40) as f32 / (1u64 << 24) as f32
+}
+
+/// Smooth value noise in [-1, 1].
+fn value_noise(seed: u64, channel: u64, x: f32, y: f32) -> f32 {
+    let (x0, y0) = (x.floor(), y.floor());
+    let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
+    let (sx, sy) = (smooth(x - x0), smooth(y - y0));
+    let (ix, iy) = (x0 as i64, y0 as i64);
+    let corner = |dx, dy| lattice(seed, channel, ix + dx, iy + dy);
+    let top = corner(0, 0) + (corner(1, 0) - corner(0, 0)) * sx;
+    let bottom = corner(0, 1) + (corner(1, 1) - corner(0, 1)) * sx;
+    (top + (bottom - top) * sy) * 2.0 - 1.0
+}
+
+/// The whole-pixel offset at which world pixel `p` samples the terrain. It depends only on world position, so
+/// neighboring cells agree on every shared edge.
+fn warp(seed: u64, p: (i64, i64)) -> (i64, i64) {
+    let mut offset = (0.0, 0.0);
+    for (i, &(period, amplitude)) in WARP.iter().enumerate() {
+        let (x, y) = (p.0 as f32 / period, p.1 as f32 / period);
+        offset.0 += value_noise(seed, 2 * i as u64, x, y) * amplitude;
+        offset.1 += value_noise(seed, 2 * i as u64 + 1, x, y) * amplitude;
+    }
+    (offset.0.round() as i64, offset.1.round() as i64)
+}
+
+/// A slow brightness drift across wide fields, in percent.
+fn shade(seed: u64, p: (i64, i64)) -> u16 {
+    let n = value_noise(seed, 9, p.0 as f32 / SHADE_PERIOD, p.1 as f32 / SHADE_PERIOD);
+    (100.0 + n * SHADE_PERCENT).round() as u16
+}
+
+fn shaded(mut pixel: [u8; 4], percent: u16) -> [u8; 4] {
+    for channel in &mut pixel[..3] {
+        *channel = (u16::from(*channel) * percent / 100).min(255) as u8;
+    }
+    pixel
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Source {
-    Ground([Quarter; 4]),
-    Object(Object),
+    Ground(GroundCell),
+    Object { object: Object, mirrored: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct ImageKey {
     source: Source,
-    tint: Option<[u8; 3]>,
     remembered: bool,
     lit: bool,
 }
 
 /// Decoded sheets plus the scale- and visibility-bounded images used by the current frame.
 pub struct ArtCache {
+    seed: u64,
     sets: HashMap<TileSet, RgbaImage>,
     objects: RgbaImage,
     images: HashMap<ImageKey, Arc<RenderImage>>,
@@ -304,7 +380,6 @@ pub struct ArtCache {
     factor: usize,
     device_side: usize,
 }
-
 fn decode(bytes: &[u8]) -> RgbaImage {
     let image = image::load_from_memory(bytes).expect("embedded world art must be a PNG").to_rgba8();
     assert_eq!(
@@ -316,8 +391,9 @@ fn decode(bytes: &[u8]) -> RgbaImage {
 }
 
 impl ArtCache {
-    pub fn new() -> Self {
+    pub fn new(seed: u64) -> Self {
         Self {
+            seed,
             sets: ALL_SETS.into_iter().map(|set| (set, decode(set.bytes()))).collect(),
             objects: decode(OBJECTS),
             images: HashMap::new(),
@@ -357,46 +433,57 @@ impl ArtCache {
         self.device_side as f32 / self.scale
     }
 
-    /// A cell's ground from its four quarters.
-    pub fn ground(
-        &mut self,
-        quarters: [Quarter; 4],
-        tint: Option<[u8; 3]>,
-        remembered: bool,
-        lit: bool,
-    ) -> Arc<RenderImage> {
-        self.get(ImageKey { source: Source::Ground(quarters), tint, remembered, lit })
+    /// A cell's warped ground.
+    pub fn ground(&mut self, cell: GroundCell, remembered: bool, lit: bool) -> Arc<RenderImage> {
+        self.get(ImageKey { source: Source::Ground(cell), remembered, lit })
     }
 
-    /// An object icon over the ground.
-    pub fn object(&mut self, object: Object, remembered: bool, lit: bool) -> Arc<RenderImage> {
-        self.get(ImageKey { source: Source::Object(object), tint: None, remembered, lit })
+    /// An object icon over the ground, optionally mirrored left to right.
+    pub fn object(&mut self, object: Object, mirrored: bool, remembered: bool, lit: bool) -> Arc<RenderImage> {
+        self.get(ImageKey { source: Source::Object { object, mirrored }, remembered, lit })
+    }
+
+    /// The pixel of a quarter's tile at `local` within the cell. The cell's NW quarter is the SE quarter of the
+    /// tile centered on the cell's NW corner.
+    fn quarter_pixel(&self, quarter: Quarter, local: (usize, usize)) -> [u8; 4] {
+        let (qx, qy) = (local.0 / QUARTER, local.1 / QUARTER);
+        let x = (quarter.mask as usize % 4) * NATIVE_SIDE + (1 - qx) * QUARTER + local.0 % QUARTER;
+        let y = (quarter.mask as usize / 4) * NATIVE_SIDE + (1 - qy) * QUARTER + local.1 % QUARTER;
+        self.sets[&quarter.set].get_pixel(x as u32, y as u32).0
     }
 
     fn native(&self, source: Source) -> RgbaImage {
         let mut out = RgbaImage::new(NATIVE_SIDE as u32, NATIVE_SIDE as u32);
         match source {
-            Source::Ground(quarters) => {
-                for (i, quarter) in quarters.into_iter().enumerate() {
-                    let sheet = &self.sets[&quarter.set];
-                    let (qx, qy) = (i % 2, i / 2);
-                    // The cell's NW quarter is the SE quarter of the tile centered on the cell's NW corner.
-                    let tile_x = (quarter.mask as usize % 4) * NATIVE_SIDE + (1 - qx) * QUARTER;
-                    let tile_y = (quarter.mask as usize / 4) * NATIVE_SIDE + (1 - qy) * QUARTER;
-                    for y in 0..QUARTER {
-                        for x in 0..QUARTER {
-                            let pixel = *sheet.get_pixel((tile_x + x) as u32, (tile_y + y) as u32);
-                            out.put_pixel((qx * QUARTER + x) as u32, (qy * QUARTER + y) as u32, pixel);
-                        }
+            Source::Ground(cell) => {
+                // Quarters of the cell and its eight neighbors, which warped samples may reach.
+                let quarters = [0, 1, 2].map(|r| {
+                    [0, 1, 2].map(|c| ground_quarters([0, 1, 2].map(|y| [0, 1, 2].map(|x| cell.around[r + y][c + x]))))
+                });
+                let side = NATIVE_SIDE as i64;
+                let (cx, cy) = (i64::from(cell.pos.0), i64::from(cell.pos.1));
+                for y in 0..side {
+                    for x in 0..side {
+                        let p = (cx * side + x, cy * side + y);
+                        let (wx, wy) = warp(self.seed, p);
+                        let q = (p.0 + wx, p.1 + wy);
+                        let r = (q.1.div_euclid(side) - cy + 1) as usize;
+                        let c = (q.0.div_euclid(side) - cx + 1) as usize;
+                        let local = (q.0.rem_euclid(side) as usize, q.1.rem_euclid(side) as usize);
+                        let quarter = quarters[r][c][(local.1 / QUARTER) * 2 + local.0 / QUARTER];
+                        let pixel = shaded(self.quarter_pixel(quarter, local), shade(self.seed, p));
+                        let pixel = transform_pixel(pixel, cell.tints[r][c], false, false);
+                        out.put_pixel(x as u32, y as u32, image::Rgba(pixel));
                     }
                 }
             }
-            Source::Object(object) => {
+            Source::Object { object, mirrored } => {
                 let i = object.index();
                 let (ox, oy) = ((i % 4) * NATIVE_SIDE, (i / 4) * NATIVE_SIDE);
                 for y in 0..NATIVE_SIDE {
                     for x in 0..NATIVE_SIDE {
-                        out.put_pixel(x as u32, y as u32, *self.objects.get_pixel((ox + x) as u32, (oy + y) as u32));
+                        let sx = if mirrored { NATIVE_SIDE - 1 - x } else { x };
+                        out.put_pixel(x as u32, y as u32, *self.objects.get_pixel((ox + sx) as u32, (oy + y) as u32));
                     }
                 }
             }
@@ -404,13 +491,13 @@ impl ArtCache {
         out
     }
 
-    /// The cache key space is bounded by the embedded sheets and presentation variants, and end-of-frame evicts
-    /// images that left the visible map.
+    /// The cache key space is bounded by the visible map's cells and presentation variants, and end-of-frame
+    /// evicts images that left the visible map.
     fn get(&mut self, key: ImageKey) -> Arc<RenderImage> {
         if !self.images.contains_key(&key) {
             let source = self.native(key.source);
             let opaque = matches!(key.source, Source::Ground(_));
-            let pixels = rasterize(&source, opaque, self.device_side, self.factor, key.tint, key.remembered, key.lit);
+            let pixels = rasterize(&source, opaque, self.device_side, self.factor, None, key.remembered, key.lit);
             let raster =
                 RgbaImage::from_raw(self.device_side as u32, self.device_side as u32, pixels).expect("sized raster");
             self.images.insert(key, Arc::new(RenderImage::new([Frame::new(raster)])));
@@ -586,32 +673,210 @@ mod tests {
         assert_eq!(ground_quarters(unjoined), [Quarter { set: TileSet::Dungeon, mask: 15 }; 4]);
     }
 
+    /// Grounds and tints of a world laid out by `world`, as the view would pass them with everything known.
+    fn world_cell(world: &dyn Fn(i32, i32) -> Terrain, pos: (i32, i32)) -> GroundCell {
+        let tint =
+            |x: i32, y: i32| (world(x, y) == Terrain::Water).then_some([20, 70, 90 + (x.rem_euclid(3) * 30) as u8]);
+        GroundCell {
+            pos,
+            around: [-2, -1, 0, 1, 2].map(|dy| [-2, -1, 0, 1, 2].map(|dx| world(pos.0 + dx, pos.1 + dy))),
+            tints: [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| tint(pos.0 + dx, pos.1 + dy))),
+        }
+    }
+
+    fn sample_world(world: &dyn Fn(i32, i32) -> Terrain, cache: &ArtCache, p: (i64, i64)) -> [u8; 4] {
+        // Independent of any one cell: find the source cell of the warped point in the world itself.
+        let (wx, wy) = warp(cache.seed, p);
+        let q = (p.0 + wx, p.1 + wy);
+        let source = (q.0.div_euclid(32) as i32, q.1.div_euclid(32) as i32);
+        let around = [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| world(source.0 + dx, source.1 + dy)));
+        let local = (q.0.rem_euclid(32) as usize, q.1.rem_euclid(32) as usize);
+        let quarter = ground_quarters(around)[(local.1 / 16) * 2 + local.0 / 16];
+        let tint = world_cell(world, source).tints[1][1];
+        transform_pixel(shaded(cache.quarter_pixel(quarter, local), shade(cache.seed, p)), tint, false, false)
+    }
+
+    fn mixed_world(x: i32, y: i32) -> Terrain {
+        match (x.rem_euclid(5), y.rem_euclid(4)) {
+            (0, _) => Terrain::Water,
+            (1, 0) => Terrain::Sand,
+            (2, _) | (3, 1) => Terrain::Dirt,
+            (4, 3) => Terrain::Rock,
+            _ => Terrain::Grass,
+        }
+    }
+
     #[test]
-    fn ground_quarters_come_from_the_tile_centered_on_each_cell_corner() {
-        let cache = ArtCache::new();
-        let quarters = [
-            Quarter { set: TileSet::Shore, mask: 3 },
-            Quarter { set: TileSet::Path, mask: 5 },
-            Quarter { set: TileSet::Rocky, mask: 9 },
-            Quarter { set: TileSet::Dungeon, mask: 12 },
-        ];
-        let cell = cache.native(Source::Ground(quarters));
-        for (i, quarter) in quarters.iter().enumerate() {
-            let sheet = &cache.sets[&quarter.set];
-            let (qx, qy) = (i % 2, i / 2);
-            for y in 0..16 {
-                for x in 0..16 {
-                    let sx = (quarter.mask as usize % 4) * 32 + (1 - qx) * 16 + x;
-                    let sy = (quarter.mask as usize / 4) * 32 + (1 - qy) * 16 + y;
-                    assert_eq!(
-                        cell.get_pixel((qx * 16 + x) as u32, (qy * 16 + y) as u32),
-                        sheet.get_pixel(sx as u32, sy as u32)
-                    );
+    fn neighboring_cells_agree_with_one_world_wide_sampling() {
+        let cache = ArtCache::new(7);
+        for cy in -2..3 {
+            for cx in -2..3 {
+                let image = cache.native(Source::Ground(world_cell(&mixed_world, (cx, cy))));
+                for y in 0..32 {
+                    for x in 0..32 {
+                        let p = (i64::from(cx) * 32 + x, i64::from(cy) * 32 + y);
+                        assert_eq!(
+                            image.get_pixel(x as u32, y as u32).0,
+                            sample_world(&mixed_world, &cache, p),
+                            "{p:?}"
+                        );
+                    }
                 }
             }
         }
     }
 
+    #[test]
+    fn warp_stays_within_a_neighbor_and_moves_pixels() {
+        let mut moved = 0;
+        for y in -300..300 {
+            for x in (-300..300).step_by(7) {
+                let (wx, wy) = warp(3, (x, y));
+                assert!(wx.abs() <= WARP_REACH && wy.abs() <= WARP_REACH);
+                moved += usize::from((wx, wy) != (0, 0));
+            }
+        }
+        assert!(moved > 30_000, "most pixels are displaced: {moved}");
+    }
+
+    #[test]
+    fn identical_terrain_differs_from_cell_to_cell_and_seed_to_seed() {
+        let grass = |_: i32, _: i32| Terrain::Grass;
+        let cache = ArtCache::new(7);
+        let a = cache.native(Source::Ground(world_cell(&grass, (0, 0))));
+        let b = cache.native(Source::Ground(world_cell(&grass, (1, 0))));
+        let c = cache.native(Source::Ground(world_cell(&grass, (0, 1))));
+        assert!(a != b && a != c && b != c, "a uniform field must not repeat cell to cell");
+        let other = ArtCache::new(8).native(Source::Ground(world_cell(&grass, (0, 0))));
+        assert_ne!(a, other);
+        assert_eq!(a, ArtCache::new(7).native(Source::Ground(world_cell(&grass, (0, 0)))), "deterministic");
+    }
+
+    #[test]
+    fn mirrored_objects_flip_left_to_right() {
+        let cache = ArtCache::new(1);
+        let plain = cache.native(Source::Object { object: Object::Pine, mirrored: false });
+        let flipped = cache.native(Source::Object { object: Object::Pine, mirrored: true });
+        assert_eq!(image::imageops::flip_horizontal(&plain), flipped);
+        let mirrored = (0..400).filter(|&x| terrain_art(Tile::Tree, &BIOMES[0], false, (x, 3)).mirrored).count();
+        assert!(mirrored > 100 && mirrored < 300, "about half of trees are mirrored: {mirrored}");
+    }
+
+    #[test]
+    fn ground_cache_reuses_images_and_evicts_old_cells_and_scales() {
+        let mut cache = ArtCache::new(7);
+        let cell = world_cell(&mixed_world, (0, 0));
+        let first = cache.ground(cell, false, false);
+        assert!(Arc::ptr_eq(&first, &cache.ground(cell, false, false)));
+        let mut changed = cell;
+        changed.tints[1][1] = Some([30, 80, 150]);
+        assert!(!Arc::ptr_eq(&first, &cache.ground(changed, false, false)));
+        assert!(!Arc::ptr_eq(&first, &cache.ground(cell, true, false)));
+        assert!(!Arc::ptr_eq(&first, &cache.ground(cell, false, true)));
+        assert!(cache.begin_scale(1.0).is_empty());
+        cache.ground(cell, false, false);
+        assert_eq!(cache.finish().len(), 3);
+        assert_eq!(cache.images.len(), 1);
+        assert_eq!(cache.begin_scale(2.0).len(), 1);
+        assert!(cache.images.is_empty());
+        cache.ground(cell, false, false);
+        cache.begin_scale(2.0);
+        assert_eq!(cache.finish().len(), 1);
+        assert!(cache.images.is_empty());
+    }
+
+    /// Measure first-frame, cached-frame and scrolling costs at Retina scale, without GPU upload.
+    #[test]
+    #[ignore]
+    fn ground_render_cost() {
+        use std::time::Instant;
+        let start = Instant::now();
+        let mut cache = ArtCache::new(7);
+        cache.begin_scale(2.0);
+        let radius = isle_core::SIGHT;
+        let draw = |cache: &mut ArtCache, offset| {
+            for y in -radius..=radius {
+                for x in -radius..=radius {
+                    std::hint::black_box(cache.ground(world_cell(&mixed_world, (x + offset, y)), false, false));
+                }
+            }
+            cache.finish();
+        };
+        draw(&mut cache, 0);
+        let cold = start.elapsed();
+        let start = Instant::now();
+        cache.begin_scale(2.0);
+        draw(&mut cache, 0);
+        let warm = start.elapsed();
+        let start = Instant::now();
+        cache.begin_scale(2.0);
+        draw(&mut cache, 1);
+        let scroll = start.elapsed();
+        let count = (2 * radius + 1).pow(2) as usize;
+        assert_eq!(cache.images.len(), count);
+        eprintln!(
+            "{count} cells, 2x: cold {cold:?}, cached {warm:?}, scroll {scroll:?}; {} raster bytes",
+            count * 64 * 64 * 4
+        );
+    }
+
+    /// Writes target/isle-world-art/noise-contact.png from the real renderer:
+    /// `cargo test -p isle contact_sheet -- --ignored`.
+    #[test]
+    #[ignore]
+    fn contact_sheet() {
+        use Terrain::{Dirt, Floor, Grass, Rock, Sand, Wall, Water};
+        let (w, h) = (26, 16);
+        let world = |x: i32, y: i32| -> Terrain {
+            let (fx, fy) = (x as f32 - 11.0, y as f32 - 8.0);
+            let island = (fx * fx) / 90.0 + (fy * fy) / 34.0;
+            if (20..25).contains(&x) && (3..12).contains(&y) {
+                return if (21..24).contains(&x) && (4..11).contains(&y) || (y == 7 && x == 20) { Floor } else { Wall };
+            }
+            if x >= 19 {
+                return Water;
+            }
+            if island > 1.0 {
+                Water
+            } else if island > 0.72 {
+                Sand
+            } else if (fx + 4.0).powi(2) + (fy + 2.0).powi(2) < 7.0 || (x, y) == (14, 10) {
+                Rock
+            } else if y == 9 && (3..17).contains(&x) || x == 12 && (4..9).contains(&y) {
+                Dirt
+            } else {
+                Grass
+            }
+        };
+        let cache = ArtCache::new(7);
+        let scale = 2;
+        let mut out = RgbaImage::new((w * 32 * scale) as u32, (h * 32 * scale) as u32);
+        for cy in 0..h {
+            for cx in 0..w {
+                let mut cell = cache.native(Source::Ground(world_cell(&world, (cx, cy))));
+                let art = terrain_art(Tile::Grass, &BIOMES[0], false, (cx, cy));
+                let object = match (cx, cy) {
+                    (6..=9, 11..=12) | (13, 5) | (15, 6) => Some(tree_at((cx, cy))),
+                    (16, 11) => Some(Object::Boulder),
+                    (22, 5) => Some(Object::StairsDown),
+                    (8, 9) => Some(Object::Coins),
+                    _ => None,
+                };
+                if let Some(object) = object {
+                    let icon =
+                        cache.native(Source::Object { object, mirrored: art.mirrored || mix((cx, cy)) & 32 != 0 });
+                    image::imageops::overlay(&mut cell, &icon, 0, 0);
+                }
+                let big = image::imageops::resize(&cell, 64, 64, image::imageops::FilterType::Nearest);
+                image::imageops::replace(&mut out, &big, i64::from(cx * 64), i64::from(cy * 64));
+            }
+        }
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/isle-world-art/noise-contact.png");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        out.save(&path).unwrap();
+        eprintln!("{}", path.display());
+    }
     #[test]
     fn fractional_scales_use_integer_pixels_and_pad_without_smoothing() {
         let mut source = RgbaImage::new(32, 32);
@@ -619,7 +884,7 @@ mod tests {
             *pixel = image::Rgba([x as u8, y as u8, (x + y) as u8, 255]);
         }
         for scale in [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] {
-            let mut cache = ArtCache::new();
+            let mut cache = ArtCache::new(7);
             cache.begin_scale(scale);
             let (device_side, factor) = (cache.device_side, cache.factor);
             assert_eq!(device_side as f32 / scale, DISPLAY_SIDE);

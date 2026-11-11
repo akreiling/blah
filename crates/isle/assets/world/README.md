@@ -5,7 +5,9 @@ and the player and fixed-table creatures keep their readable text markers.
 
 - `terrain_<set>.png`: a corner-matched (Wang) tileset joining two terrains, packed 4×4 by corner mask
   (NW = 8, NE = 4, SW = 2, SE = 1, set where the corner is the set's terrain `b`). The game draws each cell as
-  four quarters, each from the tile centered on that corner of the cell, so terrain boundaries fall on cell edges.
+  four quarters, each from the tile centered on that corner of the cell. The renderer then samples this layout
+  through seeded world-space noise, bending textures and boundaries across cell edges without independent
+  per-tile seams. Slow brightness drift varies broad fields; water keeps its source cell's biome tint.
 - `objects.png`: 16 transparent 32×32 objects in the order listed in the manifest.
 - `manifest.json`: the PixelLab requests, seeds, billed usage, and hashes of each original response and each
   checked-in sheet. It contains no credentials.
@@ -13,6 +15,14 @@ and the player and fixed-table creatures keep their readable text markers.
 Local processing never resizes or resamples. Shared terrains (the path set's grass and the rocky set's sand) are
 recolored to the shore set's grass and sand so the sets meet without seams; object alpha is made binary. No image
 is fetched or generated during play.
+
+The renderer uses only known terrain in its 5×5 neighborhood, substituting the center's ground and tint for
+unknown cells. Trees and boulders may be mirrored. Cached ground images are per position and neighborhood,
+evicted when unused, and rebuilt at display-scale changes. Terrain pairs without a joining set still have a
+hard boundary. Preview the runtime warp offline with
+`mise exec -- cargo test -p isle contact_sheet -- --ignored`
+(`target/isle-world-art/noise-contact.png`). Measure CPU raster/cache costs with
+`mise exec -- cargo test -p isle ground_render_cost -- --ignored --nocapture`.
 
 ## Growing the library
 

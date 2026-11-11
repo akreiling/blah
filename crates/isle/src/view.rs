@@ -15,7 +15,7 @@ use isle_core::{
     distance,
 };
 
-use crate::art::{ArtCache, Object, Quarter, TerrainArt, ground_quarters, item_art, terrain_art};
+use crate::art::{ArtCache, GroundCell, Object, TerrainArt, item_art, terrain_art};
 use crate::input::{CommandLine, InputAction};
 use crate::sprites::SpriteCache;
 
@@ -105,7 +105,7 @@ impl IsleView {
         });
         let mark = game.log_total().saturating_sub(1);
         let sprites = SpriteCache::new(game.seed());
-        let art = ArtCache::new();
+        let art = ArtCache::new(game.seed());
         IsleView {
             game,
             path,
@@ -835,7 +835,7 @@ enum MapActor<'a> {
 
 struct MapCellArt<'a> {
     terrain: TerrainArt,
-    quarters: [Quarter; 4],
+    ground: GroundCell,
     remembered: bool,
     lit: bool,
     actor: Option<MapActor<'a>>,
@@ -863,24 +863,21 @@ fn map_cell_art<'a>(game: &'a Game, pos: Pos, labels: &[(Pos, char)]) -> Option<
     };
     let deep = level.deep().is_some();
     let terrain = terrain_art(level.tile(pos), level.ground(pos), deep, pos);
-    // Unknown neighbors take this cell's own ground, so tile edges never reveal unexplored terrain.
-    let around = [-1, 0, 1].map(|dy| {
-        [-1, 0, 1].map(|dx| {
-            let at = (pos.0 + dx, pos.1 + dy);
-            if (dx, dy) == (0, 0) || !(game.sees(at) || game.remembers(at)) {
-                terrain.ground
-            } else {
-                terrain_art(level.tile(at), level.ground(at), deep, at).ground
-            }
-        })
-    });
-    Some(MapCellArt {
-        terrain,
-        quarters: ground_quarters(around),
-        remembered,
-        lit: visible && game.illuminated(pos),
-        actor,
-    })
+    // Unknown neighbors take this cell's own ground and tint, so edges never reveal unexplored terrain.
+    let near = |dx: i32, dy: i32| {
+        let at = (pos.0 + dx, pos.1 + dy);
+        if (dx, dy) == (0, 0) || !(game.sees(at) || game.remembers(at)) {
+            terrain
+        } else {
+            terrain_art(level.tile(at), level.ground(at), deep, at)
+        }
+    };
+    let ground = GroundCell {
+        pos,
+        around: [-2, -1, 0, 1, 2].map(|dy| [-2, -1, 0, 1, 2].map(|dx| near(dx, dy).ground)),
+        tints: [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| near(dx, dy).tint)),
+    };
+    Some(MapCellArt { terrain, ground, remembered, lit: visible && game.illuminated(pos), actor })
 }
 
 fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache) -> Div {
@@ -893,10 +890,10 @@ fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache) -> Div {
             let mut base = div().w(px(CELL_W)).h(px(CELL_H)).flex_none().relative().bg(rgb(SCREEN));
             if let Some(cell_art) = cell_art {
                 let image_size = art.display_size();
-                let ground = art.ground(cell_art.quarters, cell_art.terrain.tint, cell_art.remembered, cell_art.lit);
+                let ground = art.ground(cell_art.ground, cell_art.remembered, cell_art.lit);
                 base = base.child(img(ground).size(px(image_size)).absolute().top_0().left_0());
                 if let Some(object) = cell_art.terrain.object {
-                    let image = art.object(object, cell_art.remembered, cell_art.lit);
+                    let image = art.object(object, cell_art.terrain.mirrored, cell_art.remembered, cell_art.lit);
                     base = base.child(img(image).size(px(image_size)).absolute().top_0().left_0());
                     let marker = match object {
                         Object::StairsUp => Some("<"),
@@ -967,7 +964,7 @@ fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache) -> Div {
                         base = creature_glyph(base, creature, label);
                     }
                     Some(MapActor::Item(object)) => {
-                        let image = art.object(object, false, false);
+                        let image = art.object(object, false, false, false);
                         base = base.child(img(image).size(px(image_size)).absolute().top_0().left_0());
                     }
                     None => {}
@@ -1361,6 +1358,36 @@ mod tests {
         assert_eq!(cell(&game, (me.0 + 40, me.1 + 40), &[]).0, "  ");
         assert!(map_cell_art(&game, (me.0 + 40, me.1 + 40), &[]).is_none());
         assert_eq!(dimmed(0xff_ff_ff), 0x59_59_59);
+    }
+
+    #[test]
+    fn warped_neighborhood_uses_only_known_ground_and_tints() {
+        let game = made(7);
+        let me = game.player().pos;
+        let mut unknown = 0;
+        let mut known = 0;
+        for y in me.1 - SIGHT..=me.1 + SIGHT {
+            for x in me.0 - SIGHT..=me.0 + SIGHT {
+                let Some(cell) = map_cell_art(&game, (x, y), &[]) else { continue };
+                for dy in -2..=2 {
+                    for dx in -2..=2 {
+                        let at = (x + dx, y + dy);
+                        let expected = if game.sees(at) || game.remembers(at) {
+                            known += 1;
+                            terrain_art(game.level().tile(at), game.level().ground(at), false, at)
+                        } else {
+                            unknown += 1;
+                            cell.terrain
+                        };
+                        assert_eq!(cell.ground.around[(dy + 2) as usize][(dx + 2) as usize], expected.ground);
+                        if dx.abs() <= 1 && dy.abs() <= 1 {
+                            assert_eq!(cell.ground.tints[(dy + 1) as usize][(dx + 1) as usize], expected.tint);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(unknown > 0 && known > 0);
     }
 
     #[test]
