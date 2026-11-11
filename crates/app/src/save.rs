@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(Save::load(&path).unwrap().1, resumed);
         let stored: Vec<u8> =
             save.as_ref().unwrap().connection.query_row("SELECT snapshot FROM state", [], |r| r.get(0)).unwrap();
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(&stored).unwrap()["snapshot_version"], 2);
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&stored).unwrap()["snapshot_version"], 3);
     }
 
     #[test]

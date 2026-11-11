@@ -84,6 +84,100 @@ impl Weapon {
     }
 }
 
+/// One owned piece of equipment. The four plain weapons form the starting kit; cache variants keep the
+/// same learned weapon family while adding a small, explicit trade-off.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WeaponItem {
+    /// Plain precision weapon.
+    #[default]
+    Dagger,
+    /// Plain reach weapon.
+    Spear,
+    /// Plain force weapon.
+    Club,
+    /// Plain channeling weapon.
+    Staff,
+    /// +1 force, with 2% more misses.
+    HeavyClub,
+    /// +2 opening precision, −1 force.
+    KeenDagger,
+    /// Reach costs 1 less Focus, −1 force.
+    LongSpear,
+    /// +1 concealment while sneaking, −1 force.
+    QuietStaff,
+}
+
+impl WeaponItem {
+    /// The starting equipment and the only items available before finding caches.
+    pub const STARTING: [Self; 4] = [Self::Dagger, Self::Spear, Self::Club, Self::Staff];
+    /// The possible cache rewards, in stable order.
+    pub const CACHE_REWARDS: [Self; 4] = [Self::HeavyClub, Self::KeenDagger, Self::LongSpear, Self::QuietStaff];
+
+    pub(crate) const fn plain(weapon: Weapon) -> Self {
+        match weapon {
+            Weapon::Dagger => Self::Dagger,
+            Weapon::Spear => Self::Spear,
+            Weapon::Club => Self::Club,
+            Weapon::Staff => Self::Staff,
+        }
+    }
+
+    /// The weapon family whose practice and technique rules this item uses.
+    #[must_use]
+    pub const fn weapon(self) -> Weapon {
+        match self {
+            Self::Dagger | Self::KeenDagger => Weapon::Dagger,
+            Self::Spear | Self::LongSpear => Weapon::Spear,
+            Self::Club | Self::HeavyClub => Weapon::Club,
+            Self::Staff | Self::QuietStaff => Weapon::Staff,
+        }
+    }
+
+    /// Name shown in the inventory and workshop.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Dagger => "Dagger",
+            Self::Spear => "Spear",
+            Self::Club => "Club",
+            Self::Staff => "Staff",
+            Self::HeavyClub => "Heavy club",
+            Self::KeenDagger => "Keen dagger",
+            Self::LongSpear => "Long spear",
+            Self::QuietStaff => "Quiet staff",
+        }
+    }
+
+    const fn force_bonus(self) -> i32 {
+        match self {
+            Self::HeavyClub => 1,
+            Self::KeenDagger | Self::LongSpear | Self::QuietStaff => -1,
+            Self::Dagger | Self::Spear | Self::Club | Self::Staff => 0,
+        }
+    }
+
+    const fn precision_bonus(self) -> i32 {
+        match self {
+            Self::KeenDagger => 2,
+            _ => 0,
+        }
+    }
+
+    const fn miss_penalty(self) -> f32 {
+        match self {
+            Self::HeavyClub => 0.02,
+            _ => 0.0,
+        }
+    }
+
+    pub(crate) const fn concealment_bonus(self) -> i64 {
+        match self {
+            Self::QuietStaff => 1,
+            _ => 0,
+        }
+    }
+}
+
 /// How an effect reaches an adjacent target.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Delivery {
@@ -326,19 +420,34 @@ impl Maneuver {
         training: Training,
         rng: &mut Rng,
     ) -> Result<AttackResult, &'static str> {
+        self.resolve_with_item(context, training, WeaponItem::plain(self.weapon), rng)
+    }
+
+    /// Resolve using an owned item in the maneuver's weapon family.
+    pub fn resolve_with_item(
+        &self,
+        context: AttackContext,
+        training: Training,
+        item: WeaponItem,
+        rng: &mut Rng,
+    ) -> Result<AttackResult, &'static str> {
         self.validate()?;
+        if item.weapon() != self.weapon {
+            return Err("The equipped item does not match this maneuver's weapon family.");
+        }
         if self.technique.delivery == Delivery::Ground {
             return Err("Ground areas use area resolution, not a single-target attack.");
         }
         let miss = if self.technique.delivery == Delivery::Weapon {
-            training.weapon.miss_chance() - if training.disciplined { 0.02 } else { 0.0 }
+            (training.weapon.miss_chance() + item.miss_penalty() - if training.disciplined { 0.02 } else { 0.0 })
+                .clamp(0.0, 1.0)
         } else {
             MISS_CHANCE
         };
         if rng.chance(miss) {
             return Ok(AttackResult::default());
         }
-        Ok(self.trained_hit(context, training, rng.below(3) as i32 - 1))
+        Ok(self.trained_hit(context, training, item, rng.below(3) as i32 - 1))
     }
 
     /// Exact range across successful-hit rolls; a miss can still do zero damage.
@@ -348,12 +457,25 @@ impl Maneuver {
 
     /// Successful-hit range with the same practice bonuses used by resolution.
     pub fn preview_trained(&self, context: AttackContext, training: Training) -> Result<AttackPreview, &'static str> {
+        self.preview_with_item(context, training, WeaponItem::plain(self.weapon))
+    }
+
+    /// Successful-hit range with practice and a specific owned item.
+    pub fn preview_with_item(
+        &self,
+        context: AttackContext,
+        training: Training,
+        item: WeaponItem,
+    ) -> Result<AttackPreview, &'static str> {
         self.validate()?;
+        if item.weapon() != self.weapon {
+            return Err("The equipped item does not match this maneuver's weapon family.");
+        }
         if self.technique.delivery == Delivery::Ground {
             return Err("Use the area preview for a ground delivery.");
         }
-        let low = self.trained_hit(context, training, -1);
-        let high = self.trained_hit(context, training, 1);
+        let low = self.trained_hit(context, training, item, -1);
+        let high = self.trained_hit(context, training, item, 1);
         Ok(AttackPreview {
             focus: self.technique.focus_cost(),
             min_hit: low.total(),
@@ -363,18 +485,18 @@ impl Maneuver {
         })
     }
 
-    fn trained_context(&self, mut context: AttackContext, training: Training) -> AttackContext {
+    fn trained_context(&self, mut context: AttackContext, training: Training, item: WeaponItem) -> AttackContext {
         if self.technique.delivery == Delivery::Weapon {
             context.attack = context.attack.saturating_add(training.weapon.bonus());
-            if self.opens(context) {
+            if self.opens(context, item) {
                 context.attack = context.attack.saturating_add(training.stealth.bonus());
             }
         }
         context
     }
 
-    fn trained_hit(&self, context: AttackContext, training: Training, roll: i32) -> AttackResult {
-        let mut result = self.on_hit(self.trained_context(context, training), roll);
+    fn trained_hit(&self, context: AttackContext, training: Training, item: WeaponItem, roll: i32) -> AttackResult {
+        let mut result = self.on_hit_with_item(self.trained_context(context, training, item), item, roll);
         if training.disciplined && self.technique.delivery == Delivery::Weapon {
             result.physical = result.physical.saturating_add(1);
         }
@@ -388,19 +510,30 @@ impl Maneuver {
     }
 
     /// Whether precise weapon placement exploits an actual unguarded opening.
-    fn opens(&self, context: AttackContext) -> bool {
+    fn opens(&self, context: AttackContext, item: WeaponItem) -> bool {
         self.technique.delivery == Delivery::Weapon
             && self.technique.aim == Aim::Opening
             && context.unguarded
-            && self.weapon.precision() > 0
+            && self.weapon.precision() + item.precision_bonus() > 0
     }
 
+    #[cfg(test)]
     fn on_hit(&self, context: AttackContext, roll: i32) -> AttackResult {
+        self.on_hit_with_item(context, WeaponItem::plain(self.weapon), roll)
+    }
+
+    fn on_hit_with_item(&self, context: AttackContext, item: WeaponItem, roll: i32) -> AttackResult {
         let weapon_contact = self.technique.delivery == Delivery::Weapon;
-        let precision = if weapon_contact { self.weapon.precision() } else { 0 };
-        let opening = self.opens(context);
+        let precision = if weapon_contact { self.weapon.precision() + item.precision_bonus() } else { 0 };
+        let opening = self.opens(context, item);
         let defense = context.defense.max(0).saturating_sub(if opening { precision } else { 0 }).max(0);
-        let impact = context.attack.saturating_add(self.weapon.force()).saturating_sub(defense).saturating_add(roll);
+        let item_force = if weapon_contact { item.force_bonus() } else { 0 };
+        let impact = context
+            .attack
+            .saturating_add(self.weapon.force())
+            .saturating_add(item_force)
+            .saturating_sub(defense)
+            .saturating_add(roll);
         let penetrated = weapon_contact && self.weapon.pierces() && impact > 0;
         let physical = if weapon_contact { impact.max(1) } else { 0 };
         let mut result = AttackResult { hit: true, physical, penetrated, opening, ..AttackResult::default() };
@@ -681,6 +814,53 @@ mod tests {
             assert_eq!(result.hit.then_some(result.total()), expected);
             assert_eq!(a.below(1000), b.below(1000));
         }
+    }
+
+    #[test]
+    fn cache_items_change_the_declared_combat_tradeoffs() {
+        let club = Maneuver { weapon: Weapon::Club, ..Maneuver::default() };
+        let plain = club.on_hit_with_item(GUARDED, WeaponItem::Club, 0);
+        let heavy = club.on_hit_with_item(GUARDED, WeaponItem::HeavyClub, 0);
+        assert_eq!(heavy.physical, plain.physical + 1);
+
+        let mut dagger = Maneuver::default();
+        dagger.technique.aim = Aim::Opening;
+        let high_defense_opening = AttackContext { attack: 4, defense: 5, unguarded: true, fire_resistance: 0 };
+        let plain = dagger.on_hit_with_item(high_defense_opening, WeaponItem::Dagger, 0);
+        let keen = dagger.on_hit_with_item(high_defense_opening, WeaponItem::KeenDagger, 0);
+        assert_eq!(keen.physical, plain.physical + 1, "extra precision beats its force penalty against high defense");
+        assert!(keen.opening);
+
+        let low_defense = AttackContext { attack: 10, defense: 0, unguarded: false, fire_resistance: 0 };
+        for (weapon, plain_item, cache_item) in [
+            (Weapon::Dagger, WeaponItem::Dagger, WeaponItem::KeenDagger),
+            (Weapon::Spear, WeaponItem::Spear, WeaponItem::LongSpear),
+            (Weapon::Staff, WeaponItem::Staff, WeaponItem::QuietStaff),
+        ] {
+            let maneuver = Maneuver { weapon, ..Maneuver::default() };
+            let plain = maneuver.on_hit_with_item(low_defense, plain_item, 0);
+            let variant = maneuver.on_hit_with_item(low_defense, cache_item, 0);
+            assert_eq!(variant.physical, plain.physical - 1, "{cache_item:?} trades one force");
+        }
+
+        assert_eq!(WeaponItem::QuietStaff.concealment_bonus(), 1);
+        for item in [WeaponItem::Dagger, WeaponItem::Spear, WeaponItem::Club, WeaponItem::Staff] {
+            assert_eq!(item.concealment_bonus(), 0);
+        }
+
+        let mut plain_misses = 0;
+        let mut heavy_misses = 0;
+        for seed in 0..10_000 {
+            let plain =
+                club.resolve_with_item(GUARDED, Training::default(), WeaponItem::Club, &mut Rng::new(seed)).unwrap();
+            let heavy = club
+                .resolve_with_item(GUARDED, Training::default(), WeaponItem::HeavyClub, &mut Rng::new(seed))
+                .unwrap();
+            assert!(plain.hit || !heavy.hit, "the heavier club only adds misses");
+            plain_misses += usize::from(!plain.hit);
+            heavy_misses += usize::from(!heavy.hit);
+        }
+        assert!(heavy_misses > plain_misses);
     }
 
     #[test]

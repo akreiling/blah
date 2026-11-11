@@ -97,3 +97,16 @@ Keep keyboard-first play:
 - Aiming does not reveal hidden actors.
 - Technique hotkeys use prepared actions, not a sprawling permanent keymap.
 - Peon clearing does not require opening a full ability panel every turn.
+
+## Implemented CP5 journey controls
+
+The first journey exposes its small action set directly in the play view:
+
+- `G` claims the cache underfoot; the map marks an unclaimed cache `C` and a claimed one `c`.
+- `P` camps for one exposed turn when no creature is in view.
+- `V` uses a salve during a normal turn, including combat.
+- `R` rests at home. The equipment panel shows the equipped item, owned items, and salve count; the workshop
+  lists owned weapon variants and equips one only when preparation is safe.
+
+The nearby cache panel shows its direction, claim state, living-guard count, and reward before the player
+reaches it. Claiming breaks sneaking, so the exposed turn is visible to territorial guards.

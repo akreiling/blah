@@ -12,11 +12,12 @@
 //!
 //! Coordinates follow the terrain's: `x` grows eastward and `y` grows southward, down the screen.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::Adaptation;
 use crate::biome::Biome;
 use crate::clade::{Clade, CladeId, clades};
+use crate::combat::WeaponItem;
 use crate::combat::{AreaPreview, AttackContext, AttackPreview, AttackResult, Delivery, Maneuver};
 use crate::genome::Genome;
 use crate::hash::Rng;
@@ -30,6 +31,8 @@ use crate::world::{Tile, World};
 
 #[cfg(test)]
 mod commitment_tests;
+#[cfg(test)]
+mod journey_tests;
 mod learned;
 mod snapshot;
 
@@ -115,6 +118,48 @@ pub enum Step {
     Waited,
     /// The target tile can't be entered. Nothing moved and no turn passed.
     Blocked,
+}
+
+/// A cache revealed on the map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CacheInfo {
+    /// Whether its one-time reward has been taken.
+    pub claimed: bool,
+    /// Number of guardians it began with.
+    pub guards: usize,
+    /// Guardians still alive.
+    pub guards_alive: usize,
+    /// The deterministic weapon reward.
+    pub treasure: WeaponItem,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CacheGuardRecord {
+    pub(super) id: MonsterId,
+    pub(super) species: crate::SpeciesId,
+    pub(super) name: String,
+    pub(super) genome: Genome,
+    pub(super) phenotype: Phenotype,
+    pub(super) hp: i32,
+    pub(super) position: (i64, i64),
+    pub(super) alerted: bool,
+    pub(super) energy: i32,
+    pub(super) practice_left: i32,
+    pub(super) stealth_left: i32,
+    pub(super) tracking: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CacheRecord {
+    pub(super) region: RegionId,
+    #[serde(skip)]
+    pub(super) position: (i64, i64),
+    pub(super) claimed: bool,
+    #[serde(skip)]
+    pub(super) treasure: WeaponItem,
+    pub(super) guards: Vec<CacheGuardRecord>,
 }
 
 /// Whether the wanderer can start on this biome: dry and walkable.
@@ -261,6 +306,14 @@ pub const DEATH_TURNS: u64 = 1_000;
 pub const REST_HEALTH: i32 = 2;
 /// Focus one turn of rest at home restores.
 pub const REST_FOCUS: i32 = 3;
+/// Health restored by camping or using a salve.
+pub const SALVE_HEAL: i32 = 10;
+/// Salves one cache grants and home keeps in reserve.
+pub const SALVE_CAPACITY: u8 = 2;
+/// Health restored by an exposed camp.
+pub const CAMP_HEALTH: i32 = 1;
+/// Focus restored by an exposed camp.
+pub const CAMP_FOCUS: i32 = 2;
 /// Stealth lessons each creature can teach, however it is evaded.
 const STEALTH_LESSONS: i32 = 12;
 /// Lessons a landed opening strike takes from its target.
@@ -347,6 +400,13 @@ pub struct Game {
     next_monster: u64,
     deaths: u32,
     maneuver: Maneuver,
+    inventory: Vec<WeaponItem>,
+    equipped: WeaponItem,
+    salves: u8,
+    /// Caches revealed once and retained by region, including their named guards' living state.
+    caches: BTreeMap<RegionId, CacheRecord>,
+    /// Developer trials exercise combat and composition without entering the first journey.
+    journey: bool,
     sneaking: bool,
     /// Last resolved attempt, for the prototype's explanation panel. Not advancement credit.
     last_attack: Option<AttackResult>,
@@ -365,6 +425,9 @@ impl PartialEq for Game {
                 == (&other.region, &other.visited, &other.log, &other.monsters)
             && (&self.maneuver, self.sneaking, self.last_attack, self.sneak_moves)
                 == (&other.maneuver, other.sneaking, other.last_attack, other.sneak_moves)
+            && (&self.inventory, self.equipped, self.salves, &self.caches)
+                == (&other.inventory, other.equipped, other.salves, &other.caches)
+            && self.journey == other.journey
     }
 }
 
@@ -399,12 +462,18 @@ impl Game {
             next_monster: 0,
             deaths: 0,
             maneuver: Maneuver::default(),
+            inventory: WeaponItem::STARTING.to_vec(),
+            equipped: WeaponItem::Dagger,
+            salves: SALVE_CAPACITY,
+            caches: BTreeMap::new(),
+            journey: true,
             sneaking: false,
             last_attack: None,
             sneak_moves: 0,
             crept: false,
         };
         game.populate(&mut Rng::keyed(seed, b"populate", &[]));
+        game.update_visible_caches();
         game
     }
 
@@ -426,6 +495,8 @@ impl Game {
         game.home = position;
         game.update_region(false);
         game.monsters.clear();
+        game.caches.clear();
+        game.journey = false;
         game.prepare(maneuver)?;
         let species = game.local_life().species[0].clone();
         let mut genome = species.pool[0];
@@ -559,6 +630,74 @@ impl Game {
         &self.maneuver
     }
 
+    /// Weapons this character owns, in their stable acquisition order.
+    #[must_use]
+    pub fn inventory(&self) -> &[WeaponItem] {
+        &self.inventory
+    }
+
+    /// The specific owned item currently equipped.
+    #[must_use]
+    pub const fn equipped_item(&self) -> WeaponItem {
+        self.equipped
+    }
+
+    /// Salves in the character's pack.
+    #[must_use]
+    pub const fn salves(&self) -> u8 {
+        self.salves
+    }
+
+    /// Cache at `(x, y)`, once it has come into view.
+    #[must_use]
+    pub fn cache_at(&self, x: i64, y: i64) -> Option<CacheInfo> {
+        let record = self.caches.values().find(|record| record.position == (x, y))?;
+        Some(CacheInfo {
+            claimed: record.claimed,
+            guards: record.guards.len(),
+            guards_alive: record.guards.iter().filter(|guard| guard.hp > 0).count(),
+            treasure: record.treasure,
+        })
+    }
+
+    /// Take a cache's weapon and one salve. Claiming is a full, exposed turn and does not require killing
+    /// its guards; an unclaimed cache remains guarded even if the wanderer leaves or dies.
+    pub fn claim_cache(&mut self) -> Step {
+        self.update_visible_caches();
+        let Some(info) = self.cache_at(self.position.0, self.position.1) else {
+            self.log.push(LogKind::Blocked, "There is no cache underfoot.");
+            return Step::Blocked;
+        };
+        if info.claimed {
+            self.log.push(LogKind::Blocked, "This cache has already been claimed.");
+            return Step::Blocked;
+        }
+        let record = self
+            .caches
+            .values_mut()
+            .find(|record| record.position == self.position)
+            .expect("cache info came from this map");
+        record.claimed = true;
+        let treasure = record.treasure;
+        let new_item = !self.inventory.contains(&treasure);
+        if new_item {
+            self.inventory.push(treasure);
+        }
+        let had_room = self.salves < SALVE_CAPACITY;
+        self.salves = self.salves.saturating_add(1).min(SALVE_CAPACITY);
+        self.turn += 1;
+        self.sneaking = false;
+        let item_text = if new_item {
+            format!("You claim the cache: {}.", treasure.name())
+        } else {
+            format!("You claim the cache; you already own {}.", treasure.name())
+        };
+        let salve_text = if had_room { " One salve added." } else { " Your salves are already full." };
+        self.log.push(LogKind::Attack, format!("{item_text}{salve_text}"));
+        self.finish_turn(false);
+        Step::Waited
+    }
+
     /// Whether careful movement is active, not a guarantee that every observer is unaware.
     #[must_use]
     pub const fn sneaking(&self) -> bool {
@@ -575,6 +714,54 @@ impl Game {
     #[must_use]
     pub fn can_prepare(&self) -> bool {
         self.monsters_in_view().next().is_none()
+    }
+
+    /// Recover modestly at any empty visible site. Unlike home rest, this is not sheltered from attacks.
+    pub fn camp(&mut self) -> Step {
+        if self.monsters_in_view().next().is_some() {
+            self.log.push(LogKind::Blocked, "Creatures in view prevent a safe camp.");
+            return Step::Blocked;
+        }
+        if self.wanderer.hp >= self.wanderer.max_hp() && self.wanderer.focus >= self.wanderer.max_focus() {
+            self.log.push(LogKind::Blocked, "You are already fully recovered.");
+            return Step::Blocked;
+        }
+        self.turn += 1;
+        self.sneaking = false;
+        self.wanderer.hp = (self.wanderer.hp + CAMP_HEALTH).min(self.wanderer.max_hp());
+        self.wanderer.focus = (self.wanderer.focus + CAMP_FOCUS).min(self.wanderer.max_focus());
+        self.log.push(
+            LogKind::Attack,
+            format!(
+                "You make an exposed camp. Health {}/{}, Focus {}/{}.",
+                self.wanderer.hp,
+                self.wanderer.max_hp(),
+                self.wanderer.focus,
+                self.wanderer.max_focus()
+            ),
+        );
+        self.finish_turn(false);
+        Step::Waited
+    }
+
+    /// Use a salve for Health during a normal exposed turn, including while creatures are nearby.
+    pub fn use_salve(&mut self) -> Step {
+        if self.salves == 0 {
+            self.log.push(LogKind::Blocked, "No salves remain. Find a cache or rest at home.");
+            return Step::Blocked;
+        }
+        if self.wanderer.hp >= self.wanderer.max_hp() {
+            self.log.push(LogKind::Blocked, "You are already at full Health.");
+            return Step::Blocked;
+        }
+        self.salves -= 1;
+        self.turn += 1;
+        self.sneaking = false;
+        self.wanderer.hp = (self.wanderer.hp + SALVE_HEAL).min(self.wanderer.max_hp());
+        self.log
+            .push(LogKind::Attack, format!("You use a salve. Health {}/{}.", self.wanderer.hp, self.wanderer.max_hp()));
+        self.finish_turn(false);
+        Step::Waited
     }
 
     /// Earned developments that still fit. Looking at or deferring offers changes nothing.
@@ -620,14 +807,39 @@ impl Game {
     ///
     /// Preparation and previews pass no time and grant no learning. No AI verdict is required.
     pub fn prepare(&mut self, maneuver: Maneuver) -> Result<(), &'static str> {
+        let item = if self.equipped.weapon() == maneuver.weapon {
+            self.equipped
+        } else {
+            WeaponItem::STARTING
+                .into_iter()
+                .find(|item| item.weapon() == maneuver.weapon)
+                .expect("every weapon family has a starting item")
+        };
+        self.prepare_with_item(maneuver, item)
+    }
+
+    /// Prepare a maneuver and equip one of its owned variants at a safe point.
+    pub fn prepare_with_item(&mut self, maneuver: Maneuver, item: WeaponItem) -> Result<(), &'static str> {
         self.validate_maneuver(&maneuver)?;
+        if !self.inventory.contains(&item) {
+            return Err("You do not own that weapon.");
+        }
+        if item.weapon() != maneuver.weapon {
+            return Err("The equipped item does not match this maneuver's weapon family.");
+        }
         if !self.can_prepare() {
             return Err("Prepare away from nearby creatures.");
         }
         self.log.push(
             LogKind::Attack,
-            format!("Prepared {} ({} Focus per attempt).", maneuver.name, maneuver.technique.focus_cost()),
+            format!(
+                "Prepared {} with {} ({} Focus per attempt).",
+                maneuver.name,
+                item.name(),
+                maneuver.technique.focus_cost()
+            ),
         );
+        self.equipped = item;
         self.maneuver = maneuver;
         Ok(())
     }
@@ -636,16 +848,22 @@ impl Game {
     pub fn preview_attack(&self, dir: Dir) -> Result<AttackPreview, &'static str> {
         let (x, y) = self.ahead(dir);
         let target = self.monster_at(x, y).ok_or("No adjacent target in that direction.")?;
-        self.maneuver.preview_trained(self.attack_context(target), self.wanderer.training(self.maneuver.weapon))
+        self.maneuver.preview_with_item(
+            self.attack_context(target),
+            self.wanderer.training(self.maneuver.weapon),
+            self.equipped,
+        )
     }
 
     /// Preview the free weapon strike used by a bump, regardless of the prepared delivery.
     pub fn preview_strike(&self, dir: Dir) -> Result<AttackPreview, &'static str> {
         let (x, y) = self.ahead(dir);
         let target = self.monster_at(x, y).ok_or("No adjacent target in that direction.")?;
-        self.maneuver
-            .basic_strike()
-            .preview_trained(self.attack_context(target), self.wanderer.training(self.maneuver.weapon))
+        self.maneuver.basic_strike().preview_with_item(
+            self.attack_context(target),
+            self.wanderer.training(self.maneuver.weapon),
+            self.equipped,
+        )
     }
 
     /// Deliberately use the prepared technique on an adjacent creature. A ground technique discharges
@@ -743,6 +961,10 @@ impl Game {
                 self.log.push(LogKind::Kill, format!("The {} dies.", monster.name));
             }
         }
+        let dead: Vec<_> = self.monsters.iter().filter(|monster| monster.hp <= 0).map(|monster| monster.id).collect();
+        for id in dead {
+            self.mark_cache_guard_dead(id);
+        }
         self.monsters.retain(|monster| monster.hp > 0);
         self.learn_focus(preview.focus, threat);
         self.wanderer.hp -= preview.self_damage;
@@ -785,7 +1007,9 @@ impl Game {
     #[must_use]
     pub fn can_rest(&self) -> bool {
         self.position == self.home
-            && (self.wanderer.hp < self.wanderer.max_hp() || self.wanderer.focus < self.wanderer.max_focus())
+            && (self.wanderer.hp < self.wanderer.max_hp()
+                || self.wanderer.focus < self.wanderer.max_focus()
+                || self.salves < SALVE_CAPACITY)
     }
 
     /// Rest sheltered at home for [`REST_HEALTH`] Health and [`REST_FOCUS`] Focus.
@@ -799,7 +1023,7 @@ impl Game {
         }
         let w = &mut self.wanderer;
         let most = w.max_focus();
-        if w.focus >= most && w.hp >= w.max_hp() {
+        if w.focus >= most && w.hp >= w.max_hp() && self.salves >= SALVE_CAPACITY {
             self.log.push(LogKind::Blocked, "You are already fully rested.");
             return Step::Blocked;
         }
@@ -807,8 +1031,9 @@ impl Game {
         self.sneaking = false;
         w.focus = (w.focus + REST_FOCUS - i32::from(w.adaptations.has(Adaptation::DeepReserves))).min(most);
         w.hp = (w.hp + REST_HEALTH).min(w.max_hp());
+        self.salves = SALVE_CAPACITY;
         let line = if w.focus == most && w.hp == w.max_hp() {
-            "You rest sheltered at home. You are fully recovered.".to_owned()
+            "You rest sheltered at home. You are fully recovered and your salves are restocked.".to_owned()
         } else {
             format!("You rest sheltered at home. Health {}/{}, Focus {}/{most}.", w.hp, w.max_hp(), w.focus)
         };
@@ -957,6 +1182,7 @@ impl Game {
         if self.sneaking {
             self.wanderer.stealth.sneak_reduction()
                 + if self.wanderer.adaptations.has(Adaptation::VeiledMovement) { 2 } else { 0 }
+                + self.equipped.concealment_bonus()
         } else {
             0
         }
@@ -1015,9 +1241,11 @@ impl Game {
     }
 
     fn finish_turn(&mut self, sheltered: bool) {
+        self.update_visible_caches();
         let deaths = self.deaths;
         let crept = std::mem::take(&mut self.crept);
         self.monsters_act(crept, sheltered);
+        self.sync_cache_guards();
         if self.deaths != deaths {
             return;
         }
@@ -1030,6 +1258,292 @@ impl Game {
         let mut rng = Rng::keyed(self.world.seed(), b"spawning", &[self.turn]);
         if self.monsters.len() < capacity(productivity) && rng.chance(spawn_chance(productivity)) {
             self.spawn(&mut rng);
+        }
+    }
+
+    /// Reveal every land-region cache whose site has just entered the visible map.
+    fn update_visible_caches(&mut self) {
+        if !self.journey {
+            return;
+        }
+        let mut visible_regions = BTreeSet::new();
+        for dy in -VIEW_RADIUS..=VIEW_RADIUS {
+            for dx in -VIEW_RADIUS..=VIEW_RADIUS {
+                let (x, y) = (self.position.0 + dx, self.position.1 + dy);
+                if is_land(self.world.tile(x, y).biome.biome()) {
+                    visible_regions.insert(self.regions.region_at(x, y));
+                }
+            }
+        }
+        for id in visible_regions {
+            if self.caches.contains_key(&id) {
+                continue;
+            }
+            let Some(region) = self.regions.region(id) else {
+                continue;
+            };
+            let Some(position) = Self::cache_site(&self.world, &mut self.regions, &region, self.home) else {
+                continue;
+            };
+            if chebyshev(position, self.position) <= VIEW_RADIUS {
+                self.reveal_cache(&region, position);
+            }
+        }
+        self.materialize_cache_guards();
+    }
+
+    /// The site is chosen only from the world seed, region identity, and home. Wherever the region allows, it
+    /// is far enough from home that its guards stay out of the home view; in the starting region it is also
+    /// close enough for a fresh character to reach while sneaking.
+    fn cache_site(world: &World, regions: &mut RegionCache, region: &Region, home: (i64, i64)) -> Option<(i64, i64)> {
+        if !is_land(region.biome.biome()) {
+            return None;
+        }
+        let anchor = region.id.anchor();
+        let starting_region = regions.region_at(home.0, home.1) == region.id;
+        let base = if starting_region { home } else { region.representative };
+        let mut fits = |(x, y): (i64, i64)| {
+            chebyshev((x, y), home) > VIEW_RADIUS + TERRITORY
+                && regions.region_at(x, y) == region.id
+                && is_land(world.tile(x, y).biome.biome())
+        };
+        let mut rng = Rng::keyed(world.seed(), b"cacheloc", &[anchor.0 as u64, anchor.1 as u64]);
+        let first_radius = if starting_region { 13 + rng.below(4) as i64 } else { 2 + rng.below(9) as i64 };
+        let fallback_radii = 13..=if starting_region { 16 } else { 0 };
+        for radius in std::iter::once(first_radius).chain(fallback_radii) {
+            let offsets: Vec<_> = ring(radius).collect();
+            let first = rng.below(offsets.len());
+            for i in 0..offsets.len() {
+                let (dx, dy) = offsets[(first + i) % offsets.len()];
+                let position = (base.0 + dx, base.1 + dy);
+                if fits(position) {
+                    return Some(position);
+                }
+            }
+        }
+        if fits(region.representative) {
+            return Some(region.representative);
+        }
+        // A small region may lie wholly near home. Its farthest land tile still works, because cache guards
+        // never stand in the home view (see `guard_keeps_out`).
+        let mut farthest = None;
+        for y in region.bounds.min_y..=region.bounds.max_y {
+            for x in region.bounds.min_x..=region.bounds.max_x {
+                let distance = chebyshev((x, y), home);
+                if farthest.is_none_or(|(best, _)| distance > best)
+                    && regions.region_at(x, y) == region.id
+                    && is_land(world.tile(x, y).biome.biome())
+                {
+                    farthest = Some((distance, (x, y)));
+                }
+            }
+        }
+        farthest.map(|(_, at)| at)
+    }
+
+    fn cache_reward(seed: u64, id: RegionId) -> WeaponItem {
+        let (x, y) = id.anchor();
+        let mut rng = Rng::keyed(seed, b"cachloot", &[x as u64, y as u64]);
+        WeaponItem::CACHE_REWARDS[rng.below(WeaponItem::CACHE_REWARDS.len())]
+    }
+
+    fn reveal_cache(&mut self, region: &Region, position: (i64, i64)) {
+        let (x, y) = region.id.anchor();
+        let mut rng = Rng::keyed(self.world.seed(), b"cachegrd", &[x as u64, y as u64]);
+        let count = 2 + rng.below(2);
+        let species = self.life(region.id).species.clone();
+        let mut candidates: Vec<_> = (1..=TERRITORY)
+            .flat_map(|radius| ring(radius).map(move |(dx, dy)| (position.0 + dx, position.1 + dy)))
+            .collect();
+        if candidates.is_empty() || species.is_empty() {
+            return;
+        }
+        let start = rng.below(candidates.len());
+        candidates.rotate_left(start);
+        let weights: Vec<_> = species.iter().map(|s| s.abundance).collect();
+        let mut guards = Vec::new();
+        for _ in 0..count {
+            let mut placed = None;
+            for _ in 0..species.len() {
+                let source = &species[rng.weighted(&weights)];
+                let genome = individual(&source.pool[rng.below(source.pool.len())], &mut rng);
+                let mut phenotype = Phenotype::of(&genome);
+                phenotype.temperament = Temperament::Territorial;
+                let Some(at) = candidates.iter().copied().find(|&(gx, gy)| {
+                    (gx, gy) != position
+                        && (gx, gy) != self.position
+                        && chebyshev((gx, gy), self.home) > VIEW_RADIUS
+                        && self.monster_at(gx, gy).is_none()
+                        && phenotype.access.allows(self.world.tile(gx, gy).biome.biome())
+                }) else {
+                    continue;
+                };
+                let id = MonsterId(self.next_monster);
+                self.next_monster += 1;
+                let sprite = Sprite::draw(&phenotype, &self.clades[usize::from(source.id.clade.0)].plan, source.biome);
+                let monster = Monster {
+                    id,
+                    species: source.id,
+                    name: source.name.clone(),
+                    genome,
+                    phenotype,
+                    sprite,
+                    position: at,
+                    hp: phenotype.stats.hp,
+                    practice_left: phenotype.stats.hp,
+                    stealth_left: STEALTH_LESSONS,
+                    tracking: false,
+                    home: position,
+                    alerted: false,
+                    energy: rng.below(ACTION_COST as usize) as i32,
+                };
+                guards.push(CacheGuardRecord {
+                    id,
+                    species: monster.species,
+                    name: monster.name.clone(),
+                    genome: monster.genome,
+                    phenotype: monster.phenotype,
+                    hp: monster.hp,
+                    position: monster.position,
+                    alerted: monster.alerted,
+                    energy: monster.energy,
+                    practice_left: monster.practice_left,
+                    stealth_left: monster.stealth_left,
+                    tracking: monster.tracking,
+                });
+                self.monsters.push(monster);
+                let selected = candidates.iter().position(|&candidate| candidate == at).expect("chosen candidate");
+                candidates.remove(selected);
+                placed = Some(());
+                break;
+            }
+            if placed.is_none() {
+                break;
+            }
+        }
+        // Land-region species and the four-tile site perimeter always leave room for at least two guards.
+        if guards.len() < 2 {
+            let ids: HashSet<_> = guards.iter().map(|g| g.id).collect();
+            self.monsters.retain(|m| !ids.contains(&m.id));
+            self.next_monster -= guards.len() as u64;
+            return;
+        }
+        self.caches.insert(
+            region.id,
+            CacheRecord {
+                region: region.id,
+                position,
+                claimed: false,
+                treasure: Self::cache_reward(self.world.seed(), region.id),
+                guards,
+            },
+        );
+    }
+
+    /// Synchronize active guards; absent guards remain alive in their cache record until they are approached.
+    fn sync_cache_guards(&mut self) {
+        for cache in self.caches.values_mut() {
+            for guard in &mut cache.guards {
+                if guard.hp <= 0 {
+                    continue;
+                }
+                if let Some(monster) = self.monsters.iter().find(|m| m.id == guard.id) {
+                    guard.hp = monster.hp;
+                    guard.position = monster.position;
+                    guard.alerted = monster.alerted;
+                    guard.energy = monster.energy;
+                    guard.practice_left = monster.practice_left;
+                    guard.stealth_left = monster.stealth_left;
+                    guard.tracking = monster.tracking;
+                    if monster.hp <= 0 {
+                        guard.hp = 0;
+                    }
+                }
+            }
+        }
+    }
+
+    fn mark_cache_guard_dead(&mut self, id: MonsterId) {
+        for cache in self.caches.values_mut() {
+            if let Some(guard) = cache.guards.iter_mut().find(|guard| guard.id == id) {
+                guard.hp = 0;
+                guard.alerted = false;
+                guard.tracking = false;
+            }
+        }
+    }
+
+    /// Recreate saved cache guards only near their territory. Distant guards remain fully represented by
+    /// their cache records, keeping the active life and monster caches bounded during a long journey.
+    fn materialize_cache_guards(&mut self) {
+        let nearby: Vec<_> = self
+            .caches
+            .values()
+            .filter(|cache| chebyshev(cache.position, self.position) <= DESPAWN_RADIUS + TERRITORY)
+            .flat_map(|cache| {
+                cache
+                    .guards
+                    .iter()
+                    .filter(|guard| guard.hp > 0)
+                    .cloned()
+                    .map(|guard| (cache.region, cache.position, guard))
+            })
+            .collect();
+        for (region, home, guard) in nearby {
+            if self.monsters.iter().any(|monster| monster.id == guard.id) {
+                continue;
+            }
+            let biome = self
+                .life(region)
+                .species_of(guard.species.clade)
+                .expect("cache guard species belongs to its land region")
+                .biome;
+            let mut position = guard.position;
+            if position == self.position
+                || chebyshev(position, self.home) <= VIEW_RADIUS
+                || self.monster_at(position.0, position.1).is_some()
+                || !guard.phenotype.access.allows(self.world.tile(position.0, position.1).biome.biome())
+            {
+                let replacement = (0..=TERRITORY)
+                    .flat_map(|radius| ring(radius).map(move |(dx, dy)| (home.0 + dx, home.1 + dy)))
+                    .find(|&(x, y)| {
+                        (x, y) != home
+                            && (x, y) != self.position
+                            && chebyshev((x, y), home) <= TERRITORY
+                            && chebyshev((x, y), self.home) > VIEW_RADIUS
+                            && self.monster_at(x, y).is_none()
+                            && guard.phenotype.access.allows(self.world.tile(x, y).biome.biome())
+                    });
+                let Some(replacement) = replacement else {
+                    continue;
+                };
+                position = replacement;
+            }
+            let sprite = Sprite::draw(&guard.phenotype, &self.clades[usize::from(guard.species.clade.0)].plan, biome);
+            self.monsters.push(Monster {
+                id: guard.id,
+                species: guard.species,
+                name: guard.name.clone(),
+                genome: guard.genome,
+                phenotype: guard.phenotype,
+                sprite,
+                position,
+                hp: guard.hp,
+                home,
+                alerted: guard.alerted,
+                energy: guard.energy,
+                practice_left: guard.practice_left,
+                stealth_left: guard.stealth_left,
+                tracking: guard.tracking,
+            });
+            if position != guard.position
+                && let Some(saved) = self
+                    .caches
+                    .get_mut(&region)
+                    .and_then(|cache| cache.guards.iter_mut().find(|saved| saved.id == guard.id))
+            {
+                saved.position = position;
+            }
         }
     }
 
@@ -1146,7 +1660,17 @@ impl Game {
     fn wanderer_attacks(&mut self, index: usize, maneuver: &Maneuver, rng: &mut Rng) {
         let context = self.attack_context(&self.monsters[index]);
         let training = self.wanderer.training(maneuver.weapon);
-        let result = maneuver.resolve_trained(context, training, rng).expect("attack maneuvers are validated");
+        let item = if self.equipped.weapon() == maneuver.weapon {
+            self.equipped
+        } else {
+            WeaponItem::STARTING
+                .into_iter()
+                .find(|item| item.weapon() == maneuver.weapon)
+                .expect("every weapon family has a starting item")
+        };
+        let result = maneuver
+            .resolve_with_item(context, training, item, rng)
+            .expect("attack maneuvers are validated and the equipped item matches");
         self.wanderer.focus -= maneuver.technique.focus_cost();
         self.record_attack(index, result, AttackSource::Maneuver(maneuver), maneuver.technique.focus_cost());
     }
@@ -1171,30 +1695,39 @@ impl Game {
         self.last_attack = Some(result);
         // Even a miss reveals the attempt. No repeated surprise by toggling sneak.
         self.sneaking = false;
-        let monster = &mut self.monsters[index];
-        monster.alerted = true;
-        if !result.hit {
-            self.log.push(LogKind::Attack, format!("You miss the {}.", monster.name));
-        } else {
-            monster.hp = monster.hp.saturating_sub(result.total());
-            self.log.push(LogKind::Attack, format!("You hit the {} for {}.", monster.name, result.total()));
-            if source.has_payload() || result.opening {
-                let detail = if result.amplified {
-                    "unguarded placement amplifies the burst"
-                } else if source.has_payload() && !result.burst_released {
-                    "no penetration; the burst does not release"
+        let dead = {
+            let monster = &mut self.monsters[index];
+            monster.alerted = true;
+            if !result.hit {
+                self.log.push(LogKind::Attack, format!("You miss the {}.", monster.name));
+                None
+            } else {
+                monster.hp = monster.hp.saturating_sub(result.total());
+                self.log.push(LogKind::Attack, format!("You hit the {} for {}.", monster.name, result.total()));
+                if source.has_payload() || result.opening {
+                    let detail = if result.amplified {
+                        "unguarded placement amplifies the burst"
+                    } else if source.has_payload() && !result.burst_released {
+                        "no penetration; the burst does not release"
+                    } else {
+                        "no amplified placement"
+                    };
+                    self.log.push(
+                        LogKind::Attack,
+                        format!("{}: {} physical + {} burst; {detail}.", source.name(), result.physical, result.burst),
+                    );
+                }
+                if monster.hp <= 0 {
+                    self.log.push(LogKind::Kill, format!("The {} dies.", monster.name));
+                    Some(monster.id)
                 } else {
-                    "no amplified placement"
-                };
-                self.log.push(
-                    LogKind::Attack,
-                    format!("{}: {} physical + {} burst; {detail}.", source.name(), result.physical, result.burst),
-                );
+                    None
+                }
             }
-            if monster.hp <= 0 {
-                self.log.push(LogKind::Kill, format!("The {} dies.", monster.name));
-                self.monsters.remove(index);
-            }
+        };
+        if let Some(id) = dead {
+            self.mark_cache_guard_dead(id);
+            self.monsters.remove(index);
         }
         if improved {
             let skill = format!("{} skill", weapon.name().to_lowercase());
@@ -1315,8 +1848,8 @@ impl Game {
 
     /// The wanderer dies: time jumps, and they wake at home with 1 Health and no Focus.
     ///
-    /// Dying refills nothing, so it never beats retreating. Creatures survive and recover while the
-    /// wanderer is away. Those within view of home are driven off, so waking weak is not a second fight.
+    /// Dying refills nothing, so it never beats retreating. Ordinary creatures survive and recover while
+    /// the wanderer is away; cache guards persist with their actual Health. Those near home are driven off.
     fn die(&mut self) {
         self.log.push(LogKind::Death, "You fall.");
         self.deaths += 1;
@@ -1327,24 +1860,42 @@ impl Game {
         self.sneaking = false;
         self.last_attack = None;
         let home = self.home;
+        self.sync_cache_guards();
+        let guards: HashSet<_> = self.caches.values().flat_map(|c| c.guards.iter().map(|g| g.id)).collect();
         self.monsters.retain(|m| (VIEW_RADIUS + 1..=DESPAWN_RADIUS).contains(&chebyshev(m.position, home)));
         for monster in &mut self.monsters {
-            monster.hp = monster.max_hp();
+            if !guards.contains(&monster.id) {
+                monster.hp = monster.max_hp();
+            }
             monster.alerted = false;
             monster.tracking = false;
         }
         self.update_region(false);
+        self.update_visible_caches();
+        self.sync_cache_guards();
         self.log.push(
             LogKind::Death,
             format!("You wake, much later, in {}. Weak and drained, rest (R).", self.region.name),
         );
     }
-    /// Whether monster `i` may stand on `(x, y)`: not the wanderer's tile, not another monster's, and terrain
-    /// its body allows.
+    /// Whether a cache guard with this id and territory would be in the home view at `at`. Keeping guards out
+    /// of it means a small starting region's cache never makes home unsafe.
+    fn guard_keeps_out(&self, id: MonsterId, territory: (i64, i64), at: (i64, i64)) -> bool {
+        chebyshev(at, self.home) <= VIEW_RADIUS
+            && self.caches.values().any(|cache| cache.position == territory && cache.guards.iter().any(|g| g.id == id))
+    }
+
+    /// Whether monster `i` may stand on `(x, y)`: not the wanderer's tile, not another monster's, terrain
+    /// its body allows, and for a territorial monster its leash.
     fn open_to(&self, i: usize, (x, y): (i64, i64)) -> bool {
         (x, y) != self.position
+            && !self.guard_keeps_out(self.monsters[i].id, self.monsters[i].home, (x, y))
             && !self.monsters.iter().enumerate().any(|(j, m)| j != i && m.position == (x, y))
             && self.monsters[i].phenotype.access.allows(self.world.tile(x, y).biome.biome())
+            && (self.monsters[i].phenotype.temperament != Temperament::Territorial
+                || chebyshev((x, y), self.monsters[i].home) <= TERRITORY
+                || chebyshev((x, y), self.monsters[i].home)
+                    < chebyshev(self.monsters[i].position, self.monsters[i].home))
     }
 
     /// Moves monster `i` one step to the open neighbor with the lowest `score`, if that is lower than the
@@ -1383,7 +1934,9 @@ impl Game {
             let (dx, dy) = Dir::ALL[rng.below(4)].delta();
             let here = self.monsters[i].position;
             let to = (here.0 + dx, here.1 + dy);
-            if self.open_to(i, to) {
+            let territorial_room = self.monsters[i].phenotype.temperament != Temperament::Territorial
+                || chebyshev(to, self.monsters[i].home) <= TERRITORY;
+            if territorial_room && self.open_to(i, to) {
                 self.monsters[i].position = to;
             }
         }
@@ -1826,7 +2379,17 @@ mod tests {
                     let d = chebyshev(m.position, here);
                     assert!(d <= DESPAWN_RADIUS, "seed {seed} turn {i}: monster at distance {d}");
                     if known.insert(m.id) {
-                        assert!((SPAWN_MIN..=SPAWN_MAX).contains(&d), "seed {seed} turn {i}: spawned at {d}");
+                        let guard_home = game.caches.values().find_map(|cache| {
+                            cache.guards.iter().any(|guard| guard.id == m.id).then_some(cache.position)
+                        });
+                        if let Some(home) = guard_home {
+                            assert!(
+                                chebyshev(m.position, home) <= TERRITORY,
+                                "seed {seed} turn {i}: cache guard outside leash"
+                            );
+                        } else {
+                            assert!((SPAWN_MIN..=SPAWN_MAX).contains(&d), "seed {seed} turn {i}: spawned at {d}");
+                        }
                     }
                     assert_ne!(m.position, here, "seed {seed} turn {i}: monster on the wanderer");
                     assert!(tiles.insert(m.position), "seed {seed} turn {i}: monsters share a tile");
@@ -2828,6 +3391,7 @@ mod tests {
     /// out differently on this platform or toolchain (see `evolution_is_pinned_to_exact_bits` in `life`, which
     /// narrows it down if it fails too). Find the cause; don't update the constant. Update it only when the
     /// game was changed on purpose, and say so in the commit.
+    /// CP5 cache sites and persistent guards intentionally change the scripted encounters.
     #[test]
     fn scripted_play_is_pinned_to_exact_bits() {
         use crate::hash::combine;
@@ -2847,7 +3411,7 @@ mod tests {
             }
         }
         assert_eq!(
-            h, 0xcd3b_2621_7ed4_cc68,
+            h, 0xa107_df21_6dd1_97e8,
             "the sim's arithmetic changed; see this test's doc before touching the constant"
         );
     }

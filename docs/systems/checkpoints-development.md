@@ -70,6 +70,13 @@ biome-table indices remaining unchanged forever.
 
 **Goal:** exploration, preparation, treasure, and recovery support the growing character.
 
+**Implemented first-journey slice:** deterministic cache sites per land region, territorial guards whose
+state persists through despawn/death/save-load, one-time cache claims, four owned weapon variants with
+safe-point equipment, exposed camping, salves, and snapshot-v3 migration from v2. The slice has a fresh
+sneaking acceptance test. This does not complete every CP5 work item: gathering resources and the broader
+landmark/relic journey remain out of scope, and the CP5 checkboxes stay unchecked until the complete journey
+and GUI evidence are recorded.
+
 **Work**
 
 - [ ] Add a small number of durable landmark templates.

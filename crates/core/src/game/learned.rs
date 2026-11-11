@@ -66,7 +66,9 @@ impl Game {
                         }
                     }
                 } else {
-                    maneuver.resolve_trained(self.attack_context(target), training, &mut rng).expect("basic strike")
+                    maneuver
+                        .resolve_with_item(self.attack_context(target), training, self.equipped, &mut rng)
+                        .expect("basic strike and matching equipment")
                 };
                 (id, result)
             })
@@ -116,7 +118,8 @@ impl Game {
         if action.weapon().is_some_and(|weapon| weapon != self.maneuver.weapon) {
             return Err("Equip the weapon that earned this move.");
         }
-        if self.wanderer.focus < action.focus_cost() {
+        let focus_cost = action.focus_cost_with_item(self.equipped);
+        if self.wanderer.focus < focus_cost {
             return Err("Not enough Focus for the learned move. Bump strikes remain free.");
         }
         let (dx, dy) = dir.delta();
@@ -126,7 +129,7 @@ impl Game {
         let empty =
             |p: (i64, i64)| self.world.tile(p.0, p.1).biome.biome().passable && self.monster_at(p.0, p.1).is_none();
         let mut preview = MovePreview {
-            focus: action.focus_cost(),
+            focus: focus_cost,
             focus_gain: 0,
             targets: 0,
             min_hit: 0,
@@ -192,7 +195,11 @@ impl Game {
             } else {
                 let mut training = self.wanderer.training(self.maneuver.weapon);
                 training.veiled = false;
-                let p = self.maneuver.basic_strike().preview_trained(self.attack_context(target), training)?;
+                let p = self.maneuver.basic_strike().preview_with_item(
+                    self.attack_context(target),
+                    training,
+                    self.equipped,
+                )?;
                 (p.min_hit, p.max_hit)
             };
             preview.min_hit = preview.min_hit.saturating_add(min);

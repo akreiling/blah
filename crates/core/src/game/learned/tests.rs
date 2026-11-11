@@ -103,6 +103,34 @@ fn blocked_paths_do_not_charge() {
 }
 
 #[test]
+fn shove_cannot_push_a_territorial_guard_outside_its_leash() {
+    let mut game = ready(42, Weapon::Club);
+    let template = game.monsters[0].clone();
+    game.monsters.clear();
+    let (x, y) = game.position;
+    let direction = Dir::ALL
+        .into_iter()
+        .find(|dir| {
+            let (dx, dy) = dir.delta();
+            let far = (x + 2 * dx, y + 2 * dy);
+            template.phenotype.access.allows(game.world.tile(far.0, far.1).biome.biome())
+        })
+        .unwrap();
+    let (dx, dy) = direction.delta();
+    let far = (x + 2 * dx, y + 2 * dy);
+    let mut guard = template;
+    guard.phenotype.temperament = crate::Temperament::Territorial;
+    guard.position = (x + dx, y + dy);
+    guard.home = game.position;
+    game.monsters.push(guard);
+    assert_eq!(game.preview_move(LearnedMove::Shove, direction).unwrap().push, Some(far));
+
+    game.monsters[0].home = (x - 3 * dx, y - 3 * dy);
+    assert_eq!(super::super::chebyshev(game.monsters[0].position, game.monsters[0].home), super::super::TERRITORY);
+    assert!(game.preview_move(LearnedMove::Shove, direction).unwrap().push.is_none());
+}
+
+#[test]
 fn withdraw_and_shove_pay_once_on_hits_and_misses_and_leave_preparation_unchanged() {
     let mut hits = 0;
     let mut misses = 0;

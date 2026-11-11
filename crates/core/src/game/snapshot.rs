@@ -4,7 +4,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 /// Snapshot layout. Bump when serialized fields or their meaning change.
-pub const SNAPSHOT_VERSION: u32 = 2;
+pub const SNAPSHOT_VERSION: u32 = 3;
 /// Terrain, biome table, region, and naming compatibility. Bump for incompatible generation changes.
 pub const TERRAIN_VERSION: u32 = 1;
 /// Simulation, evolution, clade, and technique-catalog compatibility.
@@ -29,9 +29,31 @@ pub struct GameSnapshot {
     next_monster: u64,
     deaths: u32,
     maneuver: Maneuver,
+    #[serde(default = "starting_inventory")]
+    inventory: Vec<crate::WeaponItem>,
+    #[serde(default)]
+    equipped: crate::WeaponItem,
+    #[serde(default = "starting_salves")]
+    salves: u8,
+    #[serde(default)]
+    caches: Vec<CacheRecord>,
+    #[serde(default = "journey_enabled")]
+    journey: bool,
     sneaking: bool,
     last_attack: Option<AttackResult>,
     sneak_moves: u32,
+}
+
+fn starting_inventory() -> Vec<crate::WeaponItem> {
+    crate::WeaponItem::STARTING.to_vec()
+}
+
+const fn starting_salves() -> u8 {
+    crate::SALVE_CAPACITY
+}
+
+const fn journey_enabled() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -111,6 +133,11 @@ impl Game {
             next_monster: self.next_monster,
             deaths: self.deaths,
             maneuver: self.maneuver.clone(),
+            inventory: self.inventory.clone(),
+            equipped: self.equipped,
+            salves: self.salves,
+            caches: self.caches.values().cloned().collect(),
+            journey: self.journey,
             sneaking: self.sneaking,
             last_attack: self.last_attack,
             sneak_moves: self.sneak_moves,
@@ -120,10 +147,26 @@ impl Game {
     /// Restore without taking an action or granting practice. Derived state is regenerated.
     /// Unsupported versions and invalid state are rejected, never repaired silently.
     pub fn from_snapshot(mut s: GameSnapshot) -> Result<Self, &'static str> {
-        // Version 1 predates commitments and did not record burst-release history.
-        if s.snapshot_version == 1 {
-            s.wanderer.adaptations = crate::Adaptations::default();
-            s.snapshot_version = SNAPSHOT_VERSION;
+        // Version 1 predates commitments; version 2 also predates equipment, salves, and caches.
+        match s.snapshot_version {
+            1 => {
+                s.wanderer.adaptations = crate::Adaptations::default();
+                s.inventory = starting_inventory();
+                s.equipped = crate::WeaponItem::plain(s.maneuver.weapon);
+                s.salves = starting_salves();
+                s.caches.clear();
+                s.journey = true;
+                s.snapshot_version = SNAPSHOT_VERSION;
+            }
+            2 => {
+                s.inventory = starting_inventory();
+                s.equipped = crate::WeaponItem::plain(s.maneuver.weapon);
+                s.salves = starting_salves();
+                s.caches.clear();
+                s.journey = true;
+                s.snapshot_version = SNAPSHOT_VERSION;
+            }
+            _ => {}
         }
         if s.snapshot_version != SNAPSHOT_VERSION {
             return Err("Unsupported core snapshot version; this save needs a compatible game or migration.");
@@ -151,16 +194,105 @@ impl Game {
             || s.log.len() > LOG_LIMIT
             || s.log.total < s.log.len() as u64
             || s.turn > u64::MAX - DEATH_TURNS - 2
-            || s.monsters.len() > 128
+            || s.monsters.len() > 65_536
             || s.monsters.iter().map(|m| m.id).collect::<HashSet<_>>().len() != s.monsters.len()
+            || s.inventory.len() > 8
+            || s.inventory.iter().copied().collect::<HashSet<_>>().len() != s.inventory.len()
+            || crate::WeaponItem::STARTING.iter().any(|item| !s.inventory.contains(item))
+            || !s.inventory.contains(&s.equipped)
+            || s.equipped.weapon() != s.maneuver.weapon
+            || s.salves > crate::SALVE_CAPACITY
+            || s.caches.len() > 65_536
+            || s.caches.iter().map(|cache| cache.region).collect::<HashSet<_>>().len() != s.caches.len()
+            || (!s.journey && !s.caches.is_empty())
         {
             return Err("Invalid character or world state in save.");
         }
         let world = World::new(s.seed);
         let mut regions = RegionCache::new(world);
+        for cache in &mut s.caches {
+            let Some(cache_region) = regions.region(cache.region) else {
+                return Err("Saved cache names an unknown region.");
+            };
+            let Some(position) = Self::cache_site(&world, &mut regions, &cache_region, s.home) else {
+                return Err("Saved cache is not in a land region.");
+            };
+            cache.position = position;
+            cache.treasure = Self::cache_reward(s.seed, cache.region);
+        }
         let region = region_of(&mut regions, s.position);
         if s.visited.last() != Some(&region.id) {
             return Err("Saved region history does not match the character's position.");
+        }
+        let mut cache_guard_ids = HashSet::new();
+        for cache in &s.caches {
+            if !coordinate(cache.position) {
+                return Err("Invalid cache state in save.");
+            }
+            let Some(cache_region) = regions.region(cache.region) else {
+                return Err("Saved cache names an unknown region.");
+            };
+            let Some(site) = Self::cache_site(&world, &mut regions, &cache_region, s.home) else {
+                return Err("Saved cache is not in a land region.");
+            };
+            if regions.region_at(site.0, site.1) != cache.region
+                || !is_land(world.tile(site.0, site.1).biome.biome())
+                || !(2..=3).contains(&cache.guards.len())
+                || (cache.claimed && !s.inventory.contains(&cache.treasure))
+            {
+                return Err("Invalid cache state in save.");
+            }
+            for guard in &cache.guards {
+                let stats = guard.phenotype.stats;
+                if !cache_guard_ids.insert(guard.id)
+                    || guard.id.0 >= s.next_monster
+                    || guard.species.region != cache.region
+                    || usize::from(guard.species.clade.0) >= clades(s.seed).len()
+                    || !coordinate(guard.position)
+                    || chebyshev(guard.position, cache.position) > TERRITORY
+                    || guard.phenotype.temperament != crate::Temperament::Territorial
+                    || !(1..=10_000).contains(&stats.hp)
+                    || !(0..=stats.hp).contains(&guard.hp)
+                    || !(0..=10_000).contains(&stats.attack)
+                    || !(0..=10_000).contains(&stats.defense)
+                    || !(0..=100).contains(&stats.speed)
+                    || !(0..=10_000).contains(&guard.energy)
+                    || !(0..=stats.hp).contains(&guard.practice_left)
+                    || !(0..=STEALTH_LESSONS).contains(&guard.stealth_left)
+                    || !guard
+                        .genome
+                        .genes()
+                        .iter()
+                        .chain(guard.phenotype.genome.genes().iter())
+                        .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+                {
+                    return Err("Invalid cache guard state in save.");
+                }
+                let monster = s.monsters.iter().find(|m| m.id == guard.id);
+                if guard.hp > 0 {
+                    if let Some(monster) = monster {
+                        if monster.hp != guard.hp
+                            || monster.position != guard.position
+                            || monster.home != cache.position
+                            || monster.species != guard.species
+                            || monster.name != guard.name
+                            || monster.genome != guard.genome
+                            || monster.phenotype != guard.phenotype
+                            || monster.alerted != guard.alerted
+                            || monster.energy != guard.energy
+                            || monster.practice_left != guard.practice_left
+                            || monster.stealth_left != guard.stealth_left
+                            || monster.tracking != guard.tracking
+                        {
+                            return Err("Cache guard does not match its saved cache record.");
+                        }
+                    } else if chebyshev(guard.position, s.position) <= DESPAWN_RADIUS {
+                        return Err("A nearby living cache guard is missing from the world state.");
+                    }
+                } else if monster.is_some() {
+                    return Err("A dead cache guard is still present in the world state.");
+                }
+            }
         }
         let mut game = Game {
             world,
@@ -178,6 +310,11 @@ impl Game {
             next_monster: s.next_monster,
             deaths: s.deaths,
             maneuver: s.maneuver,
+            inventory: s.inventory,
+            equipped: s.equipped,
+            salves: s.salves,
+            caches: s.caches.into_iter().map(|cache| (cache.region, cache)).collect(),
+            journey: s.journey,
             sneaking: s.sneaking,
             last_attack: s.last_attack,
             sneak_moves: s.sneak_moves,
@@ -283,24 +420,52 @@ mod tests {
     }
 
     #[test]
-    fn migrates_serialized_v1_without_commitments_and_writes_v2() {
+    fn migrates_serialized_v1_without_commitments_and_writes_v3() {
         let mut game = Game::new(42);
         game.wanderer.focus_skill.learn(4_000, Rank::Expert);
         let mut legacy = serde_json::to_value(game.snapshot()).unwrap();
         legacy["snapshot_version"] = 1.into();
         legacy["wanderer"].as_object_mut().unwrap().remove("adaptations");
+        let object = legacy.as_object_mut().unwrap();
+        for field in ["inventory", "equipped", "salves", "caches", "journey"] {
+            object.remove(field);
+        }
         let bytes = serde_json::to_vec(&legacy).unwrap();
         let snapshot = serde_json::from_slice(&bytes).unwrap();
         let mut loaded = Game::from_snapshot(snapshot).unwrap();
-        assert_eq!(loaded, game);
+        assert_eq!(loaded.position, game.position);
+        assert_eq!(loaded.turn, game.turn);
+        assert_eq!(loaded.wanderer.focus_skill, game.wanderer.focus_skill);
         assert_eq!(loaded.wanderer.adaptations, crate::Adaptations::default());
+        assert_eq!(loaded.inventory, crate::WeaponItem::STARTING);
+        assert_eq!(loaded.salves, crate::SALVE_CAPACITY);
+        assert!(loaded.caches.is_empty());
         loaded.monsters.clear();
         loaded.commit_adaptation(crate::Adaptation::DeepReserves).unwrap();
         let saved = serde_json::to_value(loaded.snapshot()).unwrap();
-        assert_eq!(saved["snapshot_version"], 2);
+        assert_eq!(saved["snapshot_version"], 3);
         assert_eq!(saved["wanderer"]["adaptations"]["taken"][0], "DeepReserves");
         let round_trip = Game::from_snapshot(serde_json::from_value(saved).unwrap()).unwrap();
         assert_eq!(round_trip, loaded);
+    }
+
+    #[test]
+    fn migrates_serialized_v2_to_the_starting_kit_without_claims() {
+        let game = Game::new(42);
+        let mut legacy = serde_json::to_value(game.snapshot()).unwrap();
+        legacy["snapshot_version"] = 2.into();
+        let object = legacy.as_object_mut().unwrap();
+        for field in ["inventory", "equipped", "salves", "caches", "journey"] {
+            object.remove(field);
+        }
+        let snapshot = serde_json::from_value(legacy).unwrap();
+        let loaded = Game::from_snapshot(snapshot).unwrap();
+        assert_eq!(loaded.inventory, crate::WeaponItem::STARTING.to_vec());
+        assert_eq!(loaded.equipped.weapon(), loaded.maneuver.weapon);
+        assert_eq!(loaded.salves, crate::SALVE_CAPACITY);
+        assert!(loaded.caches.is_empty());
+        assert!(loaded.journey);
+        assert_eq!(loaded.snapshot().snapshot_version, 3);
     }
 
     #[test]

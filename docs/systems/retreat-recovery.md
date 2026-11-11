@@ -53,6 +53,13 @@ This is a recovery floor for living retreats and deaths alike, not a general inv
 It does not establish that fighting beside home is balanced; home-based attack/rest tactics and
 persistent encounter recovery need separate testing.
 
+## CP5 supplies
+
+The first-journey slice adds exposed `P` camping for 1 Health and 2 Focus when no creature is in view, and
+`V` salves for 10 Health during any normal turn. Fresh characters carry two salves; caches add one up to
+the two-salve cap, and an accepted home rest refills them. Camping does not consume a supply. The home rest
+remains sheltered from attacks, unlike camping and salves.
+
 ## Episode accounting
 
 The third CSV table reports each run's episode counts and upper-median action times:

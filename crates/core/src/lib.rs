@@ -61,12 +61,12 @@ pub use chunk::{CHUNK_AREA, CHUNK_SIZE, Chunk, chunk_of, chunk_origin, local_of}
 pub use clade::{BodyPlan, CLADES, Clade, CladeId, Family, Pattern, clades};
 pub use combat::{
     Aim, AreaPreview, AttackContext, AttackPreview, AttackResult, Burst, Delivery, Element, MAX_AREA_RADIUS,
-    MAX_BURST_POWER, MAX_FOCUS, Maneuver, SNEAK_REDUCTION, Shape, Technique, Trigger, Weapon,
+    MAX_BURST_POWER, MAX_FOCUS, Maneuver, SNEAK_REDUCTION, Shape, Technique, Trigger, Weapon, WeaponItem,
 };
 pub use game::{
-    Comparison, DEATH_TURNS, DESPAWN_RADIUS, Dir, Game, LAND_SEARCH_RADIUS, LOG_LIMIT, Log, LogEntry, LogKind,
-    REGEN_TURNS, REST_FOCUS, REST_HEALTH, SPAWN_MAX, SPAWN_MIN, Step, TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity,
-    find_land, individual, ring, spawn_chance,
+    CAMP_FOCUS, CAMP_HEALTH, CacheInfo, Comparison, DEATH_TURNS, DESPAWN_RADIUS, Dir, Game, LAND_SEARCH_RADIUS,
+    LOG_LIMIT, Log, LogEntry, LogKind, REGEN_TURNS, REST_FOCUS, REST_HEALTH, SALVE_CAPACITY, SALVE_HEAL, SPAWN_MAX,
+    SPAWN_MIN, Step, TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity, find_land, individual, ring, spawn_chance,
 };
 pub use game::{GameSnapshot, RULES_VERSION, SNAPSHOT_VERSION, TERRAIN_VERSION};
 pub use genome::{GENES, Gene, Genome, gene_delta};

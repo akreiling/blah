@@ -98,17 +98,20 @@ An overall package version alone is not a sufficient compatibility contract.
 
 ## Implemented first slice
 
-`blah-core` exposes `Game::snapshot` and `Game::from_snapshot`. A `GameSnapshot` carries snapshot, terrain,
-and rules versions (snapshot 2, terrain and rules 1), the seed, turn, position, home, visited regions, log,
-the wanderer's Health, Focus, practice, permanent adaptations and burst-release history,
-each nearby creature's genome, phenotype, Health, remaining lessons, and awareness,
-and the prepared composition. Region lives, region labels, clades, and sprites are not saved; loading
-regrows them from the seed. Loading checks versions and value ranges and rejects anything else.
-
-Version-1 snapshots migrate to version 2 with no adaptations and no recorded burst-release history.
-Existing practice is preserved and can immediately qualify for offers. Version 2 validates capacity,
-slot order, exclusions, and the history required by each held adaptation. Commitment is a no-time
 action through the same transactional save path; a failed write rolls it back.
+`blah-core` exposes `Game::snapshot` and `Game::from_snapshot`. A `GameSnapshot` carries snapshot, terrain,
+and rules versions (snapshot 3, terrain and rules 1), the seed, turn, position, home, visited regions, log,
+the wanderer's Health, Focus, practice, permanent adaptations and burst-release history, nearby creature
+state, the prepared composition, owned and equipped weapon items, salves, and durable cache claims and guard
+state. Cache positions and rewards are regenerated from the seed and region; region lives, labels, clades,
+and sprites are also regenerated. Loading checks versions and value ranges and rejects anything else.
+
+Version-1 and version-2 snapshots migrate to version 3. Migration preserves existing practice and
+commitments, grants the four-item starting kit and two salves, equips the plain item matching the prepared
+weapon family, and starts with no cache claims. Version 1 also receives the version-2 adaptation defaults.
+Version 3 validates capacity, slot order, exclusions, adaptation history, owned equipment, cache identity,
+and guard state. Commitment is a no-time action through the same transactional save path; a failed write
+rolls it back.
 
 The app stores the snapshot as JSON in a single-row SQLite table (`PRAGMA user_version = 1`) and rewrites it
 in one transaction after every action, under `synchronous = FULL`. A row revision makes a second running

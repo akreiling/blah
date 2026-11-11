@@ -3,7 +3,9 @@
 //! Draft changes are kept separate from the live game loadout until `prepare` succeeds. This is only
 //! an editor for the deterministic core grammar; it does not call an AI service or invent rule effects.
 
-use blah_core::{Aim, Burst, Delivery, Element, Game, MAX_AREA_RADIUS, MAX_BURST_POWER, Maneuver, Shape, Trigger};
+use blah_core::{
+    Aim, Burst, Delivery, Element, Game, MAX_AREA_RADIUS, MAX_BURST_POWER, Maneuver, Shape, Trigger, WeaponItem,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Edit {
@@ -24,16 +26,36 @@ pub(crate) enum Edit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Workshop {
     draft: Maneuver,
+    inventory: Vec<WeaponItem>,
+    equipped: WeaponItem,
     prepare_error: Option<&'static str>,
 }
 
 impl Workshop {
+    #[cfg(test)]
     pub(crate) fn new(maneuver: Maneuver) -> Self {
-        Self { draft: maneuver, prepare_error: None }
+        let equipped = WeaponItem::STARTING
+            .into_iter()
+            .find(|item| item.weapon() == maneuver.weapon)
+            .expect("each weapon family has a starting item");
+        Self { draft: maneuver, inventory: WeaponItem::STARTING.to_vec(), equipped, prepare_error: None }
+    }
+
+    pub(crate) fn from_game(game: &Game) -> Self {
+        Self {
+            draft: game.maneuver().clone(),
+            inventory: game.inventory().to_vec(),
+            equipped: game.equipped_item(),
+            prepare_error: None,
+        }
     }
 
     pub(crate) fn draft(&self) -> &Maneuver {
         &self.draft
+    }
+
+    pub(crate) const fn equipped(&self) -> WeaponItem {
+        self.equipped
     }
 
     /// The authoritative structural reason, or a safe-preparation error from the last Enter.
@@ -48,6 +70,12 @@ impl Workshop {
                 Edit::StaffExample => Maneuver::staff_inferno(),
                 _ => unreachable!(),
             };
+            self.equipped = self
+                .inventory
+                .iter()
+                .copied()
+                .find(|item| item.weapon() == self.draft.weapon)
+                .expect("starting kit covers every weapon family");
             self.prepare_error = None;
             return;
         }
@@ -62,7 +90,11 @@ impl Workshop {
         let maneuver = &mut self.draft;
         let technique = &mut maneuver.technique;
         match edit {
-            Edit::Weapon => maneuver.weapon = maneuver.weapon.next(),
+            Edit::Weapon => {
+                let index = self.inventory.iter().position(|&item| item == self.equipped).unwrap_or(0);
+                self.equipped = self.inventory[(index + 1) % self.inventory.len()];
+                maneuver.weapon = self.equipped.weapon();
+            }
             Edit::Delivery => {
                 technique.delivery = match technique.delivery {
                     Delivery::Weapon => Delivery::Touch,
@@ -125,7 +157,7 @@ impl Workshop {
 
     /// Uses the core as the sole authority for validation and preparation.
     pub(crate) fn prepare(&mut self, game: &mut Game) -> Result<(), &'static str> {
-        match game.prepare(self.draft.clone()) {
+        match game.prepare_with_item(self.draft.clone(), self.equipped) {
             Ok(()) => {
                 self.prepare_error = None;
                 Ok(())

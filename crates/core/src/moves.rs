@@ -1,6 +1,6 @@
 //! Small earned actions. Availability is derived from practice, never a second unlock ledger.
 
-use crate::{Wanderer, Weapon};
+use crate::{Wanderer, Weapon, WeaponItem};
 
 /// The first active choices earned at practiced rank.
 /// These actions leave the prepared composition unchanged.
@@ -54,6 +54,15 @@ impl LearnedMove {
             Self::Reach => 2,
             Self::Sweep | Self::SlipAway => 4,
             Self::Pulse => 0,
+        }
+    }
+
+    /// Focus paid with a specific item equipped.
+    #[must_use]
+    pub const fn focus_cost_with_item(self, item: WeaponItem) -> i32 {
+        match (self, item) {
+            (Self::Reach, WeaponItem::LongSpear) => self.focus_cost() - 1,
+            _ => self.focus_cost(),
         }
     }
 
@@ -152,5 +161,16 @@ mod tests {
         assert!(!LearnedMove::SlipAway.unlocked(&w));
         w.stealth.learn(1_000, Rank::Expert);
         assert!(LearnedMove::SlipAway.unlocked(&w));
+    }
+
+    #[test]
+    fn long_spear_reduces_only_reach_focus_cost() {
+        assert_eq!(LearnedMove::Reach.focus_cost_with_item(WeaponItem::Spear), 2);
+        assert_eq!(LearnedMove::Reach.focus_cost_with_item(WeaponItem::LongSpear), 1);
+        for action in
+            [LearnedMove::Withdraw, LearnedMove::Shove, LearnedMove::Sweep, LearnedMove::SlipAway, LearnedMove::Pulse]
+        {
+            assert_eq!(action.focus_cost_with_item(WeaponItem::LongSpear), action.focus_cost());
+        }
     }
 }

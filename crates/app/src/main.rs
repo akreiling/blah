@@ -62,6 +62,12 @@ actions!(
         CycleEarnedMove,
         /// Stay put for a turn.
         Wait,
+        /// Claim the cache underfoot.
+        ClaimCache,
+        /// Make an exposed camp to recover Health and Focus.
+        Camp,
+        /// Use a salve during a normal turn.
+        UseSalve,
         /// Open the composition workshop.
         OpenWorkshop,
         /// Open the adaptation commitment panel.
@@ -141,6 +147,9 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("c", ToggleSneak, None),
         KeyBinding::new("r", RecoverFocus, None),
         KeyBinding::new("f", Unleash, None),
+        KeyBinding::new("g", ClaimCache, None),
+        KeyBinding::new("p", Camp, None),
+        KeyBinding::new("v", UseSalve, None),
         KeyBinding::new("1", WorkshopWeapon, None),
         KeyBinding::new("2", WorkshopDelivery, None),
         KeyBinding::new("3", WorkshopAim, None),

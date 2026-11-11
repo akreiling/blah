@@ -11,7 +11,12 @@ prototype equipment, Focus, simple observer tracking and sneaking, a keyboard wo
 fire. [Weapon practice](learning.md#implemented-prototype-weapon-practice) adds word-only weapon ranks
 earned from landed strikes, and [Focus and stealth practice](learning.md#implemented-prototype-focus-and-stealth-practice)
 adds ranks for those too. The table below remains the historical `0b82077` baseline. Other progression,
-saves, AI naming, and Jev integration still do not exist.
+saves, AI naming, and Jev integration are not part of that historical baseline.
+
+**CP5 delta:** deterministic guarded caches, durable one-time claims, owned weapon variants with safe-point
+equipment, exposed camping, salves, and snapshot-v3 migrations are now implemented. See
+[equipment](equipment.md), [recovery](retreat-recovery.md), and [architecture](architecture.md). This does
+not claim CP5's full delivery gate.
 
 | Area | Implemented at the baseline | Not implemented |
 | --- | --- | --- |

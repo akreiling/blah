@@ -19,11 +19,11 @@ use crate::commitment::{self, CommitmentPanel, Enter as CommitmentEnter};
 use crate::sprites::{Key, SPRITE_PX, SpriteCache};
 use crate::workshop::{Edit, Workshop};
 use crate::{
-    CancelWorkshop, CycleEarnedMove, EarnedMoveEast, EarnedMoveNorth, EarnedMoveSouth, EarnedMoveWest, MoveEast,
-    MoveNorth, MoveSouth, MoveWest, OpenCommitment, OpenWorkshop, PrepareWorkshop, RecoverFocus, TechniqueEast,
-    TechniqueNorth, TechniqueSouth, TechniqueWest, ToggleSneak, Unleash, Wait, WorkshopAim, WorkshopDaggerExample,
-    WorkshopDelivery, WorkshopElement, WorkshopPayload, WorkshopPowerDown, WorkshopPowerUp, WorkshopShape,
-    WorkshopStaffExample, WorkshopTrigger, WorkshopWeapon,
+    Camp, CancelWorkshop, ClaimCache, CycleEarnedMove, EarnedMoveEast, EarnedMoveNorth, EarnedMoveSouth,
+    EarnedMoveWest, MoveEast, MoveNorth, MoveSouth, MoveWest, OpenCommitment, OpenWorkshop, PrepareWorkshop,
+    RecoverFocus, TechniqueEast, TechniqueNorth, TechniqueSouth, TechniqueWest, ToggleSneak, Unleash, UseSalve, Wait,
+    WorkshopAim, WorkshopDaggerExample, WorkshopDelivery, WorkshopElement, WorkshopPayload, WorkshopPowerDown,
+    WorkshopPowerUp, WorkshopShape, WorkshopStaffExample, WorkshopTrigger, WorkshopWeapon,
 };
 
 /// Tiles along each side of the viewport. Odd, so the wanderer sits on the center tile.
@@ -368,12 +368,15 @@ impl Render for GameView {
                 }
             }))
             .on_action(cx.listener(|this, _: &Wait, _, cx| this.act(|g| _ = g.wait(), cx)))
+            .on_action(cx.listener(|this, _: &ClaimCache, _, cx| this.act(|g| _ = g.claim_cache(), cx)))
+            .on_action(cx.listener(|this, _: &Camp, _, cx| this.act(|g| _ = g.camp(), cx)))
+            .on_action(cx.listener(|this, _: &UseSalve, _, cx| this.act(|g| _ = g.use_salve(), cx)))
             .on_action(cx.listener(|this, _: &ToggleSneak, _, cx| this.act(|g| _ = g.toggle_sneak(), cx)))
             .on_action(cx.listener(|this, _: &RecoverFocus, _, cx| this.act(|g| _ = g.recover_focus(), cx)))
             .on_action(cx.listener(|this, _: &Unleash, _, cx| this.act(|g| _ = g.unleash(), cx)))
             .on_action(cx.listener(|this, _: &OpenWorkshop, _, cx| {
                 if this.workshop.is_none() && this.commitment.is_none() {
-                    this.workshop = Some(Workshop::new(this.game.maneuver().clone()));
+                    this.workshop = Some(Workshop::from_game(&this.game));
                     cx.notify();
                 }
             }))
@@ -436,7 +439,9 @@ fn map(game: &Game, sprites: &mut SpriteCache, hurt: bool) -> Div {
                 if dx == 0 && dy == 0 {
                     wanderer_cell(&tile, hurt)
                 } else if let Some(monster) = game.monster_at(x, y) {
-                    monster_cell(&tile, (x, y), monster, sprites)
+                    monster_cell(&tile, (x, y), monster, sprites, game.cache_at(x, y).is_some())
+                } else if let Some(cache) = game.cache_at(x, y) {
+                    cache_cell(&tile, (x, y), cache.claimed)
                 } else if (x, y) == game.home() {
                     home_cell(&tile, (x, y))
                 } else {
@@ -447,6 +452,16 @@ fn map(game: &Game, sprites: &mut SpriteCache, hurt: bool) -> Div {
         div().flex().flex_row().children(cells)
     });
     frame().size(px(MAP)).flex().flex_col().children(rows.collect::<Vec<_>>())
+}
+
+/// An unclaimed cache uses an amber capital; a spent cache stays marked but dims.
+fn cache_cell(tile: &Tile, at: (i64, i64), claimed: bool) -> Div {
+    tile_base(tile.biome.biome().color, at)
+        .border_2()
+        .border_color(rgb(if claimed { DIM } else { HEADING }))
+        .text_color(rgb(if claimed { DIM } else { HEADING }))
+        .font_weight(FontWeight::BOLD)
+        .child(if claimed { "c" } else { "C" })
 }
 
 /// A bare tile: its biome's color, shaded a little per tile, with the biome's glyph.
@@ -497,9 +512,11 @@ fn wanderer_cell(tile: &Tile, hurt: bool) -> Div {
 }
 
 /// A monster's own sprite on its tile, with a health pip under it once it's hurt.
-fn monster_cell(tile: &Tile, at: (i64, i64), monster: &Monster, sprites: &mut SpriteCache) -> Div {
+fn monster_cell(tile: &Tile, at: (i64, i64), monster: &Monster, sprites: &mut SpriteCache, cache: bool) -> Div {
     let image = sprites.get(Key::Monster(monster.id), &monster.sprite);
-    let cell = tile_base(tile.biome.biome().color, at).relative().child(img(image).size(px(SPRITE_PX)));
+    let base = tile_base(tile.biome.biome().color, at);
+    let base = if cache { base.border_2().border_color(rgb(HEADING)) } else { base };
+    let cell = base.relative().child(img(image).size(px(SPRITE_PX)));
     let max = monster.max_hp().max(1);
     if monster.hp >= max {
         return cell;
@@ -559,6 +576,10 @@ fn panel(
         .child(rule())
         .child(adaptations(game))
         .child(rule())
+        .child(equipment(game))
+        .child(rule())
+        .child(cache_status(game))
+        .child(rule())
         .child(place(game))
         .child(rule())
         .child(combat_status(game, move_slot))
@@ -575,9 +596,63 @@ fn panel(
                 .child("Arrows / hjkl / wasd · bump = free strike")
                 .child("Shift + direction = prepared technique")
                 .child("Tab slots · Alt + direction = earned move")
-                .child("M edit · C sneak · R rest · F unleash")
+                .child("M edit · C sneak · R home rest · P camp")
+                .child("V salve · G claim cache · F unleash")
                 .child("Space / . wait · Q quit"),
         )
+}
+
+fn equipment(game: &Game) -> Div {
+    let owned = game.inventory().iter().map(|item| item.name()).collect::<Vec<_>>().join(", ");
+    div()
+        .flex()
+        .flex_col()
+        .child(heading("EQUIPMENT"))
+        .child(pair("Equipped", game.equipped_item().name().into()))
+        .children(wrap(&format!("Owned: {owned}"), PANEL_CHARS).into_iter().map(small_line))
+        .child(pair("Salves", format!("{}/{} · V to use", game.salves(), blah_core::SALVE_CAPACITY)))
+}
+
+fn cache_status(game: &Game) -> Div {
+    let (x, y) = game.position();
+    let nearest = (-VIEW_RADIUS..=VIEW_RADIUS)
+        .flat_map(|dy| (-VIEW_RADIUS..=VIEW_RADIUS).map(move |dx| (dx, dy)))
+        .filter_map(|(dx, dy)| game.cache_at(x + dx, y + dy).map(|cache| (dx.abs().max(dy.abs()), dx, dy, cache)))
+        .min_by_key(|(distance, dx, dy, _)| (*distance, *dy, *dx));
+    let Some((distance, dx, dy, cache)) = nearest else {
+        return div();
+    };
+    let at_cache = distance == 0;
+    let status = if cache.claimed {
+        "claimed".to_owned()
+    } else if at_cache {
+        "G to claim".to_owned()
+    } else {
+        format!("{distance} tiles · move there, then G")
+    };
+    div()
+        .flex()
+        .flex_col()
+        .child(heading("CACHE"))
+        .child(pair("Status", status))
+        .child(pair("Guards", format!("{}/{} alive", cache.guards_alive, cache.guards)))
+        .child(pair("Treasure", cache.treasure.name().into()))
+        .child(small_line(format!("Direction: {}", if at_cache { "here".to_owned() } else { compass(dx, dy) })))
+}
+
+/// The eight-way compass point for an offset, e.g. "NE".
+fn compass(dx: i64, dy: i64) -> String {
+    let ns = match dy.signum() {
+        -1 => "N",
+        1 => "S",
+        _ => "",
+    };
+    let ew = match dx.signum() {
+        -1 => "W",
+        1 => "E",
+        _ => "",
+    };
+    format!("{ns}{ew}")
 }
 
 fn adaptations(game: &Game) -> Div {
@@ -694,7 +769,10 @@ fn earned_move_status(game: &Game, slot: EarnedMoveSlot) -> Div {
     div()
         .flex()
         .flex_col()
-        .child(pair("Move", format!("{} · {}F", learned_move.name(), learned_move.focus_cost())))
+        .child(pair(
+            "Move",
+            format!("{} · {}F", learned_move.name(), learned_move.focus_cost_with_item(game.equipped_item())),
+        ))
         .child(lines)
 }
 
@@ -871,7 +949,7 @@ fn workshop_panel(workshop: &Workshop, game: &Game) -> Div {
         .flex_col()
         .child(heading("WORKSHOP · PAUSED"))
         .child(pair("Name", maneuver.name.clone()))
-        .child(pair("1 Weapon", maneuver.weapon.name().into()))
+        .child(pair("1 Weapon", workshop.equipped().name().into()))
         .child(pair("2 Delivery", delivery_name(technique.delivery).into()))
         .child(pair("3 Aim", aim_name(technique.aim).into()))
         .child(pair("4 Payload", if technique.burst.is_some() { "on" } else { "off" }.into()));
@@ -884,6 +962,14 @@ fn workshop_panel(workshop: &Workshop, game: &Game) -> Div {
     }
     panel = panel
         .child(pair("Focus cost", format!("{} per use", technique.focus_cost())))
+        .children(
+            wrap(
+                &format!("Owned: {}", game.inventory().iter().map(|item| item.name()).collect::<Vec<_>>().join(", ")),
+                PANEL_CHARS,
+            )
+            .into_iter()
+            .map(small_line),
+        )
         .child(colored_small_line(validation_message, validation_color));
     if let Ok(damage) = game.maneuver_backlash(maneuver) {
         panel = panel

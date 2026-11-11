@@ -66,6 +66,29 @@ route leading to it.
 Ordinary creatures generally yield plausible materials or nothing. Do not make every animal drop a sword
 because the progression economy needs one.
 
+## Implemented CP5 first-journey items
+
+The first journey starts with one plain item from each weapon family: dagger, spear, club, and staff. The
+first cache in a land region is deterministic from the world seed and region identity, is marked on the map,
+and is guarded by two or three territorial creatures with a four-tile leash. Cache guards never stand in
+the home view, so a cache cannot make home unsafe; a tiny pocket region lying wholly inside the home view
+has no room for out-of-sight guards and so has no cache. `G` claims it for one exposed
+turn without requiring the guards to die. Claims and guard health/deaths survive leaving the region, death,
+and save/load.
+
+Cache variants keep the same learned weapon family and have explicit trade-offs:
+
+| Item | Effect | Cost |
+| --- | --- | --- |
+| Heavy club | +1 force | 2 percentage points more weapon misses |
+| Keen dagger | +2 opening precision | −1 force |
+| Long spear | Reach costs 1 less Focus | −1 force |
+| Quiet staff | +1 concealment while sneaking | −1 force |
+
+Inventory contains only owned items. The workshop can equip an owned item at a safe point; it cannot equip a
+cache reward that has not been claimed. This is a narrow journey slice, not the full equipment, relic, or
+gathering system proposed above.
+
 ## Reward value
 
 A successful reward can:

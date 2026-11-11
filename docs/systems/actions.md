@@ -95,20 +95,19 @@ Self-created, repeated training injuries do not create unlimited evidence.
 
 ## Camping and supplies
 
-Selected prototype:
+The CP5 first-journey implementation uses a deliberately small recovery loop:
 
-- Safe camping restores Health and Focus.
-- It consumes a camping supply and advances game time.
-- Nearby unresolved danger can prevent camping, with an explanation.
-- Waiting without a camp does not refill both resources indefinitely.
-- Home provides a reliable recovery floor.
+- `P` camps anywhere with no creature in view. It takes one exposed turn and restores 1 Health and 2 Focus;
+  it does not consume a camping supply.
+- `V` uses one of at most two salves for 10 Health during an exposed turn, including in combat. A fresh
+  character starts with two; a cache adds one if there is room.
+- `R` rests at home for 2 Health and 3 Focus per turn. Home rest shelters the wanderer from attacks while
+  creatures still move and observe, and it refills salves.
+- Waiting without a camp or rest does not refill Focus indefinitely.
 
-Only replace the current automatic Health regeneration when the replacement recovery loop is usable.
-Removing regeneration before supplies, home recovery, and basic actions exist would create a broken
-intermediate build.
-
-Camp safety must not require a tedious clearing radius the player cannot inspect. Start with explicit
-shelters and simple visible safety rules.
+The long-term design may add a camping supply. The current camp action instead has a clear safety rule that
+can be inspected in the visible neighborhood. The home recovery floor and basic actions remain available
+when the character is depleted.
 
 ## Death and retreat
 

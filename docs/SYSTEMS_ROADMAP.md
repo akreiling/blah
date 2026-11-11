@@ -86,6 +86,11 @@ The first CP3 [commitment slice](systems/character.md#implemented-cp3-commitment
 offers, two permanent adaptation slots, explicit confirmation, and version-1 save migration. The
 checklists stay unchecked by convention.
 
+The CP5 first-journey slice now includes deterministic guarded caches, owned weapon variants, exposed
+camping and salves, and snapshot-v3 migration. Its implementation status and remaining gate evidence are
+recorded in [CP5](systems/checkpoints-development.md#cp5-complete-one-worthwhile-journey); the CP5
+checklists remain unchecked pending whole-journey and GUI validation.
+
 Then grow those identities through practice and commitment, preserve them in saves, and give them a
 worthwhile journey with treasure, recovery, and an authored apex encounter.
 
