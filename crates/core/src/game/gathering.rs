@@ -86,6 +86,18 @@ impl Game {
         Some(HerbInfo { herb: patch.herb, ready: self.patch_ready(patch.position) })
     }
 
+    /// Signs of the nearest ready patch of this herb in the current region. Flora clues reveal only a
+    /// destination, not terrain or creatures on the route.
+    #[must_use]
+    pub fn herb_trail(&self, herb: Herb) -> Option<(i64, i64)> {
+        self.herb_sites
+            .get(&self.region.id)?
+            .iter()
+            .filter(|patch| patch.herb == herb && self.patch_ready(patch.position))
+            .min_by_key(|patch| (chebyshev(self.position, patch.position), patch.position))
+            .map(|patch| patch.position)
+    }
+
     /// How many of `herb` are in the pouch.
     #[must_use]
     pub const fn herbs(&self, herb: Herb) -> u8 {

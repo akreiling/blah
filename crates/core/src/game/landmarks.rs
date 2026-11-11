@@ -143,8 +143,8 @@ impl Game {
         self.attuned_relics.contains(&Some(relic))
     }
 
-    /// Choose both attunement slots without passing time. Preparation is allowed only at home with no
-    /// creature in view; each selected relic must be owned and may appear in only one slot.
+    /// Choose both attunement slots without passing time inside home's shelter. Each selected relic must
+    /// be owned and may appear in only one slot.
     pub fn attune_relics(&mut self, slots: [Option<Relic>; RELIC_SLOTS]) -> Result<(), &'static str> {
         if self.position != self.home || !self.can_prepare() {
             return Err("Relics can only be attuned safely at home.");

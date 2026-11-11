@@ -241,6 +241,8 @@ mod tests {
     #[test]
     fn examples_are_only_drafts_and_cannot_bypass_unsafe_preparation() {
         let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
+        assert_eq!(game.step(blah_core::Dir::West), blah_core::Step::Moved);
+        assert!(!game.can_prepare(), "outside home, the nearby sentinel still blocks preparation");
         let before = game.clone();
         let mut workshop = Workshop::new(game.maneuver().clone());
         workshop.apply(Edit::StaffExample);
@@ -249,5 +251,18 @@ mod tests {
         assert_eq!(game, before);
         workshop.apply(Edit::Weapon);
         assert_eq!(game, before);
+    }
+
+    #[test]
+    fn home_preparation_accepts_a_valid_draft_without_removing_nearby_creatures() {
+        let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
+        let monsters = game.monsters().to_vec();
+        let turn = game.turn();
+        let mut workshop = Workshop::new(game.maneuver().clone());
+        workshop.apply(Edit::StaffExample);
+        workshop.prepare(&mut game).unwrap();
+        assert_eq!(game.maneuver(), &Maneuver::staff_inferno());
+        assert_eq!(game.turn(), turn);
+        assert_eq!(game.monsters(), monsters);
     }
 }

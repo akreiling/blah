@@ -257,7 +257,7 @@ impl GameView {
     fn open_commitment(&mut self, cx: &mut Context<GameView>) {
         if self.workshop.is_some()
             || self.commitment.is_some()
-            || self.game.monsters_in_view().next().is_some()
+            || !self.game.can_prepare()
             || self.game.adaptation_offers().next().is_none()
         {
             return;
@@ -553,6 +553,10 @@ fn home_cell(tile: &Tile, at: (i64, i64)) -> Div {
 
 /// Which way home is and how many steps away, e.g. "12 N, 3 W", or "here".
 fn home_hint((x, y): (i64, i64), (hx, hy): (i64, i64)) -> String {
+    if (x, y) == (hx, hy) { "here (R rests)".into() } else { destination_hint((x, y), (hx, hy)) }
+}
+
+fn destination_hint((x, y): (i64, i64), (hx, hy): (i64, i64)) -> String {
     let (dx, dy) = (hx - x, hy - y);
     let mut parts = Vec::new();
     if dy != 0 {
@@ -561,7 +565,7 @@ fn home_hint((x, y): (i64, i64), (hx, hy): (i64, i64)) -> String {
     if dx != 0 {
         parts.push(format!("{} {}", dx.unsigned_abs(), if dx < 0 { "W" } else { "E" }));
     }
-    if parts.is_empty() { "here (R rests)".into() } else { parts.join(", ") }
+    if parts.is_empty() { "here".into() } else { parts.join(", ") }
 }
 
 /// The wanderer's tile: an `@` on darkened ground, or on red the turn it was hurt.
@@ -643,6 +647,8 @@ fn panel(
     }
     panel
         .child(wanderer(game))
+        .child(rule())
+        .child(trails_panel(game))
         .child(rule())
         .child(adaptations(game))
         .child(rule())
@@ -736,6 +742,23 @@ fn gathering(game: &Game) -> Div {
         )));
     }
     panel
+}
+
+fn trails_panel(game: &Game) -> Div {
+    let mut panel = div().flex().flex_col().child(heading("FIELD SIGNS"));
+    if let Some(at) = game.cache_trail()
+        && game.cache_at(at.0, at.1).is_none_or(|cache| !cache.claimed)
+    {
+        panel = panel.child(small_line(format!("Cache trail: {}", destination_hint(game.position(), at))));
+    }
+    for herb in Herb::ALL {
+        if game.herbs(herb) == 0
+            && let Some(at) = game.herb_trail(herb)
+        {
+            panel = panel.child(small_line(format!("{}: {}", herb.name(), destination_hint(game.position(), at))));
+        }
+    }
+    panel.child(small_line("Directions only; scout the route and guards."))
 }
 
 fn relics_panel(game: &Game) -> Div {
@@ -846,11 +869,8 @@ fn compass(dx: i64, dy: i64) -> String {
 fn adaptations(game: &Game) -> Div {
     let held: Vec<_> = game.wanderer().adaptations.held().collect();
     let offers = game.adaptation_offers().next().is_some();
-    let ready = if game.monsters_in_view().next().is_some() {
-        "Breakthrough ready (B) · return when clear"
-    } else {
-        "Breakthrough ready (B)"
-    };
+    let ready =
+        if !game.can_prepare() { "Breakthrough ready (B) · return when clear" } else { "Breakthrough ready (B)" };
     let mut section = div()
         .flex()
         .flex_col()
@@ -1129,7 +1149,7 @@ fn workshop_panel(workshop: &Workshop, game: &Game) -> Div {
         .or_else(|| (!game.can_prepare()).then_some("Nearby creatures prevent preparation."));
     let validation_message = match reason {
         Some(reason) => format!("Cannot prepare: {reason}"),
-        None => "Core validates; safe to prepare when alone.".into(),
+        None => "Core validates; safe to prepare here.".into(),
     };
     let validation_color = if reason.is_some() { HP } else { 0x8c_e0_6a };
     let mut panel = div()
@@ -1165,7 +1185,7 @@ fn workshop_panel(workshop: &Workshop, game: &Game) -> Div {
             .child(small_line("No safe center. This can kill you."));
     }
     panel
-        .child(small_line("Enter prepares only with no creatures in view; Esc discards."))
+        .child(small_line("Enter prepares at home or with no creatures in view; Esc discards."))
         .child(div().h(px(6.0)))
         .child(small_line("1 weapon · 2 delivery · 3 aim · 4 payload"))
         .child(small_line("5 element · 6 trigger · 7 shape"))

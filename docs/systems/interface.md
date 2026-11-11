@@ -111,15 +111,21 @@ The first journey exposes its small action set directly in the play view:
 - `T` drinks a Focus draught, including in combat. `D` remains eastward movement in WASD.
 - `V` uses a salve during a normal turn, including combat.
 - `R` rests at home. The equipment panel shows the equipped item, owned items, and salve count; the workshop
-  lists owned weapon variants and equips one only when preparation is safe.
+  lists owned weapon variants. Preparation is safe at home even with followers nearby, or in a clear field
+  site. Combat, moving, and ordinary waiting at home remain exposed.
 - `I` selects an unequipped cache weapon; `U` trades the selected weapon at home for one salve and one
-  draught, as room allows. Full supplies and nearby creatures block the trade.
+  draught, as room allows, during a sheltered turn. Full supplies block the trade.
 - The herb pouch shows all three herb counts (capacity three each), the draught count (capacity two), and
   the brewing recipe. Herbs and draughts do not automatically refill at camp or home; home rest does
   restock salves.
 
 The nearby cache panel shows its direction, claim state, living-guard count, and reward before the player
 reaches it. Claiming breaks sneaking, so the exposed turn is visible to territorial guards.
+
+The **FIELD SIGNS** panel gives directions to the current region's possible cache site and ready patches
+of missing herbs. These are destinations, not revealed terrain, loot, or guards. They cost no turn to
+inspect, regenerate after loading, and do not create a cache encounter. The route still needs scouting;
+being pointed toward a cache does not guarantee a safe non-combat approach.
 
 Landmarks use `X` while standing on the site: shrines grant a one-time relic, springs refill salves and
 draughts on a 300-turn per-site cooldown, wild gardens yield each herb with Herbalism benefits, and

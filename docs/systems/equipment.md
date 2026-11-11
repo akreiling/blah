@@ -89,9 +89,10 @@ Inventory contains only owned items. The workshop can equip an owned item at a s
 cache reward that has not been claimed.
 
 At home, `I` cycles unequipped cache weapons and `U` exchanges the selected one for one salve and one
-Focus draught, limited by pack room. The starting kit and equipped weapon cannot be traded. Creatures in
-view or completely full supplies block the exchange without spending time or the item. A successful
-exchange takes one exposed turn; it never reopens the cache that awarded the weapon.
+Focus draught, limited by pack room. The starting kit and equipped weapon cannot be traded. Completely
+full supplies block the exchange without spending time or the item. A successful exchange takes one
+sheltered turn; creatures that followed the wanderer home remain alive and continue acting, but cannot
+hurt the wanderer during the trade. It never reopens the cache that awarded the weapon.
 
 ### Implemented CP5 relics and landmarks
 

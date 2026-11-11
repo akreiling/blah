@@ -128,11 +128,11 @@ or delayed telegraphs.** Terrain does not block the wave. Do not treat this as a
 - Already located actors remain tracked within normal sensing range. Leaving that range loses tracking.
 - Observation updates even when a slow creature has no action that turn.
 - Waiting does not restore Focus. **R** rests sheltered at home, restoring 2 Health and 3 Focus.
-  Creatures still move but cannot hurt you during that rest action. Other actions remain exposed;
+  Creatures still move but cannot hurt you during that rest action. Combat and waiting remain exposed;
   a fully recovered character cannot use rest as a protected wait.
-- Existing Health regeneration remains. Death returns you home with 1 Health and no Focus, after 1,000
+- Passive Health regeneration was removed in CP5. Death normally returns you home with 1 Health and no Focus, after 1,000
   turns. Creatures survive and recover; those within view of home are driven off.
-- Preparation is free but requires no creatures in the visible neighborhood. Editing and canceling spend
+- Preparation is free inside home, or with no creatures in the visible neighborhood. Editing and canceling spend
   no time. The workshop is paused and cannot be used to move or cast behind the editor.
 
 ## What the proof checks

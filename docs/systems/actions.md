@@ -100,14 +100,18 @@ The CP5 first-journey implementation uses a deliberately small recovery loop:
 - `P` camps anywhere with no creature in view. It takes one exposed turn and restores 1 Health and 2 Focus;
   it does not consume a camping supply. With two different herbs and room in the two-draught stack, it
   also brews one Focus draught, even if Health and Focus are full.
-- `E` gathers one herb from the patch underfoot (three of each kind fit in the pouch). Patches regrow after
-  300 turns, not on reentry or reload. Gathering takes an exposed turn and breaks sneaking.
-- `T` drinks a carried draught for up to 8 Focus during an exposed turn, including combat, and breaks
+- `E` gathers from the patch underfoot (three of each kind fit in the pouch). Herbalism can add a second
+  herb, keep Skilled picking quiet, and shorten 300-turn regrowth to 150 turns. Reentry and reload do not
+  refresh patches.
+- `T` drinks a carried draught for up to 8–12 Focus during an exposed turn, including combat, and breaks
   sneaking. Drinking at full Focus or without a draught is refused without spending time or supplies.
 - `V` uses one of at most two salves for 10 Health during an exposed turn, including in combat. A fresh
   character starts with two; a cache adds one if there is room.
 - `R` rests at home for 2 Health and 3 Focus per turn. Home rest shelters the wanderer from attacks while
   creatures still move and observe, and it refills salves.
+- Preparation and relic attunement are free inside home's shelter even with followers nearby. `U`
+  exchanges the selected spare cache weapon during a sheltered turn. These actions neither remove
+  creatures nor grant practice. Waiting and combat remain exposed at home.
 - Waiting without a camp or rest restores neither Health nor Focus; passive regeneration is gone.
 
 The long-term design may add a camping supply. The current camp action instead has a clear safety rule that

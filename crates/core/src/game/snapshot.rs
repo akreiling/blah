@@ -418,6 +418,7 @@ impl Game {
             equipped: s.equipped,
             salves: s.salves,
             caches: s.caches.into_iter().map(|cache| (cache.region, cache)).collect(),
+            cache_trails: BTreeMap::new(),
             landmarks: s.landmarks.into_iter().map(|landmark| (landmark.region, landmark)).collect(),
             relics: s.relics,
             attuned_relics: s.attuned_relics,
@@ -487,6 +488,7 @@ impl Game {
                 tracking: m.tracking,
             });
         }
+        game.update_cache_trails();
         game.update_visible_herbs();
         game.update_visible_landmarks();
         Ok(game)

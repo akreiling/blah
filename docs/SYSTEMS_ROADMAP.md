@@ -89,7 +89,8 @@ checklists stay unchecked by convention.
 The CP5 first-journey slice now includes deterministic guarded caches and ruins, owned weapon variants,
 landmarks, relics, exposed camping and salves, and snapshot-v5 migration. Its implementation status and
 remaining gate evidence are recorded in [CP5](systems/checkpoints-development.md#cp5-complete-one-worthwhile-journey);
-the CP5 checklists remain unchecked pending whole-journey validation beyond the recorded GUI smoke checks.
+the [whole-journey pass](systems/journey-playtest.md) records public-action routes, tuning, and remaining
+limits. CP5 checklists remain unchecked by convention and do not imply human playtesting is complete.
 
 Then grow those identities through practice and commitment, preserve them in saves, and give them a
 worthwhile journey with treasure, recovery, and an authored apex encounter.

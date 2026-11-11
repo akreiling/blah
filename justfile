@@ -10,6 +10,7 @@ run *args:
 test:
     {{cargo}} test --workspace
     {{cargo}} test -p blah-core --example skill_pacing
+    {{cargo}} test -p blah-core --example journey_playtest
 
 # Check formatting and lints; warnings fail.
 lint:
@@ -35,3 +36,7 @@ composition-demo:
 # Measure skill pacing and learned moves: just skill-pacing [seeds] [actions] [baseline|cautious|compare|move-compare|move-effect [horizon]]
 skill-pacing *args:
     {{cargo}} run --quiet --release -p blah-core --example skill_pacing -- {{args}}
+
+# Follow whole fresh-character journeys: [seeds] [actions] [first-seed] [trails|blind]
+journey-playtest *args:
+    {{cargo}} run --quiet --release -p blah-core --example journey_playtest -- {{args}}

@@ -48,6 +48,7 @@ fn commitment_checks_history_room_exclusions_and_safe_place_atomically() {
     assert_eq!(game.turn, 0);
 
     let mut danger = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
+    danger.home.1 += 20;
     danger.wanderer.weapons = game.wanderer.weapons;
     let before = danger.clone();
     assert!(danger.commit_adaptation(Discipline(Weapon::Dagger)).is_err());

@@ -294,6 +294,34 @@ fn fresh_home_is_not_blocked_by_a_visible_cache_guard() {
 }
 
 #[test]
+fn regional_field_signs_do_not_reveal_guards_or_change_the_world() {
+    let game = Game::new(42);
+    assert!(game.caches.is_empty(), "the destination starts outside normal view");
+    let before = game.clone();
+    let trail = game.cache_trail().expect("starting cache has field signs");
+    assert!(chebyshev(trail, game.position()) > VIEW_RADIUS);
+    assert!(game.cache_at(trail.0, trail.1).is_none());
+    for _ in 0..3 {
+        assert_eq!(game.cache_trail(), Some(trail));
+        for herb in Herb::ALL {
+            if let Some(at) = game.herb_trail(herb) {
+                assert_eq!(Herb::of(game.world.tile(at.0, at.1).biome.biome()), Some(herb));
+            }
+        }
+    }
+    assert_eq!(game, before);
+    let restored = Game::from_snapshot(game.snapshot()).unwrap();
+    assert_eq!(restored.cache_trail(), Some(trail));
+    assert!(restored.caches.is_empty(), "restoring clues must not create guards");
+    for herb in Herb::ALL {
+        assert_eq!(restored.herb_trail(herb), game.herb_trail(herb));
+    }
+    let trial = Game::composition_trial(42, Maneuver::default()).unwrap();
+    assert!(trial.cache_trail().is_none());
+    assert!(Herb::ALL.into_iter().all(|herb| trial.herb_trail(herb).is_none()));
+}
+
+#[test]
 fn cache_guard_placement_never_uses_the_wanderers_tile() {
     let mut game = Game::new(0);
     let region = game.region.clone();
@@ -438,6 +466,7 @@ fn weapon_items_require_ownership_and_a_safe_point_to_equip() {
     let mut threat = Game::composition_trial(42, Maneuver::default()).unwrap().monsters[0].clone();
     threat.position = (game.position.0 + 1, game.position.1);
     game.monsters.push(threat);
+    game.position.1 += 1; // Away from home's shelter, nearby creatures still prevent equipment changes.
     let before = (game.maneuver.clone(), game.equipped_item(), game.turn);
     let mut changed = staff;
     changed.name = "Safe-point check".into();

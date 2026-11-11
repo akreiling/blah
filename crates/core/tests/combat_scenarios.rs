@@ -61,10 +61,7 @@ fn exhausted_dagger_can_strike_without_replacing_its_prepared_technique() {
         // Home now provides sheltered rest even with the sentinel alive. This regression
         // deliberately keeps the exhausted state to exercise the free strike below.
 
-        let before = game.clone();
-        let reason = game.prepare(Maneuver::default()).unwrap_err();
-        println!("replace the prepared maneuver: {reason}");
-        assert_eq!(game, before, "preparation is still blocked, but a basic strike does not require it");
+        assert!(game.can_prepare(), "home permits refitting, but a basic strike must not require it");
 
         let focus = game.wanderer().focus;
         let turn = game.turn();
@@ -109,9 +106,7 @@ fn staff_demo_survivor_can_be_finished_with_free_weapon_strikes() {
     assert_eq!(game.log().entries().filter(|e| e.kind == LogKind::Kill).count(), 2);
     blocked(&mut game, "repeat staff strike", Game::unleash);
     // Do not rest here: preserve the exhausted state when checking the free strike.
-    let before = game.clone();
-    assert!(game.prepare(Maneuver::default()).is_err());
-    assert_eq!(game, before);
+    assert!(game.can_prepare(), "home permits refitting, but keep the staff prepared for the free strike");
 
     // Let the actual survivor approach, rather than moving it beside the player in test setup.
     let adjacent = |game: &Game| {

@@ -92,8 +92,11 @@ and 1: blocked interaction keys, paused workshop controls, gathering, ready/regr
 sand, spring-marker contrast, and save/relaunch with depletion intact. A limited 200-seed starting-region
 and neighbor probe improved the median different-herb pair trip from 57 to 45 turns; seeds with no pair
 found within the probe fell from 85 to 56. This is not a guarantee of a short recipe route on every seed.
-The checkboxes remain unchecked by convention; complete longer landmark/relic journeys still need
-whole-journey playtesting.
+The [whole-journey pass](journey-playtest.md) now exercises preparation, field supplies, reward claims,
+home recovery and trading, and a second outing through public actions, including a shrine relic that
+changes later movement. It adds field-sign directions and fixes followers blocking home management.
+The checkboxes remain unchecked by convention; these automated routes are not independent human
+playtesting or evidence that every seed has an easy non-combat route.
 
 **Work**
 

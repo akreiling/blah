@@ -46,7 +46,10 @@ at home with 1 Health, zero Focus, and nearby threats reproduced the blocked rec
 
 Home rest now shelters the wanderer for that action and restores the same 2 Health and 3 Focus.
 Creatures still observe, bank and spend speed, move, and spawn. They are not removed or healed by rest.
-Other actions remain exposed, even at home. Fully recovered characters cannot take a protected rest
+Combat, movement, and ordinary waiting remain exposed, even at home. Preparation, relic attunement, and
+weapon trading now work inside home's shelter even with nearby followers; trades pass a sheltered turn.
+This fixes the later whole-journey failure where recovery finished but the next loadout remained blocked.
+Fully recovered characters cannot take a protected rest
 turn. Death still costs 1,000 turns, leaves 1 Health and zero Focus, and grants no practice.
 
 This is a recovery floor for living retreats and deaths alike, not a general invulnerability flag.

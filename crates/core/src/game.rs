@@ -421,6 +421,8 @@ pub struct Game {
     salves: u8,
     /// Caches revealed once and retained by region, including their named guards' living state.
     caches: BTreeMap<RegionId, CacheRecord>,
+    /// Regional trail destinations, derived without revealing guards or committing a cache.
+    cache_trails: BTreeMap<RegionId, (i64, i64)>,
     /// Known landmarks and their durable use/cooldown state.
     landmarks: BTreeMap<RegionId, LandmarkRecord>,
     /// Relics acquired from shrines and guarded ruins.
@@ -499,6 +501,7 @@ impl Game {
             equipped: WeaponItem::Dagger,
             salves: SALVE_CAPACITY,
             caches: BTreeMap::new(),
+            cache_trails: BTreeMap::new(),
             landmarks: BTreeMap::new(),
             relics: Vec::new(),
             attuned_relics: [None; crate::RELIC_SLOTS],
@@ -538,6 +541,7 @@ impl Game {
         game.update_region(false);
         game.monsters.clear();
         game.caches.clear();
+        game.cache_trails.clear();
         game.landmarks.clear();
         game.relics.clear();
         game.attuned_relics = [None; crate::RELIC_SLOTS];
@@ -708,6 +712,13 @@ impl Game {
         })
     }
 
+    /// Field signs point toward this region's possible cache site. This reveals neither guards nor loot
+    /// and does not claim or materialize the cache; the player still has to scout the destination.
+    #[must_use]
+    pub fn cache_trail(&self) -> Option<(i64, i64)> {
+        self.journey.then(|| self.cache_trails.get(&self.region.id).copied()).flatten()
+    }
+
     /// Take a cache's weapon and one salve. Claiming is a full, exposed turn and does not require killing
     /// its guards; an unclaimed cache remains guarded even if the wanderer leaves or dies.
     pub fn claim_cache(&mut self) -> Step {
@@ -770,10 +781,10 @@ impl Game {
         self.last_attack
     }
 
-    /// Preparation is safe only when no creature is in the visible neighborhood.
+    /// Preparation is safe inside home, or when no creature is in the visible neighborhood.
     #[must_use]
     pub fn can_prepare(&self) -> bool {
-        self.monsters_in_view().next().is_none()
+        self.position == self.home || self.monsters_in_view().next().is_none()
     }
 
     /// Recover modestly at any empty visible site, brewing a Focus draught if the pouch holds two different
@@ -1080,7 +1091,8 @@ impl Game {
 
     /// Rest sheltered at home for [`REST_HEALTH`] Health and [`REST_FOCUS`] Focus.
     /// Creatures still move, but cannot hurt the wanderer during this rest action.
-    /// Other actions at home are exposed. A full character cannot take a protected rest turn.
+    /// Combat and ordinary waiting at home remain exposed; equipment management and trades are sheltered.
+    /// A full character cannot take a protected rest turn.
     /// Ordinary waiting never restores Focus.
     pub fn recover_focus(&mut self) -> Step {
         if self.position != self.home {
@@ -1341,13 +1353,34 @@ impl Game {
         visible
     }
 
+    /// Rebuild derived field signs after loading, without revealing or materializing any guards.
+    fn update_cache_trails(&mut self) {
+        self.cache_trails.clear();
+        if !self.journey {
+            return;
+        }
+        for id in self.visible_land_regions() {
+            if let Some(cache) = self.caches.get(&id) {
+                self.cache_trails.insert(id, cache.position);
+            } else if let Some(region) = self.regions.region(id)
+                && let Some(position) = Self::cache_site(&self.world, &mut self.regions, &region, self.home)
+                && (region.tiles >= crate::region::SLIVER_TILES || chebyshev(position, self.home) > VIEW_RADIUS)
+            {
+                self.cache_trails.insert(id, position);
+            }
+        }
+    }
+
     /// Reveal every land-region cache whose site has just entered the visible map.
     fn update_visible_caches(&mut self) {
         if !self.journey {
             return;
         }
-        for id in self.visible_land_regions() {
-            if self.caches.contains_key(&id) {
+        let visible = self.visible_land_regions();
+        self.cache_trails.retain(|id, _| visible.contains(id));
+        for id in visible {
+            if let Some(cache) = self.caches.get(&id) {
+                self.cache_trails.insert(id, cache.position);
                 continue;
             }
             let Some(region) = self.regions.region(id) else {
@@ -1356,6 +1389,9 @@ impl Game {
             let Some(position) = Self::cache_site(&self.world, &mut self.regions, &region, self.home) else {
                 continue;
             };
+            if region.tiles >= crate::region::SLIVER_TILES || chebyshev(position, self.home) > VIEW_RADIUS {
+                self.cache_trails.insert(id, position);
+            }
             if chebyshev(position, self.position) <= VIEW_RADIUS {
                 self.reveal_cache(&region, position);
             }
@@ -2823,6 +2859,7 @@ mod tests {
     #[test]
     fn failed_preparation_and_unaffordable_attacks_are_atomic() {
         let mut game = Game::composition_trial(42, Maneuver::backstab_burst()).unwrap();
+        game.home.1 += 20; // This combat fixture is outside home's preparation shelter.
         let before = game.clone();
         assert!(game.prepare(Maneuver::default()).is_err());
         assert_eq!(game, before);
