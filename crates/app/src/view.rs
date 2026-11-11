@@ -10,17 +10,17 @@ use gpui::{
 };
 
 use blah_core::{
-    ADAPTATION_CAPACITY, Adaptation, Aim, Comparison, Delivery, Dir, Element, Game, Gene, LearnedMove, LogKind,
-    MAX_AREA_RADIUS, MAX_BURST_POWER, Monster, MovePreview, Shape, SpeciesId, Tile, Trigger, VIEW_RADIUS, Weapon,
-    hash_point,
+    ADAPTATION_CAPACITY, Adaptation, Aim, Comparison, Delivery, Dir, Element, Game, Gene, Herb, HerbInfo, LearnedMove,
+    LogKind, MAX_AREA_RADIUS, MAX_BURST_POWER, Monster, MovePreview, Shape, SpeciesId, Tile, Trigger, VIEW_RADIUS,
+    Weapon, hash_point,
 };
 
 use crate::commitment::{self, CommitmentPanel, Enter as CommitmentEnter};
 use crate::sprites::{Key, SPRITE_PX, SpriteCache};
 use crate::workshop::{Edit, Workshop};
 use crate::{
-    Camp, CancelWorkshop, ClaimCache, CycleEarnedMove, EarnedMoveEast, EarnedMoveNorth, EarnedMoveSouth,
-    EarnedMoveWest, MoveEast, MoveNorth, MoveSouth, MoveWest, OpenCommitment, OpenWorkshop, PrepareWorkshop,
+    Camp, CancelWorkshop, ClaimCache, CycleEarnedMove, DrinkDraught, EarnedMoveEast, EarnedMoveNorth, EarnedMoveSouth,
+    EarnedMoveWest, Gather, MoveEast, MoveNorth, MoveSouth, MoveWest, OpenCommitment, OpenWorkshop, PrepareWorkshop,
     RecoverFocus, TechniqueEast, TechniqueNorth, TechniqueSouth, TechniqueWest, ToggleSneak, Unleash, UseSalve, Wait,
     WorkshopAim, WorkshopDaggerExample, WorkshopDelivery, WorkshopElement, WorkshopPayload, WorkshopPowerDown,
     WorkshopPowerUp, WorkshopShape, WorkshopStaffExample, WorkshopTrigger, WorkshopWeapon,
@@ -371,6 +371,8 @@ impl Render for GameView {
             .on_action(cx.listener(|this, _: &ClaimCache, _, cx| this.act(|g| _ = g.claim_cache(), cx)))
             .on_action(cx.listener(|this, _: &Camp, _, cx| this.act(|g| _ = g.camp(), cx)))
             .on_action(cx.listener(|this, _: &UseSalve, _, cx| this.act(|g| _ = g.use_salve(), cx)))
+            .on_action(cx.listener(|this, _: &Gather, _, cx| this.act(|g| _ = g.gather(), cx)))
+            .on_action(cx.listener(|this, _: &DrinkDraught, _, cx| this.act(|g| _ = g.drink_draught(), cx)))
             .on_action(cx.listener(|this, _: &ToggleSneak, _, cx| this.act(|g| _ = g.toggle_sneak(), cx)))
             .on_action(cx.listener(|this, _: &RecoverFocus, _, cx| this.act(|g| _ = g.recover_focus(), cx)))
             .on_action(cx.listener(|this, _: &Unleash, _, cx| this.act(|g| _ = g.unleash(), cx)))
@@ -444,6 +446,8 @@ fn map(game: &Game, sprites: &mut SpriteCache, hurt: bool) -> Div {
                     cache_cell(&tile, (x, y), cache.claimed)
                 } else if (x, y) == game.home() {
                     home_cell(&tile, (x, y))
+                } else if let Some(herb) = game.herb_at(x, y) {
+                    herb_cell(&tile, (x, y), herb)
                 } else {
                     terrain_cell(&tile, (x, y))
                 }
@@ -462,6 +466,16 @@ fn cache_cell(tile: &Tile, at: (i64, i64), claimed: bool) -> Div {
         .text_color(rgb(if claimed { DIM } else { HEADING }))
         .font_weight(FontWeight::BOLD)
         .child(if claimed { "c" } else { "C" })
+}
+
+/// Ready herbs use a bright sprig; a picked patch keeps a dim marker until it regrows.
+fn herb_cell(tile: &Tile, at: (i64, i64), herb: HerbInfo) -> Div {
+    tile_base(tile.biome.biome().color, at)
+        .border_1()
+        .border_color(rgb(if herb.ready { 0xb6_f0_90 } else { DIM }))
+        .text_color(rgb(if herb.ready { 0xb6_f0_90 } else { DIM }))
+        .font_weight(FontWeight::BOLD)
+        .child(if herb.ready { "*" } else { "·" })
 }
 
 /// A bare tile: its biome's color, shaded a little per tile, with the biome's glyph.
@@ -578,6 +592,8 @@ fn panel(
         .child(rule())
         .child(equipment(game))
         .child(rule())
+        .child(gathering(game))
+        .child(rule())
         .child(cache_status(game))
         .child(rule())
         .child(place(game))
@@ -598,6 +614,7 @@ fn panel(
                 .child("Tab slots · Alt + direction = earned move")
                 .child("M edit · C sneak · R home rest · P camp")
                 .child("V salve · G claim cache · F unleash")
+                .child("E gather · T draught · P also brews")
                 .child("Space / . wait · Q quit"),
         )
 }
@@ -611,6 +628,24 @@ fn equipment(game: &Game) -> Div {
         .child(pair("Equipped", game.equipped_item().name().into()))
         .children(wrap(&format!("Owned: {owned}"), PANEL_CHARS).into_iter().map(small_line))
         .child(pair("Salves", format!("{}/{} · V to use", game.salves(), blah_core::SALVE_CAPACITY)))
+}
+
+fn gathering(game: &Game) -> Div {
+    let mut panel = div().flex().flex_col().child(heading("HERB POUCH"));
+    for herb in Herb::ALL {
+        panel = panel.child(pair(herb.name(), format!("{}/{}", game.herbs(herb), blah_core::HERB_CAPACITY)));
+    }
+    panel = panel
+        .child(pair("Draughts", format!("{}/{} · T to drink", game.draughts(), blah_core::DRAUGHT_CAPACITY)))
+        .child(small_line("P brews: 2 different herbs → 8 Focus"));
+    if let Some(info) = game.herb_at(game.position().0, game.position().1) {
+        panel = panel.child(small_line(format!(
+            "{} here · {}",
+            info.herb.name(),
+            if info.ready { "E to gather" } else { "regrowing" }
+        )));
+    }
+    panel
 }
 
 fn cache_status(game: &Game) -> Div {

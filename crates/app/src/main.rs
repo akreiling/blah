@@ -68,6 +68,10 @@ actions!(
         Camp,
         /// Use a salve during a normal turn.
         UseSalve,
+        /// Gather the herb patch underfoot.
+        Gather,
+        /// Drink a Focus draught during a normal turn.
+        DrinkDraught,
         /// Open the composition workshop.
         OpenWorkshop,
         /// Open the adaptation commitment panel.
@@ -150,6 +154,8 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("g", ClaimCache, None),
         KeyBinding::new("p", Camp, None),
         KeyBinding::new("v", UseSalve, None),
+        KeyBinding::new("e", Gather, None),
+        KeyBinding::new("t", DrinkDraught, None),
         KeyBinding::new("1", WorkshopWeapon, None),
         KeyBinding::new("2", WorkshopDelivery, None),
         KeyBinding::new("3", WorkshopAim, None),
@@ -484,5 +490,20 @@ mod tests {
             bindings.iter().any(|binding| { binding.contains("OpenCommitment") && binding.contains("key: \"b\"") }),
             "missing B breakthrough binding: {bindings:#?}"
         );
+    }
+
+    #[test]
+    fn gathering_keys_do_not_replace_east_movement() {
+        let bindings: Vec<_> = keymap().iter().map(|binding| format!("{binding:?}")).collect();
+        for (key, action) in [("e", "Gather"), ("t", "DrinkDraught"), ("d", "MoveEast")] {
+            let matching: Vec<_> = bindings
+                .iter()
+                .filter(|b| {
+                    b.contains(&format!("key: \"{key}\"")) && b.contains("shift: false") && b.contains("alt: false")
+                })
+                .collect();
+            assert_eq!(matching.len(), 1, "{matching:?}");
+            assert!(matching[0].contains(action), "{matching:?}");
+        }
     }
 }

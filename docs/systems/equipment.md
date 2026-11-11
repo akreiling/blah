@@ -86,8 +86,8 @@ Cache variants keep the same learned weapon family and have explicit trade-offs:
 | Quiet staff | +1 concealment while sneaking | −1 force |
 
 Inventory contains only owned items. The workshop can equip an owned item at a safe point; it cannot equip a
-cache reward that has not been claimed. This is a narrow journey slice, not the full equipment, relic, or
-gathering system proposed above.
+cache reward that has not been claimed. This is a narrow journey slice, not the full equipment or relic
+system proposed above.
 
 ## Reward value
 
@@ -105,6 +105,32 @@ Players need useful choices for it, such as storage or a simple conversion mecha
 economy is not required for the first slice.
 
 ## Gathering and materials
+
+### Implemented herb gathering
+
+Each land region has 2–4 deterministic patches (or fewer if a tiny region has too few free tiles), away from
+home and its cache. The patch's actual biome determines its herb:
+
+| Herb | Biomes |
+| --- | --- |
+| Mossbloom | Swamp, jungle, forest, taiga |
+| Sunthistle | Grassland, savanna, desert, beach |
+| Stonecap | Hills, mountains, badlands, tundra |
+
+`E` gathers one herb from the patch underfoot during an exposed turn and breaks sneaking. The pouch holds
+three of each herb. A picked patch regrows 300 turns after the pick; leaving, cache eviction, and reload
+do not refresh it. Death advances 1,000 turns, so patches regrow during that time, but carried supplies
+are neither lost nor refilled.
+
+`P` camps and brews one Focus draught from one each of two different herbs, taking the most plentiful kinds
+first (ties use table order). Brewing works even at full Health and Focus, but still requires no creature
+in view and takes the camp's exposed turn. Carry at most two draughts. `T` drinks one for up to 8 Focus
+during an exposed turn, including in combat, and breaks sneaking. Full Focus, an empty pouch, a full stack,
+or an unavailable patch never wastes a resource or turn. Salves remain separate and unchanged.
+
+This is supply gathering only, not gathering mastery or the crafting system below.
+
+### Longer-term materials
 
 Gathering provides progression outside compulsory combat:
 

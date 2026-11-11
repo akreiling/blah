@@ -98,19 +98,22 @@ An overall package version alone is not a sufficient compatibility contract.
 
 ## Implemented first slice
 
-action through the same transactional save path; a failed write rolls it back.
 `blah-core` exposes `Game::snapshot` and `Game::from_snapshot`. A `GameSnapshot` carries snapshot, terrain,
-and rules versions (snapshot 3, terrain and rules 1), the seed, turn, position, home, visited regions, log,
+and rules versions (snapshot 4, terrain and rules 1), the seed, turn, position, home, visited regions, log,
 the wanderer's Health, Focus, practice, permanent adaptations and burst-release history, nearby creature
 state, the prepared composition, owned and equipped weapon items, salves, and durable cache claims and guard
-state. Cache positions and rewards are regenerated from the seed and region; region lives, labels, clades,
+state, herb counts, draughts, and recent patch-pick turns. Herb sites, cache positions, and rewards are
+regenerated from the seed and region; region lives, labels, clades,
 and sprites are also regenerated. Loading checks versions and value ranges and rejects anything else.
 
-Version-1 and version-2 snapshots migrate to version 3. Migration preserves existing practice and
+Version-1 through version-3 snapshots migrate to version 4. Migration from v1/v2 preserves existing practice and
 commitments, grants the four-item starting kit and two salves, equips the plain item matching the prepared
 weapon family, and starts with no cache claims. Version 1 also receives the version-2 adaptation defaults.
-Version 3 validates capacity, slot order, exclusions, adaptation history, owned equipment, cache identity,
-and guard state. Commitment is a no-time action through the same transactional save path; a failed write
+Version 3 keeps its inventory, equipment, salves, claims, and guards. All older versions start with empty
+herb pouches and no draughts or picks. Version 4 validates capacity, slot order, exclusions, adaptation history,
+owned equipment, cache identity, guard state, supply caps, and unique recent picks at real herb sites.
+Only unregrown picks are authoritative; the visible herb-site cache can be evicted freely. Commitment is a
+no-time action through the same transactional save path; a failed write
 rolls it back.
 
 The app stores the snapshot as JSON in a single-row SQLite table (`PRAGMA user_version = 1`) and rewrites it

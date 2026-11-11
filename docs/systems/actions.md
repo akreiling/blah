@@ -98,7 +98,12 @@ Self-created, repeated training injuries do not create unlimited evidence.
 The CP5 first-journey implementation uses a deliberately small recovery loop:
 
 - `P` camps anywhere with no creature in view. It takes one exposed turn and restores 1 Health and 2 Focus;
-  it does not consume a camping supply.
+  it does not consume a camping supply. With two different herbs and room in the two-draught stack, it
+  also brews one Focus draught, even if Health and Focus are full.
+- `E` gathers one herb from the patch underfoot (three of each kind fit in the pouch). Patches regrow after
+  300 turns, not on reentry or reload. Gathering takes an exposed turn and breaks sneaking.
+- `T` drinks a carried draught for up to 8 Focus during an exposed turn, including combat, and breaks
+  sneaking. Drinking at full Focus or without a draught is refused without spending time or supplies.
 - `V` uses one of at most two salves for 10 Health during an exposed turn, including in combat. A fresh
   character starts with two; a cache adds one if there is room.
 - `R` rests at home for 2 Health and 3 Focus per turn. Home rest shelters the wanderer from attacks while
@@ -152,5 +157,6 @@ casting, toggling sneak, and moving are exposed, including at home. This gives l
 post-death recovery the same floor without granting a combat shield.
 
 Creatures survive death and fully recover; those within view of home are driven off.
-**Not yet:** carried gear stays with you, because there is no inventory.
+**Not yet:** dropped gear. Owned weapons and carried supplies currently stay with you; death does not refill
+supplies. Herb patches regrow during the elapsed 1,000 turns.
 See [measured retreat and recovery](retreat-recovery.md) for the cautious-policy comparison and limits.

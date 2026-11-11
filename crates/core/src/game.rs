@@ -31,10 +31,14 @@ use crate::world::{Tile, World};
 
 #[cfg(test)]
 mod commitment_tests;
+mod gathering;
 #[cfg(test)]
 mod journey_tests;
 mod learned;
 mod snapshot;
+
+use gathering::HerbPatch;
+pub use gathering::{DRAUGHT_CAPACITY, DRAUGHT_FOCUS, HERB_CAPACITY, HERB_REGROW_TURNS, Herb, HerbInfo};
 
 pub use snapshot::{GameSnapshot, RULES_VERSION, SNAPSHOT_VERSION, TERRAIN_VERSION};
 
@@ -403,6 +407,13 @@ pub struct Game {
     salves: u8,
     /// Caches revealed once and retained by region, including their named guards' living state.
     caches: BTreeMap<RegionId, CacheRecord>,
+    /// Gathered herbs by [`Herb`] order.
+    herbs: [u8; 3],
+    draughts: u8,
+    /// The turn each patch was last picked. Entries whose patch has regrown carry no meaning and are pruned.
+    picked: BTreeMap<(i64, i64), u64>,
+    /// The herb patches of regions in view, a function of the seed. Not part of the game's state.
+    herb_sites: BTreeMap<RegionId, Vec<HerbPatch>>,
     /// Developer trials exercise combat and composition without entering the first journey.
     journey: bool,
     sneaking: bool,
@@ -425,6 +436,8 @@ impl PartialEq for Game {
                 == (&other.maneuver, other.sneaking, other.last_attack, other.sneak_moves)
             && (&self.inventory, self.equipped, self.salves, &self.caches)
                 == (&other.inventory, other.equipped, other.salves, &other.caches)
+            && (self.herbs, self.draughts) == (other.herbs, other.draughts)
+            && self.active_picks().eq(other.active_picks())
             && self.journey == other.journey
     }
 }
@@ -464,6 +477,10 @@ impl Game {
             equipped: WeaponItem::Dagger,
             salves: SALVE_CAPACITY,
             caches: BTreeMap::new(),
+            herbs: [0; 3],
+            draughts: 0,
+            picked: BTreeMap::new(),
+            herb_sites: BTreeMap::new(),
             journey: true,
             sneaking: false,
             last_attack: None,
@@ -472,6 +489,7 @@ impl Game {
         };
         game.populate(&mut Rng::keyed(seed, b"populate", &[]));
         game.update_visible_caches();
+        game.update_visible_herbs();
         game
     }
 
@@ -494,6 +512,7 @@ impl Game {
         game.update_region(false);
         game.monsters.clear();
         game.caches.clear();
+        game.herb_sites.clear();
         game.journey = false;
         game.prepare(maneuver)?;
         let species = game.local_life().species[0].clone();
@@ -714,24 +733,29 @@ impl Game {
         self.monsters_in_view().next().is_none()
     }
 
-    /// Recover modestly at any empty visible site. Unlike home rest, this is not sheltered from attacks.
+    /// Recover modestly at any empty visible site, brewing a Focus draught if the pouch holds two different
+    /// herbs. Unlike home rest, this is not sheltered from attacks.
     pub fn camp(&mut self) -> Step {
         if self.monsters_in_view().next().is_some() {
             self.log.push(LogKind::Blocked, "Creatures in view prevent a safe camp.");
             return Step::Blocked;
         }
-        if self.wanderer.hp >= self.wanderer.max_hp() && self.wanderer.focus >= self.wanderer.max_focus() {
-            self.log.push(LogKind::Blocked, "You are already fully recovered.");
+        if self.wanderer.hp >= self.wanderer.max_hp()
+            && self.wanderer.focus >= self.wanderer.max_focus()
+            && self.brew_pair().is_none()
+        {
+            self.log.push(LogKind::Blocked, "You are already fully recovered and have nothing to brew.");
             return Step::Blocked;
         }
         self.turn += 1;
         self.sneaking = false;
         self.wanderer.hp = (self.wanderer.hp + CAMP_HEALTH).min(self.wanderer.max_hp());
         self.wanderer.focus = (self.wanderer.focus + CAMP_FOCUS).min(self.wanderer.max_focus());
+        let brewed = self.brew().unwrap_or_default();
         self.log.push(
             LogKind::Attack,
             format!(
-                "You make an exposed camp. Health {}/{}, Focus {}/{}.",
+                "You make an exposed camp. Health {}/{}, Focus {}/{}.{brewed}",
                 self.wanderer.hp,
                 self.wanderer.max_hp(),
                 self.wanderer.focus,
@@ -1241,6 +1265,7 @@ impl Game {
 
     fn finish_turn(&mut self, sheltered: bool) {
         self.update_visible_caches();
+        self.update_visible_herbs();
         let deaths = self.deaths;
         let crept = std::mem::take(&mut self.crept);
         self.monsters_act(crept, sheltered);
@@ -1257,21 +1282,26 @@ impl Game {
         }
     }
 
+    /// The land regions with at least one tile in view.
+    fn visible_land_regions(&mut self) -> BTreeSet<RegionId> {
+        let mut visible = BTreeSet::new();
+        for dy in -VIEW_RADIUS..=VIEW_RADIUS {
+            for dx in -VIEW_RADIUS..=VIEW_RADIUS {
+                let (x, y) = (self.position.0 + dx, self.position.1 + dy);
+                if is_land(self.world.tile(x, y).biome.biome()) {
+                    visible.insert(self.regions.region_at(x, y));
+                }
+            }
+        }
+        visible
+    }
+
     /// Reveal every land-region cache whose site has just entered the visible map.
     fn update_visible_caches(&mut self) {
         if !self.journey {
             return;
         }
-        let mut visible_regions = BTreeSet::new();
-        for dy in -VIEW_RADIUS..=VIEW_RADIUS {
-            for dx in -VIEW_RADIUS..=VIEW_RADIUS {
-                let (x, y) = (self.position.0 + dx, self.position.1 + dy);
-                if is_land(self.world.tile(x, y).biome.biome()) {
-                    visible_regions.insert(self.regions.region_at(x, y));
-                }
-            }
-        }
-        for id in visible_regions {
+        for id in self.visible_land_regions() {
             if self.caches.contains_key(&id) {
                 continue;
             }
@@ -1868,6 +1898,7 @@ impl Game {
         }
         self.update_region(false);
         self.update_visible_caches();
+        self.update_visible_herbs();
         self.sync_cache_guards();
         self.log.push(
             LogKind::Death,

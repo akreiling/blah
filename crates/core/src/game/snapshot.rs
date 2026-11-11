@@ -4,7 +4,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 /// Snapshot layout. Bump when serialized fields or their meaning change.
-pub const SNAPSHOT_VERSION: u32 = 3;
+pub const SNAPSHOT_VERSION: u32 = 4;
 /// Terrain, biome table, region, and naming compatibility. Bump for incompatible generation changes.
 pub const TERRAIN_VERSION: u32 = 1;
 /// Simulation, evolution, clade, and technique-catalog compatibility.
@@ -37,11 +37,25 @@ pub struct GameSnapshot {
     salves: u8,
     #[serde(default)]
     caches: Vec<CacheRecord>,
+    #[serde(default)]
+    herbs: [u8; 3],
+    #[serde(default)]
+    draughts: u8,
+    /// Patches picked recently enough that they have not regrown.
+    #[serde(default)]
+    picked: Vec<PickedPatch>,
     #[serde(default = "journey_enabled")]
     journey: bool,
     sneaking: bool,
     last_attack: Option<AttackResult>,
     sneak_moves: u32,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PickedPatch {
+    position: (i64, i64),
+    turn: u64,
 }
 
 fn starting_inventory() -> Vec<crate::WeaponItem> {
@@ -137,6 +151,9 @@ impl Game {
             equipped: self.equipped,
             salves: self.salves,
             caches: self.caches.values().cloned().collect(),
+            herbs: self.herbs,
+            draughts: self.draughts,
+            picked: self.active_picks().map(|(position, turn)| PickedPatch { position, turn }).collect(),
             journey: self.journey,
             sneaking: self.sneaking,
             last_attack: self.last_attack,
@@ -147,7 +164,13 @@ impl Game {
     /// Restore without taking an action or granting practice. Derived state is regenerated.
     /// Unsupported versions and invalid state are rejected, never repaired silently.
     pub fn from_snapshot(mut s: GameSnapshot) -> Result<Self, &'static str> {
-        // Version 1 predates commitments; version 2 also predates equipment, salves, and caches.
+        // Version 1 predates commitments; version 2 also predates equipment, salves, and caches; version 3
+        // predates herbs and draughts.
+        if (1..=3).contains(&s.snapshot_version) {
+            s.herbs = [0; 3];
+            s.draughts = 0;
+            s.picked.clear();
+        }
         match s.snapshot_version {
             1 => {
                 s.wanderer.adaptations = crate::Adaptations::default();
@@ -166,6 +189,7 @@ impl Game {
                 s.journey = true;
                 s.snapshot_version = SNAPSHOT_VERSION;
             }
+            3 => s.snapshot_version = SNAPSHOT_VERSION,
             _ => {}
         }
         if s.snapshot_version != SNAPSHOT_VERSION {
@@ -205,6 +229,14 @@ impl Game {
             || s.caches.len() > 65_536
             || s.caches.iter().map(|cache| cache.region).collect::<HashSet<_>>().len() != s.caches.len()
             || (!s.journey && !s.caches.is_empty())
+            || s.herbs.iter().any(|&count| count > crate::HERB_CAPACITY)
+            || s.draughts > crate::DRAUGHT_CAPACITY
+            || s.picked.len() > 4_096
+            || (!s.journey && !s.picked.is_empty())
+            || s.picked.iter().map(|pick| pick.position).collect::<HashSet<_>>().len() != s.picked.len()
+            || s.picked.iter().any(|pick| {
+                !coordinate(pick.position) || pick.turn > s.turn || s.turn - pick.turn >= crate::HERB_REGROW_TURNS
+            })
         {
             return Err("Invalid character or world state in save.");
         }
@@ -294,6 +326,16 @@ impl Game {
                 }
             }
         }
+        for pick in &s.picked {
+            let id = regions.region_at(pick.position.0, pick.position.1);
+            let region = regions.region(id).ok_or("Saved herb patch names an unknown region.")?;
+            if !Self::herb_patches(&world, &mut regions, &region, s.home)
+                .iter()
+                .any(|patch| patch.position == pick.position)
+            {
+                return Err("Saved herb patch is not a patch of this world.");
+            }
+        }
         let mut game = Game {
             world,
             regions,
@@ -314,6 +356,10 @@ impl Game {
             equipped: s.equipped,
             salves: s.salves,
             caches: s.caches.into_iter().map(|cache| (cache.region, cache)).collect(),
+            herbs: s.herbs,
+            draughts: s.draughts,
+            picked: s.picked.iter().map(|pick| (pick.position, pick.turn)).collect(),
+            herb_sites: BTreeMap::new(),
             journey: s.journey,
             sneaking: s.sneaking,
             last_attack: s.last_attack,
@@ -376,6 +422,7 @@ impl Game {
                 tracking: m.tracking,
             });
         }
+        game.update_visible_herbs();
         Ok(game)
     }
 }
@@ -420,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn migrates_serialized_v1_without_commitments_and_writes_v3() {
+    fn migrates_serialized_v1_without_commitments_and_writes_current_version() {
         let mut game = Game::new(42);
         game.wanderer.focus_skill.learn(4_000, Rank::Expert);
         let mut legacy = serde_json::to_value(game.snapshot()).unwrap();
@@ -443,7 +490,7 @@ mod tests {
         loaded.monsters.clear();
         loaded.commit_adaptation(crate::Adaptation::DeepReserves).unwrap();
         let saved = serde_json::to_value(loaded.snapshot()).unwrap();
-        assert_eq!(saved["snapshot_version"], 3);
+        assert_eq!(saved["snapshot_version"], SNAPSHOT_VERSION);
         assert_eq!(saved["wanderer"]["adaptations"]["taken"][0], "DeepReserves");
         let round_trip = Game::from_snapshot(serde_json::from_value(saved).unwrap()).unwrap();
         assert_eq!(round_trip, loaded);
@@ -465,7 +512,29 @@ mod tests {
         assert_eq!(loaded.salves, crate::SALVE_CAPACITY);
         assert!(loaded.caches.is_empty());
         assert!(loaded.journey);
-        assert_eq!(loaded.snapshot().snapshot_version, 3);
+        assert_eq!(loaded.snapshot().snapshot_version, SNAPSHOT_VERSION);
+    }
+
+    #[test]
+    fn migrates_serialized_v3_without_changing_existing_items_or_claims() {
+        let mut game = Game::new(42);
+        let region = game.region.clone();
+        let site = Game::cache_site(&game.world, &mut game.regions, &region, game.home).unwrap();
+        game.position = site;
+        game.update_region(false);
+        assert_eq!(game.claim_cache(), Step::Waited);
+        assert!(game.cache_at(site.0, site.1).unwrap().claimed);
+        let mut legacy = serde_json::to_value(game.snapshot()).unwrap();
+        legacy["snapshot_version"] = 3.into();
+        for field in ["herbs", "draughts", "picked"] {
+            legacy.as_object_mut().unwrap().remove(field);
+        }
+        let loaded = Game::from_snapshot(serde_json::from_value(legacy).unwrap()).unwrap();
+        assert_eq!(loaded, game);
+        assert_eq!(loaded.herbs, [0; 3]);
+        assert_eq!(loaded.draughts, 0);
+        assert!(loaded.picked.is_empty());
+        assert_eq!(loaded.snapshot().snapshot_version, SNAPSHOT_VERSION);
     }
 
     #[test]
