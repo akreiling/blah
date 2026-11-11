@@ -4,7 +4,7 @@
 //! The seed is a `u64` and defaults to [`DEFAULT_SEED`].
 //!
 //! A normal launch resumes the newest saved character and autosaves after every turn; `--new` starts
-//! another in its own file. The demos are never saved.
+//! another in its own file. `blah --list` prints the saved characters. The demos are never saved.
 //!
 //! `--steps N` is a development aid, in every build: it plays N turns by a fixed rule before the window
 //! opens (see [`autoplay`]), so a seed and a count always put the same scene on screen, monsters and a
@@ -27,7 +27,8 @@ use crate::view::GameView;
 /// The world a bare `blah` opens.
 const DEFAULT_SEED: u64 = 42;
 /// What to print when the command line can't be read.
-const USAGE: &str = "usage: blah [seed] [--new] [--save PATH] [--steps N] [--combat-demo | --inferno-demo]";
+const USAGE: &str =
+    "usage: blah [seed] [--new] [--save PATH] [--steps N] [--combat-demo | --inferno-demo]\n       blah --list";
 
 actions!(
     blah,
@@ -166,6 +167,8 @@ struct Args {
     seed_explicit: bool,
     fresh: bool,
     save_path: Option<std::path::PathBuf>,
+    /// Print the saved characters and exit.
+    list: bool,
     /// Turns to [`autoplay`] before the window opens, a development aid.
     steps: u32,
     demo: Demo,
@@ -179,9 +182,12 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut demo = Demo::None;
     let mut fresh = false;
     let mut save_path = None;
+    let mut list = false;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
-        if arg == "--new" {
+        if arg == "--list" {
+            list = true;
+        } else if arg == "--new" {
             fresh = true;
         } else if arg == "--save" {
             if save_path.is_some() {
@@ -206,10 +212,13 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             return Err("too many arguments".into());
         }
     }
+    if list && (seed.is_some() || steps > 0 || demo != Demo::None || fresh || save_path.is_some()) {
+        return Err("--list takes no other arguments".into());
+    }
     if demo != Demo::None && (fresh || save_path.is_some()) {
         return Err("Developer demos are unsaved; do not combine them with --new or --save.".into());
     }
-    Ok(Args { seed: seed.unwrap_or(DEFAULT_SEED), seed_explicit: seed.is_some(), steps, demo, fresh, save_path })
+    Ok(Args { seed: seed.unwrap_or(DEFAULT_SEED), seed_explicit: seed.is_some(), steps, demo, fresh, save_path, list })
 }
 
 /// Plays `turns` turns by a fixed rule, so a seed and a count always give the same scene: a development
@@ -278,7 +287,10 @@ fn start_game(args: &Args, directory: &std::path::Path) -> Result<(Game, Option<
         }
         (game, Some(save))
     };
-    let mark = autoplay_saved(&mut game, args.steps, &mut save)?;
+    // A resumed log is old news; only lines this launch adds show as new.
+    let resumed = save.as_ref().is_some_and(|s| !s.created);
+    let mark =
+        if args.steps == 0 && resumed { game.log().total() } else { autoplay_saved(&mut game, args.steps, &mut save)? };
     Ok((game, save, mark))
 }
 
@@ -298,6 +310,17 @@ fn main() {
             std::process::exit(2);
         })
     };
+    if args.list {
+        match save::list(&directory) {
+            Ok(lines) if lines.is_empty() => println!("No saved characters in {}.", directory.display()),
+            Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+            Err(error) => {
+                eprintln!("blah: {error}");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
     let (game, save, mark) = start_game(&args, &directory).unwrap_or_else(|error| {
         eprintln!("blah: {error}");
         std::process::exit(2);
@@ -371,6 +394,11 @@ mod tests {
         let (played, _, _) = start_game(&args(&["7", "--steps", "12"]).unwrap(), &dir).unwrap();
         let (resumed, _, _) = start_game(&args(&[]).unwrap(), &dir).unwrap();
         assert_eq!(resumed, played, "a bare launch resumes without replaying any turn");
+        let (_, _, mark) = start_game(&args(&[]).unwrap(), &dir).unwrap();
+        assert_eq!(mark, played.log().total(), "resumed lines are not shown as new");
+        let (stepped, _, mark) = start_game(&args(&["--steps", "1"]).unwrap(), &dir).unwrap();
+        assert_eq!(stepped.turn(), played.turn() + 1);
+        assert_eq!(mark, played.log().total(), "the launch turn's lines show as new, older ones don't");
         assert!(start_game(&args(&["9"]).unwrap(), &dir).is_err(), "a different seed never loads silently");
         let (fresh, save, _) = start_game(&args(&["9", "--new"]).unwrap(), &dir).unwrap();
         assert_eq!((fresh.world().seed(), fresh.turn()), (9, 0));
@@ -378,6 +406,14 @@ mod tests {
         let (demo, save, _) = start_game(&args(&["--combat-demo"]).unwrap(), &dir).unwrap();
         assert!(save.is_none() && demo.maneuver() == &Maneuver::backstab_burst());
         assert!(args(&["--combat-demo", "--new"]).is_err());
+        assert!(args(&["--list"]).unwrap().list);
+        assert!(args(&["--list", "--new"]).is_err());
+        let listed = save::list(&dir).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(
+            listed[0].starts_with("   1  seed 7  turn 13") && listed[1].starts_with("   2  seed 9  turn 0"),
+            "{listed:?}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

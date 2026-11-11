@@ -113,6 +113,11 @@ bar shows the error. A turn's snapshot is under 9 KB and the file stays near 20 
 or `~/.local/share/blah/saves` when that is unset, on every platform. `--new` creates the next numbered file and never
 replaces one; `--save PATH` names a file. An explicit seed that differs from the save's is an error.
 Developer demos are never saved. Missing, corrupt, and unsupported files are reported and left untouched.
+`blah --list` prints each character's number, seed, turn, deaths, and path, opening the files read-only.
+
+An action that leaves the snapshot byte-for-byte unchanged writes nothing. Refused actions still write,
+because their explanation is a log line and the log is saved. Rollback keeps the pre-action snapshot rather
+than cloning the whole game, and restores from it on the rare failed write.
 
 ## Atomicity and replay
 

@@ -72,6 +72,26 @@ impl From<&Monster> for CreatureSnapshot {
     }
 }
 
+impl GameSnapshot {
+    /// The world's seed.
+    #[must_use]
+    pub const fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    /// Turns passed.
+    #[must_use]
+    pub const fn turn(&self) -> u64 {
+        self.turn
+    }
+
+    /// Times the wanderer has died.
+    #[must_use]
+    pub const fn deaths(&self) -> u32 {
+        self.deaths
+    }
+}
+
 impl Game {
     /// Copy authoritative state at an action boundary. No caches or biome-table indices are saved.
     #[must_use]
