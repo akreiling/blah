@@ -103,7 +103,7 @@ The CP5 first-journey implementation uses a deliberately small recovery loop:
   character starts with two; a cache adds one if there is room.
 - `R` rests at home for 2 Health and 3 Focus per turn. Home rest shelters the wanderer from attacks while
   creatures still move and observe, and it refills salves.
-- Waiting without a camp or rest does not refill Focus indefinitely.
+- Waiting without a camp or rest restores neither Health nor Focus; passive regeneration is gone.
 
 The long-term design may add a camping supply. The current camp action instead has a clear safety rule that
 can be inspected in the visible neighborhood. The home recovery floor and basic actions remain available

@@ -60,6 +60,9 @@ The first-journey slice adds exposed `P` camping for 1 Health and 2 Focus when n
 the two-salve cap, and an accepted home rest refills them. Camping does not consume a supply. The home rest
 remains sheltered from attacks, unlike camping and salves.
 
+Passive Health regeneration is gone: Health returns only through home rest, camping, and salves. Death still
+wakes the wanderer at home with 1 Health, and sheltered home rest brings it back.
+
 ## Episode accounting
 
 The third CSV table reports each run's episode counts and upper-median action times:

@@ -298,8 +298,6 @@ pub const SPAWN_MIN: i64 = VIEW_RADIUS + 1;
 pub const SPAWN_MAX: i64 = VIEW_RADIUS + 3;
 /// Monsters farther than this are dropped.
 pub const DESPAWN_RADIUS: i64 = 2 * VIEW_RADIUS;
-/// The wanderer regains one hit point every this many turns.
-pub const REGEN_TURNS: u64 = 6;
 /// Turns lost to dying.
 pub const DEATH_TURNS: u64 = 1_000;
 /// Health one turn of rest at home restores.
@@ -1235,7 +1233,8 @@ impl Game {
         Step::Waited
     }
 
-    /// Everything after the wanderer's action: monsters act, the wanderer heals, monsters come and go.
+    /// Everything after the wanderer's action: monsters act and come and go. Health returns only through
+    /// home rest, camping, and salves.
     fn end_turn(&mut self) {
         self.finish_turn(false);
     }
@@ -1248,9 +1247,6 @@ impl Game {
         self.sync_cache_guards();
         if self.deaths != deaths {
             return;
-        }
-        if self.turn.is_multiple_of(REGEN_TURNS) && self.wanderer.hp < self.wanderer.max_hp() {
-            self.wanderer.hp += 1;
         }
         let here = self.position;
         self.monsters.retain(|m| chebyshev(m.position, here) <= DESPAWN_RADIUS);
@@ -2402,14 +2398,14 @@ mod tests {
     }
 
     #[test]
-    fn the_wanderer_heals_over_time() {
+    fn waiting_never_heals_the_wanderer() {
         let (mut game, _) = cleared(0);
         game.wanderer.hp = 10;
-        for _ in 0..REGEN_TURNS * 3 {
+        for _ in 0..30 {
             game.monsters.clear();
             game.wait();
         }
-        assert_eq!(game.wanderer().hp, 13);
+        assert_eq!(game.wanderer().hp, 10);
     }
 
     #[test]
@@ -3391,7 +3387,8 @@ mod tests {
     /// out differently on this platform or toolchain (see `evolution_is_pinned_to_exact_bits` in `life`, which
     /// narrows it down if it fails too). Find the cause; don't update the constant. Update it only when the
     /// game was changed on purpose, and say so in the commit.
-    /// CP5 cache sites and persistent guards intentionally change the scripted encounters.
+    /// CP5 cache sites and persistent guards, and the removal of passive Health regeneration, intentionally
+    /// change the scripted encounters.
     #[test]
     fn scripted_play_is_pinned_to_exact_bits() {
         use crate::hash::combine;
@@ -3411,7 +3408,7 @@ mod tests {
             }
         }
         assert_eq!(
-            h, 0xa107_df21_6dd1_97e8,
+            h, 0x7695_c9c5_18fe_86b7,
             "the sim's arithmetic changed; see this test's doc before touching the constant"
         );
     }

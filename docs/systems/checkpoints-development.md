@@ -72,8 +72,10 @@ biome-table indices remaining unchanged forever.
 
 **Implemented first-journey slice:** deterministic cache sites per land region, territorial guards whose
 state persists through despawn/death/save-load, one-time cache claims, four owned weapon variants with
-safe-point equipment, exposed camping, salves, and snapshot-v3 migration from v2. The slice has a fresh
-sneaking acceptance test. This does not complete every CP5 work item: gathering resources and the broader
+safe-point equipment, exposed camping, salves, and snapshot-v3 migration from v2. Passive Health
+regeneration has been removed now that those recovery paths exist. Acceptance tests cover a fresh sneaking
+route and a watchful policy (sneak only while watched, camp to refill Focus) that claims at least 70% of
+sampled starting caches unharmed with every guard alive. This does not complete every CP5 work item: gathering resources and the broader
 landmark/relic journey remain out of scope, and the CP5 checkboxes stay unchecked until the complete journey
 and GUI evidence are recorded.
 

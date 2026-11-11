@@ -444,3 +444,48 @@ fn weapon_items_require_ownership_and_a_safe_point_to_equip() {
     assert_eq!(game.prepare_with_item(changed, WeaponItem::QuietStaff), Err("Prepare away from nearby creatures."));
     assert_eq!((game.maneuver.clone(), game.equipped_item(), game.turn), before);
 }
+
+/// A fresh character who walks openly while nothing is in view, sneaks while something is, and camps to refill
+/// Focus when the view is clear. Returns `None` when the starting region has no cache.
+fn watchful_claim(seed: u64) -> Option<bool> {
+    let mut game = Game::new(seed);
+    let region = game.region.clone();
+    let site = Game::cache_site(&game.world, &mut game.regions, &region, game.home)?;
+    for _ in 0..200 {
+        if game.position == site {
+            break;
+        }
+        let watched = game.monsters_in_view().next().is_some();
+        if !watched && game.wanderer.focus < game.wanderer.max_focus() / 2 {
+            while game.monsters_in_view().next().is_none() && game.wanderer.focus < game.wanderer.max_focus() {
+                assert_eq!(game.camp(), Step::Waited);
+            }
+            continue;
+        }
+        if watched != game.sneaking() {
+            game.toggle_sneak();
+            continue;
+        }
+        let dir = next_step(&game, site)?;
+        if game.step(dir) != Step::Moved {
+            return Some(false);
+        }
+    }
+    let unharmed = !game.log.entries().any(|entry| entry.kind == LogKind::Hurt);
+    let info = game.cache_at(site.0, site.1)?;
+    Some(
+        game.position == site
+            && unharmed
+            && info.guards_alive == info.guards
+            && game.claim_cache() == Step::Waited
+            && game.inventory.contains(&Game::cache_reward(seed, region.id)),
+    )
+}
+
+#[test]
+fn a_watchful_sneaker_claims_most_starting_caches_without_a_fight() {
+    let results: Vec<_> = (0..48).filter_map(watchful_claim).collect();
+    let claimed = results.iter().filter(|&&ok| ok).count();
+    assert!(results.len() >= 44, "only {} of 48 seeds have a starting cache", results.len());
+    assert!(claimed * 10 >= results.len() * 7, "{claimed} of {} unharmed stealth claims", results.len());
+}

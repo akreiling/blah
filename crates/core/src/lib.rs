@@ -65,8 +65,8 @@ pub use combat::{
 };
 pub use game::{
     CAMP_FOCUS, CAMP_HEALTH, CacheInfo, Comparison, DEATH_TURNS, DESPAWN_RADIUS, Dir, Game, LAND_SEARCH_RADIUS,
-    LOG_LIMIT, Log, LogEntry, LogKind, REGEN_TURNS, REST_FOCUS, REST_HEALTH, SALVE_CAPACITY, SALVE_HEAL, SPAWN_MAX,
-    SPAWN_MIN, Step, TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity, find_land, individual, ring, spawn_chance,
+    LOG_LIMIT, Log, LogEntry, LogKind, REST_FOCUS, REST_HEALTH, SALVE_CAPACITY, SALVE_HEAL, SPAWN_MAX, SPAWN_MIN, Step,
+    TERRITORY, VIEW_RADIUS, WANDER_CHANCE, capacity, find_land, individual, ring, spawn_chance,
 };
 pub use game::{GameSnapshot, RULES_VERSION, SNAPSHOT_VERSION, TERRAIN_VERSION};
 pub use genome::{GENES, Gene, Genome, gene_delta};

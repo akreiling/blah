@@ -7,6 +7,12 @@ fn fresh_action_histories_earn_offers_but_never_commit_them_automatically() {
     let mut fighter = Game::new(42);
     let mut sheltered = fighter.clone();
     for _ in 0..1_200 {
+        sheltered.recover_focus();
+        // Health only returns through recovery actions, so the fighter heals at home before going back out.
+        if fighter.wanderer().hp < fighter.wanderer().max_hp() && fighter.can_rest() {
+            fighter.recover_focus();
+            continue;
+        }
         let (x, y) = fighter.position();
         let target = fighter
             .monsters_in_view()
@@ -29,7 +35,6 @@ fn fresh_action_histories_earn_offers_but_never_commit_them_automatically() {
             Some(dir) => _ = fighter.step(dir),
             None => _ = fighter.wait(),
         }
-        sheltered.recover_focus();
     }
     assert!(fighter.adaptation_offers().any(|a| a == Adaptation::Discipline(Weapon::Dagger)));
     assert_eq!(sheltered.adaptation_offers().count(), 0);
