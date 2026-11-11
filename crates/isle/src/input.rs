@@ -11,6 +11,7 @@ pub enum InputAction {
     Edit,
     Submit,
     Move(Dir),
+    Command(&'static str),
     Ignore,
 }
 
@@ -97,6 +98,17 @@ impl CommandLine {
                 _ => unreachable!(),
             }
         } else if !m.alt {
+            if playing && self.is_empty() {
+                let command = match stroke.key_char.as_deref().unwrap_or(key) {
+                    "<" => Some("up"),
+                    ">" => Some("down"),
+                    "," => Some("get all"),
+                    _ => None,
+                };
+                if let Some(command) = command {
+                    return InputAction::Command(command);
+                }
+            }
             match key {
                 "enter" => return InputAction::Submit,
                 "up" | "down" | "left" | "right" if playing && !m.shift => {
@@ -233,6 +245,43 @@ mod tests {
 
     fn type_text(line: &mut CommandLine, text: &str) {
         line.key(&Keystroke { key_char: Some(text.into()), ..Default::default() }, true);
+    }
+
+    #[test]
+    fn punctuation_shortcuts_act_immediately_only_on_an_empty_play_line() {
+        for (physical, typed, command) in [("shift-,", "<", "up"), ("shift-.", ">", "down"), (",", ",", "get all")] {
+            let mut stroke = Keystroke::parse(physical).unwrap();
+            stroke.key_char = Some(typed.into());
+            let mut line = CommandLine::default();
+            type_text(&mut line, "look");
+            line.submit();
+            assert_eq!(line.key(&stroke, true), InputAction::Command(command));
+            assert!(line.is_empty());
+            assert_eq!(line.submit().as_deref(), Some("look"), "shortcuts leave typed history alone");
+
+            type_text(&mut line, "cast ");
+            assert_eq!(line.key(&stroke, true), InputAction::Edit);
+            assert_eq!(line.halves(), (format!("cast {typed}").as_str(), ""));
+            key(&mut line, "ctrl-a");
+            assert_eq!(line.key(&stroke, true), InputAction::Edit, "a cursor at zero is not an empty line");
+            assert_eq!(line.halves(), (typed, format!("cast {typed}").as_str()));
+
+            let mut creating = CommandLine::default();
+            assert_eq!(creating.key(&stroke, false), InputAction::Edit);
+            assert_eq!(creating.halves(), (typed, ""));
+
+            let mut modified = CommandLine::default();
+            stroke.modifiers.control = true;
+            assert_eq!(modified.key(&stroke, true), InputAction::Ignore);
+            assert!(modified.is_empty());
+            stroke.modifiers.control = false;
+            stroke.modifiers.platform = true;
+            assert_eq!(modified.key(&stroke, true), InputAction::Ignore);
+            stroke.modifiers.platform = false;
+            stroke.modifiers.alt = true;
+            assert_eq!(modified.key(&stroke, true), InputAction::Edit);
+            assert_eq!(modified.halves(), (typed, ""), "Option text is not a game shortcut");
+        }
     }
 
     #[test]

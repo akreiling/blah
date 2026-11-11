@@ -305,7 +305,7 @@ pub const HELP: [&str; 10] = [
     "Thieves: hide, then strike or shoot from hiding for extra damage.",
     "Things: get <item>|all, drop, wield, wear, quaff, inventory, look.",
     "Town: buy <item>, sell <item>, list (in the shop); heal (in the temple).",
-    "Stairs: down, up. Rest to recover; wait (wa) stands ready and strikes back.",
+    "Empty-line keys: < upstairs, > downstairs, comma gets all. Rest recovers; wait (wa) stands ready.",
     "Chain rounds with ;  (nock; shoot a). A chain stops if you are hurt or something new appears.",
     "Arrows move, keeping typed text. Ctrl-P/N recalls commands. Enter on an empty line repeats; quit leaves.",
     "Commands abbreviate: a, sh, no, ch, ca, g, l, i, q, r, d, u.",

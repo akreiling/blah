@@ -14,6 +14,9 @@ while you *stand ready*, striking back at anything hunting you from the next cel
 
 - Movement: arrow keys take one step without clearing the command line or moving its cursor.
   Typed directions `n s e w ne nw se sw` still work, up to three steps a round (`n n e`).
+- With an empty command line, `<` goes upstairs, `>` downstairs, and `,` picks up everything at your
+  feet (subject to sack space). These act without Enter and take one round, just like `up`, `down`,
+  and `get all`. While editing a command or creating a character, they insert punctuation instead.
 - Fighting: `attack <who>`, `nock` then `shoot <who>`. A target is the letter the IN SIGHT list shows
   (`shoot a`), a name (`shoot orc`), or an ordinal and name (`sh 2 gob`).
 - Magic: `chant <spell>` one round, `cast [who]` the next.
@@ -67,3 +70,49 @@ rats, goblins, goblin archers, orcs, skeletons (arrows do half), and the pit tro
 Saves live in the platform data directory (`isle/save.json`) and are rewritten after every round. `--new`
 starts another character and keeps the old save beside it; `--save PATH` and `--seed N` pick the file and
 the island's dice.
+
+## Agent control and inspection
+
+Launch with `just isle --control /absolute/private-directory/isle.sock` to enable a local Unix debug
+socket. Without `--control` there is no listener. The socket is owner-only (mode `0600`), existing paths
+are never replaced, and quitting removes it. A controlled window opens without taking keyboard focus, so
+typing elsewhere does not leak into the game.
+
+Open a connection, send one JSON object followed by a newline, read one JSON line back, then close.
+Requests are limited to 64 KiB and handled one at a time.
+
+```json
+{"op":"state"}
+{"op":"text","text":"Wren\nfighter\n"}
+{"op":"key","key":"ctrl-a"}
+{"op":"batch","steps":[{"text":"s s s\n"},{"key":"right"},{"text":">"}]}
+```
+
+`text` delivers each printable character through the keyboard handler; a newline means Enter. `key` takes
+GPUI key notation (`right`, `alt-left`, `ctrl-y`). A `batch` runs its steps in order as one request; it
+does not bypass character creation, editing, punctuation shortcuts, or round rules. Like a `;` chain, a
+batch stops after any keystroke that hurts you, kills you, or brings a new creature into sight; send
+`"interrupt": false` to run every step regardless.
+
+Every reply says what the request did: `steps` (keystrokes delivered), `interrupted`, `round`, and `news`
+(log lines it produced). Anything more is opt-in:
+
+- `"state": true` (the default for `op: state`) adds `screen`: what the window shows. That is the 13×13
+  `view` as two-character cells, the `panel` lines, the last ten `log` lines, and the `prompt` text and
+  cursor. About 1 KB.
+- `"map": "rows"` adds the current level's `terrain` (one character per cell, as in `map.rs`) and `view`
+  (whole level as drawn, blank where unseen), with size and stair positions. `"map": "cells"` gives every
+  cell's tile, zone, walkability, visibility, and memory instead (~150 KB).
+- `"game": true` adds the whole serializable game, as saved.
+
+The map and game options are **omniscient**: they reveal what the character has not discovered. Errors
+return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect state before repeating.
+
+`crates/isle/scripts/isle.py` wraps this in Python: `Isle(seed=7)` launches a private window and save,
+`batch(...)`, `screen()`, `quit()`, and panel parsers `hp` and `sighted`. Run these after
+`cargo build -p isle`:
+
+- `python3 crates/isle/scripts/smoke.py` checks the protocol against a real window in both pacing modes.
+- `python3 crates/isle/scripts/seed7.py` plays seed 7 from what the window shows. It walks to the stairs,
+  fights from them, and retreats to the temple to heal. Games are deterministic per seed and input, so its
+  output repeats exactly.

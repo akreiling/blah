@@ -1,11 +1,12 @@
 //! Isle: a solo island adventure in the manner of *Island of Kesmai*, in one window.
 //!
-//! Usage: `isle [--new] [--save PATH] [--round SECONDS] [--seed N]`.
+//! Usage: `isle [--new] [--save PATH] [--round SECONDS] [--seed N] [--control PATH]`.
 //!
 //! A bare launch resumes the saved character, or starts a new one. `--new` starts over and keeps the old
 //! save beside the new one. Play is turn-based: each command is a round. `--round` puts rounds on a clock
 //! instead, the way the original ticked every ten seconds.
 
+mod control;
 mod input;
 mod save;
 mod view;
@@ -22,7 +23,7 @@ use isle_core::Game;
 
 use crate::view::IsleView;
 
-const USAGE: &str = "usage: isle [--new] [--save PATH] [--round SECONDS] [--seed N]";
+const USAGE: &str = "usage: isle [--new] [--save PATH] [--round SECONDS] [--seed N] [--control PATH]";
 
 actions!(
     isle,
@@ -39,15 +40,17 @@ struct Args {
     /// Seconds per round, if rounds run on a clock.
     round: Option<f32>,
     seed: Option<u64>,
+    control: Option<PathBuf>,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
-    let mut parsed = Args { fresh: false, save: None, round: None, seed: None };
+    let mut parsed = Args { fresh: false, save: None, round: None, seed: None, control: None };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--new" => parsed.fresh = true,
             "--save" => parsed.save = Some(PathBuf::from(args.next().ok_or("--save needs a path")?)),
+            "--control" => parsed.control = Some(PathBuf::from(args.next().ok_or("--control needs a path")?)),
             "--round" => {
                 let n = args.next().ok_or("--round needs a number of seconds")?;
                 let seconds: f32 = n.parse().map_err(|_| format!("--round takes seconds, not {n:?}"))?;
@@ -86,12 +89,25 @@ fn main() {
         eprintln!("isle: {e}\n{USAGE}");
         std::process::exit(2);
     });
-    let (game, path) = start(&args).unwrap_or_else(|e| {
-        eprintln!("isle: {e}");
+    let control = args.control.clone().map(control::Server::bind).transpose().unwrap_or_else(|e| {
+        eprintln!("isle: control socket: {e}");
         std::process::exit(2);
     });
+    let (game, path) = match start(&args) {
+        Ok(started) => started,
+        Err(e) => {
+            drop(control);
+            eprintln!("isle: {e}");
+            std::process::exit(2);
+        }
+    };
     eprintln!("Save: {}", path.display());
+    if let Some(path) = &args.control {
+        eprintln!("Control: {}", path.display());
+    }
     let round = args.round.map(Duration::from_secs_f32);
+    // A controlled window must not take the keyboard from whoever launched it.
+    let foreground = control.is_none();
 
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
@@ -112,11 +128,22 @@ fn main() {
                 ..Default::default()
             }),
             is_resizable: false,
+            focus: foreground,
             ..Default::default()
         };
-        cx.open_window(options, |window, cx| cx.new(|cx| IsleView::new(game, path, round, window, cx)))
-            .expect("failed to open the Isle window");
-        cx.activate(true);
+        cx.open_window(options, |window, cx| {
+            cx.new(|cx| {
+                let mut view = IsleView::new(game, path, round, window, cx);
+                if let Some(server) = control {
+                    view.control(server, cx);
+                }
+                view
+            })
+        })
+        .expect("failed to open the Isle window");
+        if foreground {
+            cx.activate(true);
+        }
     });
 }
 
@@ -140,6 +167,9 @@ mod tests {
             assert!(args(&["--round", invalid]).is_err());
         }
         assert!(args(&["--seed"]).is_err());
+        assert!(a.control.is_none());
+        assert_eq!(args(&["--control", "/tmp/isle.sock"]).unwrap().control, Some("/tmp/isle.sock".into()));
+        assert!(args(&["--control"]).is_err());
         assert!(args(&["7"]).is_err());
     }
 

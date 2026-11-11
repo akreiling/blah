@@ -6,11 +6,11 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant as Clock};
 
 use gpui::{
-    App, Context, Div, FocusHandle, Focusable, FontWeight, KeyDownEvent, Pixels, SharedString, Task, Window, div,
-    prelude::*, px, rgb,
+    App, Context, Div, FocusHandle, Focusable, FontWeight, KeyDownEvent, Keystroke, Pixels, SharedString, Subscription,
+    Task, Window, div, prelude::*, px, rgb,
 };
 
-use isle_core::{Command, Game, Item, Kind, Parsed, Phase, Pos, SIGHT, Tile, Tone, Zone, distance};
+use isle_core::{Command, Creature, Game, Item, Kind, Parsed, Phase, Player, Pos, SIGHT, Tile, Tone, Zone, distance};
 
 use crate::input::{CommandLine, InputAction};
 
@@ -69,6 +69,8 @@ pub struct IsleView {
     /// Log total before the latest round: lines past it are news.
     mark: u64,
     _ticker: Option<Task<()>>,
+    control: Option<crate::control::Server>,
+    _control: Option<(Task<()>, Subscription)>,
 }
 
 impl IsleView {
@@ -105,6 +107,8 @@ impl IsleView {
             paused: false,
             mark,
             _ticker: ticker,
+            control: None,
+            _control: None,
         }
     }
 
@@ -128,16 +132,121 @@ impl IsleView {
         cx.notify();
     }
 
-    fn key(&mut self, event: &KeyDownEvent, cx: &mut Context<IsleView>) {
-        match self.input.key(&event.keystroke, self.game.phase() == &Phase::Play) {
+    fn key(&mut self, stroke: &Keystroke, cx: &mut Context<IsleView>) {
+        match self.input.key(stroke, self.game.phase() == &Phase::Play) {
             InputAction::Submit => self.submit(cx),
             InputAction::Move(dir) => self.play_line(dir.short(), cx),
+            InputAction::Command(command) => self.play_line(command, cx),
             InputAction::Edit => {}
             InputAction::Ignore => return,
         }
         cx.notify();
     }
 
+    /// Process debug input on the UI thread, through exactly the same handler as the keyboard.
+    pub fn control(&mut self, server: crate::control::Server, cx: &mut Context<Self>) {
+        self.control = Some(server);
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(crate::control::POLL).await;
+                loop {
+                    let handled = this.update(cx, |view, cx| {
+                        let Some(request) = view.control.as_ref().and_then(|s| s.requests.try_recv().ok()) else {
+                            return false;
+                        };
+                        view.serve(request, cx);
+                        true
+                    });
+                    match handled {
+                        Ok(true) => {}
+                        Ok(false) => break,
+                        Err(_) => return,
+                    }
+                }
+            }
+        });
+        // Quitting does not drop the view, so close the socket here.
+        let quit = cx.on_app_quit(|view, _| {
+            view.control = None;
+            async {}
+        });
+        self._control = Some((task, quit));
+    }
+
+    fn serve(&mut self, request: crate::control::Request, cx: &mut Context<Self>) {
+        let plan = &request.plan;
+        let mark = self.game.log_total();
+        let mut steps = 0;
+        let mut interrupted = false;
+        for key in &plan.keys {
+            let (step_mark, before) = (self.game.log_total(), sighted_ids(&self.game));
+            self.key(key, cx);
+            steps += 1;
+            if plan.interrupt && steps < plan.keys.len() && setback(&self.game, step_mark, &before) {
+                interrupted = true;
+                break;
+            }
+        }
+        let _ = request.reply.send(self.report(&plan.view, mark, steps, interrupted));
+    }
+    /// What a control request did, and whatever else it asked to see.
+    fn report(&self, view: &crate::control::View, mark: u64, steps: usize, interrupted: bool) -> serde_json::Value {
+        use crate::control::Map;
+        let game = &self.game;
+        let news = ((game.log_total() - mark) as usize).min(game.log().len());
+        let mut report = serde_json::json!({
+            "steps": steps,
+            "interrupted": interrupted,
+            "round": game.round_number(),
+            "news": &game.log()[game.log().len() - news..],
+        });
+        if view.state {
+            report["screen"] = self.screen();
+        }
+        let level = game.level();
+        let labels: Vec<(Pos, char)> = game.sighted().iter().map(|s| (s.creature.pos, s.label)).collect();
+        let rows = |f: &dyn Fn(Pos) -> String| -> Vec<String> {
+            (0..level.height).map(|y| (0..level.width).map(|x| f((x, y))).collect()).collect()
+        };
+        let mut map = serde_json::json!({
+            "level": level.id, "name": level.name, "width": level.width, "height": level.height,
+            "stairs_up": level.stairs_up, "stairs_down": level.stairs_down,
+        });
+        match view.map {
+            Map::Off => {}
+            Map::Rows => {
+                map["terrain"] = rows(&|pos| terrain(level.tile(pos), level.zone(pos)).to_string()).into();
+                map["view"] = rows(&|pos| cell(game, pos, &labels).0).into();
+            }
+            Map::Cells => {
+                let cells: Vec<Vec<serde_json::Value>> = (0..level.height)
+                    .map(|y| {
+                        (0..level.width)
+                            .map(|x| {
+                                let pos = (x, y);
+                                serde_json::json!({
+                                    "tile": format!("{:?}", level.tile(pos)),
+                                    "zone": format!("{:?}", level.zone(pos)),
+                                    "walkable": level.tile(pos).walkable(),
+                                    "visible": game.sees(pos),
+                                    "remembered": game.remembers(pos),
+                                    "glyph": cell(game, pos, &labels).0,
+                                })
+                            })
+                            .collect()
+                    })
+                    .collect();
+                map["cells"] = cells.into();
+            }
+        }
+        if !matches!(view.map, Map::Off) {
+            report["map"] = map;
+        }
+        if view.game {
+            report["game"] = serde_json::json!(game);
+        }
+        report
+    }
     fn submit(&mut self, cx: &mut Context<IsleView>) {
         let Some(line) = self.input.submit() else { return };
         if self.game.phase() != &Phase::Play {
@@ -218,15 +327,39 @@ fn submit_commands(
 /// Plays one round of a chain. False if it went badly enough that the rest of the plan should wait: you
 /// were hurt or fell, or something new came into sight.
 fn play_round(game: &mut Game, command: Command) -> bool {
-    let mark = game.log_total();
-    let before: Vec<u32> = game.sighted().iter().map(|s| s.creature.id).collect();
+    let (mark, before) = (game.log_total(), sighted_ids(game));
     game.round(Some(command));
-    let news = (game.log_total() - mark) as usize;
-    let hurt = game.log().iter().rev().take(news).any(|line| matches!(line.tone, Tone::Hurt | Tone::Death));
-    let newcomer = game.sighted().iter().any(|s| !before.contains(&s.creature.id));
-    !hurt && !newcomer
+    !setback(game, mark, &before)
 }
 
+fn sighted_ids(game: &Game) -> Vec<u32> {
+    game.sighted().iter().map(|s| s.creature.id).collect()
+}
+
+/// Whether, since the log stood at `mark`, you were hurt or fell, or something not in `before` came into sight.
+fn setback(game: &Game, mark: u64, before: &[u32]) -> bool {
+    let news = (game.log_total() - mark) as usize;
+    let hurt = game.log().iter().rev().take(news).any(|line| matches!(line.tone, Tone::Hurt | Tone::Death));
+    hurt || game.sighted().iter().any(|s| !before.contains(&s.creature.id))
+}
+
+/// One character per cell of raw terrain, as the map source draws it.
+const fn terrain(tile: Tile, zone: Zone) -> char {
+    match (tile, zone) {
+        (Tile::Floor, Zone::Shop) => 'S',
+        (Tile::Floor, Zone::Temple) => 'H',
+        (Tile::Wall, _) => '#',
+        (Tile::Floor, _) => '.',
+        (Tile::Grass, _) => ',',
+        (Tile::Tree, _) => 'T',
+        (Tile::Water, _) => '~',
+        (Tile::Door, _) => '+',
+        (Tile::StairsDown, _) => '>',
+        (Tile::StairsUp, _) => '<',
+        (Tile::Counter, _) => '=',
+        (Tile::Altar, _) => '_',
+    }
+}
 impl Focusable for IsleView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus.clone()
@@ -241,7 +374,7 @@ impl Render for IsleView {
         });
         div()
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| this.key(event, cx)))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| this.key(&event.keystroke, cx)))
             .size_full()
             .bg(rgb(SCREEN))
             .font_family(FONT)
@@ -287,60 +420,26 @@ impl IsleView {
         }
         panel = panel
             .child(heading_owned(format!("{} the {}", p.name, p.class.name())))
-            .child(pair(
-                "Level",
-                match p.next_level() {
-                    Some(next) => format!("{} · {}/{next} xp", p.level, p.xp),
-                    None => format!("{} · {} xp", p.level, p.xp),
-                },
-            ))
+            .child(pair("Level", level_text(p)))
             .child(bar("HP", p.hp, p.max_hp, HP));
         if p.class.casts() {
             panel = panel.child(bar("MP", p.mp, p.max_mp, MP));
         }
-        let bow = match p.bow {
-            Some(bow) => format!("{} · {} arrows{}", bow.name(), p.arrows, if p.nocked { " · NOCKED" } else { "" }),
-            None => "none".into(),
-        };
         panel = panel
             .child(pair("Armor class", format!("{}", p.ac())))
             .child(pair("Gold", format!("{}", p.gold)))
             .child(rule())
             .child(pair("Hand", p.weapon.name().into()))
-            .child(pair("Bow", bow))
-            .child(pair(
-                "Worn",
-                match (p.armor, p.ring) {
-                    (Some(a), true) => format!("{} · ring", a.name()),
-                    (Some(a), false) => a.name().into(),
-                    (None, true) => "ring of warding".into(),
-                    (None, false) => "nothing".into(),
-                },
-            ));
-        let mut states = Vec::new();
-        if let Some(spell) = p.chanted {
-            states.push(format!("chanted {}", spell.name()));
+            .child(pair("Bow", bow_text(p)))
+            .child(pair("Worn", worn_text(p)));
+        if let Some(states) = states_text(p) {
+            panel = panel.child(div().h(px(LINE)).text_color(rgb(HEADING)).child(states));
         }
-        if p.shield > 0 {
-            states.push(format!("shield {}", p.shield));
-        }
-        if p.hidden {
-            states.push("hidden".into());
-        }
-        if !states.is_empty() {
-            panel = panel.child(div().h(px(LINE)).text_color(rgb(HEADING)).child(states.join(" · ")));
-        }
-        let place = match game.zone() {
-            Zone::Shop => format!("{} · shop", game.level().name),
-            Zone::Temple => format!("{} · temple", game.level().name),
-            Zone::Open => game.level().name.to_owned(),
-        };
-        panel = panel.child(rule()).child(pair("Place", place));
+        panel = panel.child(rule()).child(pair("Place", place_text(game)));
         let Some(round) = self.round else {
             return self.sighted(panel.child(pair("Round", format!("{}", game.round_number() + 1))));
         };
-        let left = round.as_secs_f32() * (1.0 - self.clock());
-        let clock = if self.paused { "PAUSED".to_owned() } else { format!("{left:.0}s") };
+        let clock = self.clock_text(round);
         panel = panel.child(gauge(&format!("Round {}", game.round_number() + 1), self.clock(), CLOCK, &clock));
         let mut planned = self.queue.iter().map(|(text, _)| text.clone());
         panel = panel.child(pair("Next", planned.next().unwrap_or_else(|| "stand ready".into())));
@@ -363,18 +462,6 @@ impl IsleView {
         for s in sighted.iter().take(6) {
             let c = s.creature;
             let stats = c.kind.stats();
-            let (dx, dy) = (c.pos.0 - p.pos.0, c.pos.1 - p.pos.1);
-            let way = isle_core::Dir::from_delta(dx, dy).map_or("", isle_core::Dir::short);
-            let mut notes = vec![format!("{} {way}", distance(p.pos, c.pos))];
-            if c.hp < stats.hp {
-                notes.push(if c.hp * 3 <= stats.hp { "badly hurt".into() } else { "hurt".into() });
-            }
-            if c.stunned > 0 {
-                notes.push("stunned".into());
-            }
-            if c.hunting {
-                notes.push("hunting".into());
-            }
             panel = panel.child(
                 div()
                     .h(px(LINE))
@@ -386,10 +473,72 @@ impl IsleView {
                         div().w(px(14.0)).text_color(rgb(creature_color(c.kind, c.hunting))).child(s.label.to_string()),
                     )
                     .child(div().text_color(rgb(TEXT)).child(stats.name))
-                    .child(div().text_color(rgb(DIM)).child(notes.join(" · "))),
+                    .child(div().text_color(rgb(DIM)).child(sight_notes(p, c))),
             );
         }
         panel
+    }
+
+    /// The window's contents as text: the map, the panel, the log, and the prompt.
+    fn screen(&self) -> serde_json::Value {
+        let game = &self.game;
+        let p = game.player();
+        let me = p.pos;
+        let labels: Vec<(Pos, char)> = game.sighted().iter().map(|s| (s.creature.pos, s.label)).collect();
+        let view: Vec<String> = (-SIGHT..=SIGHT)
+            .map(|dy| (-SIGHT..=SIGHT).map(|dx| cell(game, (me.0 + dx, me.1 + dy), &labels).0).collect())
+            .collect();
+        let mut panel = Vec::new();
+        if game.phase() == &Phase::Play {
+            panel.push(format!("{} the {}", p.name, p.class.name()));
+            panel.push(format!("Level {}", level_text(p)));
+            panel.push(format!("HP {}/{}", p.hp, p.max_hp));
+            if p.class.casts() {
+                panel.push(format!("MP {}/{}", p.mp, p.max_mp));
+            }
+            panel.push(format!("Armor class {}", p.ac()));
+            panel.push(format!("Gold {}", p.gold));
+            panel.push(format!("Hand {}", p.weapon.name()));
+            panel.push(format!("Bow {}", bow_text(p)));
+            panel.push(format!("Worn {}", worn_text(p)));
+            panel.extend(states_text(p));
+            panel.push(format!("Place {}", place_text(game)));
+            let number = game.round_number() + 1;
+            match self.round {
+                None => panel.push(format!("Round {number}")),
+                Some(round) => {
+                    panel.push(format!("Round {number} · {}", self.clock_text(round)));
+                    let planned: Vec<&str> = self.queue.iter().map(|(text, _)| text.as_str()).collect();
+                    panel.push(format!("Next {}", planned.first().copied().unwrap_or("stand ready")));
+                    if planned.len() > 1 {
+                        panel.push(format!("Then {}", planned[1..].join("; ")));
+                    }
+                }
+            }
+            panel.push("IN SIGHT".into());
+            let sighted = game.sighted();
+            if sighted.is_empty() {
+                panel.push("Nothing stirs.".into());
+            }
+            for s in sighted.iter().take(6) {
+                panel.push(format!("{} {} {}", s.label, s.creature.kind.stats().name, sight_notes(p, s.creature)));
+            }
+        } else {
+            panel.push("A NEW ARRIVAL".into());
+        }
+        let log = game.log();
+        let (before, after) = self.input.halves();
+        serde_json::json!({
+            "view": view,
+            "panel": panel,
+            "log": log[log.len().saturating_sub(LOG_LINES)..].iter().map(|l| &l.text).collect::<Vec<_>>(),
+            "prompt": {"text": format!("{before}{after}"), "cursor": before.len()},
+            "save_error": self.save_error,
+        })
+    }
+
+    fn clock_text(&self, round: Duration) -> String {
+        if self.paused { "PAUSED".to_owned() } else { format!("{:.0}s", round.as_secs_f32() * (1.0 - self.clock())) }
     }
 
     fn prompt(&self) -> Div {
@@ -464,6 +613,67 @@ fn cell(game: &Game, pos: Pos, labels: &[(Pos, char)]) -> (String, u32, Option<u
         Tile::Altar => ("**", 0xf0_d0_80),
     };
     (glyph.into(), if visible { color } else { dimmed(color) }, back)
+}
+
+fn level_text(p: &Player) -> String {
+    match p.next_level() {
+        Some(next) => format!("{} · {}/{next} xp", p.level, p.xp),
+        None => format!("{} · {} xp", p.level, p.xp),
+    }
+}
+
+fn bow_text(p: &Player) -> String {
+    match p.bow {
+        Some(bow) => format!("{} · {} arrows{}", bow.name(), p.arrows, if p.nocked { " · NOCKED" } else { "" }),
+        None => "none".into(),
+    }
+}
+
+fn worn_text(p: &Player) -> String {
+    match (p.armor, p.ring) {
+        (Some(a), true) => format!("{} · ring", a.name()),
+        (Some(a), false) => a.name().into(),
+        (None, true) => "ring of warding".into(),
+        (None, false) => "nothing".into(),
+    }
+}
+
+fn states_text(p: &Player) -> Option<String> {
+    let mut states = Vec::new();
+    if let Some(spell) = p.chanted {
+        states.push(format!("chanted {}", spell.name()));
+    }
+    if p.shield > 0 {
+        states.push(format!("shield {}", p.shield));
+    }
+    if p.hidden {
+        states.push("hidden".into());
+    }
+    (!states.is_empty()).then(|| states.join(" · "))
+}
+
+fn place_text(game: &Game) -> String {
+    match game.zone() {
+        Zone::Shop => format!("{} · shop", game.level().name),
+        Zone::Temple => format!("{} · temple", game.level().name),
+        Zone::Open => game.level().name.to_owned(),
+    }
+}
+
+fn sight_notes(p: &Player, c: &Creature) -> String {
+    let stats = c.kind.stats();
+    let way = isle_core::Dir::from_delta(c.pos.0 - p.pos.0, c.pos.1 - p.pos.1).map_or("", isle_core::Dir::short);
+    let mut notes = vec![format!("{} {way}", distance(p.pos, c.pos))];
+    if c.hp < stats.hp {
+        notes.push(if c.hp * 3 <= stats.hp { "badly hurt".into() } else { "hurt".into() });
+    }
+    if c.stunned > 0 {
+        notes.push("stunned".into());
+    }
+    if c.hunting {
+        notes.push("hunting".into());
+    }
+    notes.join(" · ")
 }
 
 fn initial(kind: Kind) -> char {
@@ -734,6 +944,57 @@ mod tests {
         assert_eq!(game.round_number(), 2);
         assert_eq!(input.submit().as_deref(), Some("look"));
         assert_eq!(input.submit().as_deref(), Some("look"));
+    }
+
+    #[test]
+    fn punctuation_shortcuts_use_stair_and_pickup_rules_in_both_modes() {
+        for clocked in [false, true] {
+            let mut save = serde_json::to_value(made(7)).unwrap();
+            let stairs = isle_core::Level::get(isle_core::LevelId::Surface).stairs_down.unwrap();
+            save["player"]["pos"] = serde_json::json!(stairs);
+            save["creatures"] = serde_json::json!([]);
+            save["spawns"] = serde_json::json!([]);
+            save["piles"] = serde_json::to_value([isle_core::Pile {
+                at: isle_core::LevelId::Surface,
+                pos: stairs,
+                items: vec![Item::Gold(9), Item::Arrows(3), Item::Potion],
+            }])
+            .unwrap();
+            let mut game: Game = serde_json::from_value(save).unwrap();
+            let (gold, arrows, sack) = (game.player().gold, game.player().arrows, game.player().sack.len());
+            let mut input = CommandLine::default();
+            for (i, (punctuation, level)) in [
+                (">", isle_core::LevelId::Undercroft),
+                ("<", isle_core::LevelId::Surface),
+                (",", isle_core::LevelId::Surface),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let stroke = gpui::Keystroke { key_char: Some(punctuation.into()), ..Default::default() };
+                let InputAction::Command(command) = input.key(&stroke, true) else {
+                    panic!("punctuation is a game shortcut on an empty line");
+                };
+                let mut queue = VecDeque::new();
+                submit_commands(&mut game, &mut queue, &mut false, !clocked, command);
+                if clocked {
+                    assert_eq!(game.round_number(), i as u64, "clocked shortcuts queue rather than acting early");
+                    assert_eq!(queue.len(), 1);
+                    game.round(Some(queue.pop_front().unwrap().1));
+                } else {
+                    assert!(queue.is_empty());
+                }
+                assert_eq!(game.player().at, level);
+                assert_eq!(game.round_number(), i as u64 + 1);
+                assert!(input.is_empty());
+            }
+            assert_eq!(
+                (game.player().gold, game.player().arrows, game.player().sack.len()),
+                (gold + 9, arrows + 3, sack + 1)
+            );
+            assert!(game.pile_at(stairs).is_none());
+            assert_eq!(input.submit(), None, "shortcuts do not become the repeated typed command");
+        }
     }
 
     #[test]
