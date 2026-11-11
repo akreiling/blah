@@ -2,7 +2,7 @@
 
 Isle is a solo island adventure in the manner of *Island of Kesmai* (Kesmai, 1985), being merged with
 blah one system at a time. Its wilderness now uses blah's seeded procedural terrain and evolved regional
-life; its town, dungeon, and callings are still Isle's original systems.
+life. Towns are generated on dry ground; the dungeon and callings are still Isle's original systems.
 
 - `crates/isle-core`: the rules. Pure and deterministic; the whole `Game` serializes, dice included.
 - `crates/isle`: the GPUI window. Run it with `just isle`.
@@ -63,13 +63,18 @@ Kesmai's martial artist and knight are not in yet.
 
 ## The island
 
-Beyond Harrowmere's edges, the surface continues into blah's seeded biomes, with trees that hide what
+Beyond towns, the surface continues into blah's seeded biomes, with trees that hide what
 lies beyond and rocks that block movement and sight. Deep water and snow peaks are impassable; shallow
 water can be waded. Explored wilderness stays remembered across saves, including west and north of town.
-Harrowmere remains stamped at the starting point while procedural towns are being integrated.
+Every town guarantees an outfitter (`buy`, `sell`, `list`), a temple (`heal` for five gold a level),
+a revival spot, dungeon stairs, and a safe central arrival square. Paths connect all services and the
+town's edges. Names, building sizes, service placement, and layout orientation vary with the seed.
+The entire town footprint sits on passable dry land; ocean sectors need not contain a town.
+The starting town is found near the world's origin, and more towns appear as you explore.
+`look` gives distances and directions to the current town's services.
 
-Harrowmere holds the outfitter (`buy`, `sell`, `list`) and the temple (`heal` for five gold a level;
-the fallen wake here, leaving their gold where they fell). Evolved wildlife lives outside the town stamp
+Entering a temple makes it your revival point, even if you do not need healing. The fallen wake at the
+last temple visited, leaving their gold where they fell. Evolved wildlife lives outside town footprints
 and cannot attack into it. As you explore, individuals arrive beyond sight from their own region's species
 pools, with productivity limiting the population to 2–12. Distant wildlife is forgotten; regional life
 regenerates exactly from the seed.
@@ -80,8 +85,9 @@ ones hunt. They stay within seven cells of home. Faster creatures bank speed bet
 up to two actions per round. The IN SIGHT panel shows their regional names and temperaments; target those
 names or the usual letters. Wildlife drops small amounts of gold, not manufactured gear.
 
-South of town the old watchtower's stairs lead to the Undercroft:
-rats, goblins, goblin archers, orcs, skeletons (arrows do half), and the pit troll in its lair.
+Town stairs currently share the authored Undercroft: rats, goblins, goblin archers, orcs, skeletons (arrows
+do half), and the pit troll. Upstairs returns to the exact town entrance used, including after a reload.
+Separate generated dungeons are the next integration step.
 
 Saves live in the platform data directory (`isle/save.json`) and are rewritten after every round. `--new`
 starts another character and keeps the old save beside it; `--save PATH` and `--seed N` pick the file and
@@ -120,7 +126,9 @@ Every reply says what the request did: `steps` (keystrokes delivered), `interrup
   cursor. About 1 KB.
 - `"map": "rows"` adds the current level's `terrain` (one character per cell, as in `map.rs`) and `view`
   (blank where unseen), with size, `origin: [x, y]`, and stair positions. In town and underground this is
-  the authored map at origin `[0, 0]`; outside town it is a 50×28 window centered on the character.
+  a 50×28 window starting at that town's northwest corner, or the dungeon at origin `[0, 0]`.
+  Outside town it is a 50×28 window centered on the character. `towns` lists nearby generated settlements
+  and the starting town, with their names, footprints, arrival points, shops, temples, and stairs.
   Row/column indices are relative to `origin`, while stair positions remain level coordinates.
   `"map": "cells"` gives every
   cell's tile, zone, walkability, visibility, and memory instead (~150 KB).
@@ -138,6 +146,8 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
   wilderness memory, and save/reload.
 - `python3 crates/isle/scripts/wildlife.py` checks evolved population, reload, the IN SIGHT panel,
   and shooting an actual spawned individual by its regional name.
-- `python3 crates/isle/scripts/seed7.py` plays seed 7 from what the window shows. It walks to the stairs,
+- `python3 crates/isle/scripts/towns.py` visits two generated towns, exercises their services, and checks
+  stair returns and revival after reload.
+- `python3 crates/isle/scripts/seed7.py` plans town routes from the map and fights from the window's panel. It walks to the stairs,
   fights from them, and retreats to the temple to heal. Games are deterministic per seed and input, so its
   output repeats exactly.

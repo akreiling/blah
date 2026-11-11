@@ -206,7 +206,9 @@ impl IsleView {
         let level = game.level();
         let labels: Vec<(Pos, char)> = game.sighted().iter().map(|s| (s.creature.pos, s.label)).collect();
         // Keep authored map coordinates stable; in the wilderness return a bounded local window.
-        let (ox, oy) = if level.authored(game.player().pos) {
+        let (ox, oy) = if let Some(town) = level.town_at(game.player().pos) {
+            town.origin
+        } else if level.id == isle_core::LevelId::Undercroft {
             (0, 0)
         } else {
             (game.player().pos.0 - level.width / 2, game.player().pos.1 - level.height / 2)
@@ -218,6 +220,11 @@ impl IsleView {
             "level": level.id, "name": level.name_at(game.player().pos),
             "origin": [ox, oy], "width": level.width, "height": level.height,
             "stairs_up": level.stairs_up, "stairs_down": level.stairs_down,
+            "towns": level.towns().map(|town| serde_json::json!({
+                "name": town.name(), "origin": town.origin,
+                "width": isle_core::Town::WIDTH, "height": isle_core::Town::HEIGHT,
+                "start": town.start(), "shop": town.shop(), "temple": town.respawn(), "stairs_down": town.stairs(),
+            })).collect::<Vec<_>>(),
         });
         match view.map {
             Map::Off => {}
@@ -686,8 +693,8 @@ fn states_text(p: &Player) -> Option<String> {
 
 fn place_text(game: &Game) -> String {
     match game.zone() {
-        Zone::Shop => format!("{} · shop", game.level().name),
-        Zone::Temple => format!("{} · temple", game.level().name),
+        Zone::Shop => format!("{} · shop", game.level().name_at(game.player().pos)),
+        Zone::Temple => format!("{} · temple", game.level().name_at(game.player().pos)),
         Zone::Open => game.level().name_at(game.player().pos).to_owned(),
     }
 }
@@ -987,7 +994,7 @@ mod tests {
     fn punctuation_shortcuts_use_stair_and_pickup_rules_in_both_modes() {
         for clocked in [false, true] {
             let mut save = serde_json::to_value(made(7)).unwrap();
-            let stairs = isle_core::Level::get(isle_core::LevelId::Surface).stairs_down.unwrap();
+            let stairs = made(7).level().stairs_down.unwrap();
             save["player"]["pos"] = serde_json::json!(stairs);
             save["creatures"] = serde_json::json!([]);
             save["spawns"] = serde_json::json!([]);

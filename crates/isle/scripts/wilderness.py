@@ -27,7 +27,7 @@ def wilderness():
             level = isle.request("state", map="cells")["map"]
             assert level["origin"] == [-26, -5]
             y = next(y for y in range(1, 22) if at(level, (-1, y))["walkable"])
-            # Enter town, follow its tree border, then step onto a known walkable wild cell.
+            # Enter town, follow its edge, then step onto a known walkable wild cell.
             isle.batch("right", *[("down" if y > 9 else "up")] * abs(y - 9), interrupt=False)
             reply = isle.batch("left", state=True, game=True, map="cells")
             assert reply["game"]["player"]["pos"] == [-1, y]
@@ -35,7 +35,7 @@ def wilderness():
             level = reply["map"]
             wild = at(level, (-1, y))
             assert wild["walkable"] and wild["visible"] and wild["remembered"]
-            assert level["name"] != "Harrowmere"
+            assert level["name"] != next(t["name"] for t in level["towns"] if t["origin"] == [0, 0])
             rows = isle.request("state", map="rows")["map"]
             assert rows["origin"] == level["origin"]
             assert len(rows["terrain"]) == 28 and all(len(row) == 50 for row in rows["terrain"])

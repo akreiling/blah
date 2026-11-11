@@ -9,6 +9,7 @@ use crate::command::{self, Command, Dir, Instant, Parsed, Target};
 use crate::data::{Armor, Bow, Class, Item, Kind, LEVELS, SHOP, Spell, Stats, Weapon, sale_price};
 use crate::map::{Level, LevelId, Place, Pos, SpawnKind, Terrain, Tile, Zone, distance};
 use crate::rng::Rng;
+use crate::town::{Town, Towns};
 use crate::wildlife::{LifeCache, Wildlife};
 
 /// Cells a character or creature sees.
@@ -166,7 +167,6 @@ impl Player {
             Class::Wizard => (Weapon::Staff, None, 0, None, 40),
             Class::Thaumaturge => (Weapon::Mace, None, 0, Some(Armor::Leather), 30),
         };
-        let surface = Level::get(LevelId::Surface);
         Player {
             name,
             class,
@@ -181,7 +181,7 @@ impl Player {
             mp: max_mp,
             max_mp,
             at: LevelId::Surface,
-            pos: surface.start.expect("the surface has a start"),
+            pos: Town::START,
             weapon,
             bow,
             arrows,
@@ -292,6 +292,9 @@ pub struct Sighted<'a> {
 pub struct Game {
     seed: u64,
     terrain: Terrain,
+    towns: Towns,
+    revival: Pos,
+    entrance: Pos,
     rng: Rng,
     round: u64,
     phase: Phase,
@@ -325,10 +328,16 @@ impl Game {
                 spawns.push(SpawnState { at: id, index, occupant: None, ready: 0 });
             }
         }
-        let seen = LevelId::ALL.iter().map(|&id| vec![false; Level::get(id).cells()]).collect();
+        let terrain = Terrain::new(seed);
+        let mut towns = Towns::new(seed, terrain);
+        towns.ensure(seed, terrain, Town::START);
+        let seen = vec![Vec::new(), vec![false; Level::get(LevelId::Undercroft).cells()]];
         let mut game = Game {
             seed,
-            terrain: Terrain::new(seed),
+            terrain,
+            revival: towns.home.respawn(),
+            entrance: towns.home.stairs(),
+            towns,
             rng,
             round: 0,
             phase: Phase::Name,
@@ -372,8 +381,7 @@ impl Game {
 
     /// The map the character is on.
     pub fn level(&self) -> Place {
-        let terrain = (self.player.at == LevelId::Surface).then_some(self.terrain);
-        Place::new(Level::get(self.player.at), terrain)
+        Place::new(self.player.at, self.terrain, self.towns.nearby(self.terrain, self.player.pos), self.player.pos)
     }
 
     /// Every creature alive.
@@ -491,8 +499,8 @@ impl Game {
                     p.max_hp
                 );
                 self.say(Tone::Gain, line);
-                self.say(Tone::Info, "You stand in Harrowmere. The outfitter is northwest and the temple northeast.");
-                self.say(Tone::Info, "South, past the woods, the old watchtower's stairs lead down.");
+                self.say(Tone::Info, format!("You stand in {}.", self.towns.home.name()));
+                self.town_directions();
                 self.say(Tone::System, "Type help for the commands. Each command you enter takes one round.");
                 self.spawn_all();
                 self.update_seen();
@@ -559,6 +567,7 @@ impl Game {
                     _ => "",
                 };
                 self.say(Tone::Info, format!("You are in {place}.{underfoot}"));
+                self.town_directions();
                 if let Some(pile) = self.pile_at(self.player.pos) {
                     let items: Vec<String> = pile.items.iter().map(|i| i.name()).collect();
                     self.say(Tone::Info, format!("On the ground: {}.", items.join(", ")));
@@ -591,6 +600,10 @@ impl Game {
             Some(command) => self.perform(command),
             None => self.stand_ready(),
         }
+        if self.player.at == LevelId::Surface {
+            self.towns.ensure(self.seed, self.terrain, self.player.pos);
+        }
+        self.bind_temple();
         self.populate_surface();
         self.creatures_act();
         if self.player.hp <= 0 {
@@ -656,6 +669,7 @@ impl Game {
                 return;
             }
             self.player.pos = next;
+            self.bind_temple();
             if self.player.hidden && !self.rng.chance(70 + modifier(self.player.dex) * 5) {
                 self.player.hidden = false;
                 self.say(Tone::Info, "You step out of the shadows.");
@@ -671,6 +685,29 @@ impl Game {
                 self.say(Tone::Info, format!("You stop: a {name} is beside you."));
                 return;
             }
+        }
+    }
+
+    fn town_directions(&mut self) {
+        if let Some(town) = self.level().town_at(self.player.pos) {
+            for (service, at) in
+                [("Outfitter", town.shop()), ("Temple", town.respawn()), ("Dungeon stairs", town.stairs())]
+            {
+                let me = self.player.pos;
+                let way = Dir::from_delta(at.0 - me.0, at.1 - me.1).map_or("here", Dir::short);
+                self.say(Tone::Info, format!("{service}: {} {way}.", distance(me, at)));
+            }
+        }
+    }
+
+    fn bind_temple(&mut self) {
+        if self.player.at == LevelId::Surface
+            && self.zone() == Zone::Temple
+            && let Some(town) = self.level().town_at(self.player.pos)
+            && self.revival != town.respawn()
+        {
+            self.revival = town.respawn();
+            self.say(Tone::System, format!("If you fall, you will wake in {}'s temple.", town.name()));
         }
     }
 
@@ -1142,15 +1179,19 @@ impl Game {
                 return;
             }
         };
-        let level = Level::get(destination);
-        let arrive = if down { level.stairs_up } else { level.stairs_down };
+        let arrive = if down {
+            self.entrance = self.player.pos;
+            Level::get(LevelId::Undercroft).stairs_up.expect("the dungeon has an exit")
+        } else {
+            self.entrance
+        };
         self.player.at = destination;
-        self.player.pos = arrive.expect("both ends of the stairs exist");
+        self.player.pos = arrive;
         self.player.hidden = false;
         let text = if down {
-            "You descend into the Undercroft. The air is cold and smells of old stone."
+            "You descend into the Undercroft. The air is cold and smells of old stone.".to_owned()
         } else {
-            "You climb back into the daylight of Harrowmere."
+            format!("You climb back into the daylight of {}.", self.level().name_at(arrive))
         };
         self.say(Tone::Info, text);
     }
@@ -1461,7 +1502,7 @@ impl Game {
         p.chanted = None;
         p.hidden = false;
         p.at = LevelId::Surface;
-        p.pos = Level::get(LevelId::Surface).respawn.expect("the temple has a resting place");
+        p.pos = self.revival;
         if gold > 0 {
             self.drop_at(at, pos, Item::Gold(gold));
         }

@@ -12,6 +12,7 @@ from isle import Isle, hp, sighted
 def route(level, start, goal):
     """Cardinal arrow keys from start to goal over walkable terrain."""
     walkable = set(".,T+<>SH")
+    ox, oy = level.get("origin", [0, 0])
     todo, previous = collections.deque([start]), {start: None}
     while todo:
         pos = todo.popleft()
@@ -19,7 +20,8 @@ def route(level, start, goal):
             break
         for dx, dy, key in [(0, 1, "down"), (1, 0, "right"), (-1, 0, "left"), (0, -1, "up")]:
             nxt = (pos[0] + dx, pos[1] + dy)
-            if nxt not in previous and level["terrain"][nxt[1]][nxt[0]] in walkable:
+            x, y = nxt[0] - ox, nxt[1] - oy
+            if 0 <= x < level["width"] and 0 <= y < level["height"] and nxt not in previous and level["terrain"][y][x] in walkable:
                 previous[nxt] = (pos, key)
                 todo.append(nxt)
     keys, pos = [], goal
@@ -43,10 +45,13 @@ def turn_based():
         assert set(reply) == {"steps", "interrupted", "round", "news"}, "input replies carry no state unless asked"
 
         level = isle.request("state", state=False, map="rows")["map"]
-        assert (level["width"], level["height"], level["stairs_down"]) == (50, 28, [24, 24])
-        assert level["terrain"][24][24] == ">" and level["view"][24][48:50] == "  ", "terrain is omniscient, view is not"
+        town = next(t for t in level["towns"] if t["name"] == level["name"])
+        stairs = town["stairs_down"]
+        sx, sy = stairs[0] - level["origin"][0], stairs[1] - level["origin"][1]
+        assert (level["width"], level["height"], level["stairs_down"]) == (50, 28, stairs)
+        assert level["terrain"][sy][sx] == ">" and level["view"][sy][2*sx:2*sx+2] == "  ", "terrain is omniscient, view is not"
         cells = isle.request("state", state=False, map="cells")["map"]["cells"]
-        assert cells[24][24]["tile"] == "StairsDown" and not cells[24][24]["remembered"]
+        assert cells[sy][sx]["tile"] == "StairsDown" and not cells[sy][sx]["remembered"]
 
         isle.batch("look", "ctrl-a")
         reply = isle.batch("right", ">,<", state=True)
@@ -58,25 +63,26 @@ def turn_based():
         assert reply["round"] == before + 1 and reply["game"]["player"]["sack"] == ["Potion"]
 
         start = tuple(reply["game"]["player"]["pos"])
-        keys = route(level, start, (24, 24))
+        keys = route(level, start, tuple(stairs))
         began = time.perf_counter()
         reply = isle.batch(*keys, ">", "<", game=True, interrupt=False)
         elapsed = time.perf_counter() - began
         assert not reply["interrupted"] and reply["steps"] == len(keys) + 2
-        assert reply["game"]["player"]["at"] == "Surface" and reply["game"]["player"]["pos"] == [24, 24]
+        assert reply["game"]["player"]["at"] == "Surface" and reply["game"]["player"]["pos"] == stairs
         assert any("descend into the Undercroft" in line["text"] for line in reply["news"])
         assert json.loads(isle.save.read_text()) == reply["game"]
         print(f"PASS turn-based: {len(keys) + 2} keystrokes, {len(keys) + 2} rounds in one batch, {elapsed * 1000:.1f} ms")
         save = json.loads(isle.save.read_text())
         assert isle.quit() == 0 and not isle.socket.exists()
-    return save
+    return save, town
 
 
-def interruption(save):
+def interruption(save, town):
     """A rat placed just out of sight interrupts a batch of moves toward it."""
     rat = dict(save["creatures"][0], kind="Rat", at="Surface", hp=5, hunting=False, spawn=None)
-    save["player"]["pos"] = [22, 9]
-    rat["pos"] = rat["home"] = [29, 9]
+    save["player"]["pos"] = town["start"]
+    x, y = town["start"]
+    rat["pos"] = rat["home"] = [x+7, y]
     save["creatures"], save["spawns"] = [rat], []
     with tempfile.TemporaryDirectory(prefix="isle-save-", dir="/tmp") as directory:
         path = pathlib.Path(directory) / "save.json"
@@ -110,5 +116,5 @@ def clocked():
 
 
 if __name__ == "__main__":
-    interruption(turn_based())
+    interruption(*turn_based())
     clocked()

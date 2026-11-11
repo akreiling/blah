@@ -119,7 +119,7 @@ fn surface_life_does_not_spawn_inside_town() {
 fn shopping_buys_a_bow_and_arrows_and_sells_back() {
     let mut game = made("fighter");
     game.clear_creatures();
-    game.player_mut().pos = (6, 5);
+    game.player_mut().pos = game.level().town_at(game.player().pos).unwrap().shop();
     assert_eq!(game.zone(), Zone::Shop);
     round(&mut game, "buy shortbow");
     round(&mut game, "buy arrows");
@@ -135,7 +135,7 @@ fn shopping_buys_a_bow_and_arrows_and_sells_back() {
 fn stairs_lead_down_and_back_up() {
     let mut game = made("fighter");
     game.clear_creatures();
-    game.player_mut().pos = crate::Level::get(LevelId::Surface).stairs_down.unwrap();
+    game.player_mut().pos = game.level().stairs_down.unwrap();
     round(&mut game, "d");
     assert_eq!(game.player().at, LevelId::Undercroft);
     round(&mut game, "u");
@@ -295,7 +295,7 @@ fn you_can_walk_from_the_town_square_into_the_wilderness_and_back() {
     assert_eq!(game.player().pos, exit);
     assert!(game.remembers(exit));
     round(&mut game, "look");
-    assert!(said(&game, game.level().name_at(exit)));
+    assert!(said(&game, &game.level().name_at(exit)));
     for dir in path.into_iter().rev() {
         let (dx, dy) = dir.delta();
         let reverse = Dir::from_delta(-dx, -dy).unwrap();
@@ -333,4 +333,77 @@ fn wilderness_memory_spans_signed_chunks_and_survives_saving_and_level_changes()
     loaded.round(Some(Command::Wait));
     game.round(Some(Command::Wait));
     assert_eq!(loaded, game);
+}
+
+fn another_town(game: &mut Game) -> crate::Town {
+    for y in [-384, 0, 384] {
+        for x in [-384, 0, 384] {
+            game.player_mut().pos = (x, y);
+            game.round(Some(Command::Rest));
+            if let Some(town) = game.level().towns().find(|town| town.origin != (0, 0)) {
+                return town;
+            }
+        }
+    }
+    panic!("seed 7 has other settlements");
+}
+
+#[test]
+fn other_towns_trade_heal_and_return_you_to_the_correct_stairs_after_reload() {
+    let mut game = made("fighter");
+    game.clear_creatures();
+    let first = game.level().town_at(game.player().pos).unwrap();
+    let second = another_town(&mut game);
+    for town in [first, second, first] {
+        game.player_mut().pos = town.start();
+        game.round(Some(Command::Rest));
+        game.player_mut().pos = town.shop();
+        let gold = game.player().gold;
+        round(&mut game, "sell potion");
+        if game.player().sack.contains(&Item::Potion) {
+            panic!("the outfitter buys the potion");
+        }
+        if gold == 50 {
+            assert_eq!(game.player().gold, 62);
+        }
+        round(&mut game, "buy potion");
+        assert!(game.player().sack.contains(&Item::Potion));
+        game.player_mut().pos = town.respawn();
+        game.player_mut().hp = 1;
+        round(&mut game, "heal");
+        assert_eq!(game.player().hp, game.player().max_hp);
+        game.player_mut().pos = town.stairs();
+        round(&mut game, "down");
+        assert_eq!(game.player().at, LevelId::Undercroft);
+        game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        round(&mut game, "up");
+        assert_eq!(game.player().pos, town.stairs());
+        assert_eq!(game.level().town_at(game.player().pos), Some(town));
+    }
+}
+
+#[test]
+fn visiting_another_temple_changes_revival_and_death_keeps_the_new_town() {
+    let mut game = made("wizard");
+    game.clear_creatures();
+    let town = another_town(&mut game);
+    let temple = town.respawn();
+    // Enter the temple through normal movement, including an intermediate step in a multi-step command.
+    game.player_mut().pos = (temple.0, temple.1 + 1);
+    game.round(Some(Command::Move(vec![crate::Dir::N, crate::Dir::S])));
+    game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+    game.player_mut().pos = town.start();
+    game.player_mut().hp = 1;
+    let me = game.player().pos;
+    game.place(Kind::Troll, (me.0 + 1, me.1));
+    for _ in 0..20 {
+        game.round(Some(Command::Rest));
+        if game.player().deaths > 0 {
+            break;
+        }
+    }
+    assert_eq!(game.player().deaths, 1);
+    assert_eq!(game.player().pos, temple);
+    assert_eq!(game.zone(), Zone::Temple);
+    assert_eq!(game.level().town_at(temple), Some(town));
 }

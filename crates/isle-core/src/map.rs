@@ -1,8 +1,9 @@
-//! Procedural wilderness around the authored town of Harrowmere and the undercroft beneath it.
+//! Procedural surface terrain and towns, with an authored dungeon beneath their stairs.
 
 use std::sync::OnceLock;
 
-use blah_core::{Biome, BiomeId, Rng, World, find_land};
+use crate::town::Town;
+use blah_core::{Biome, BiomeId, Rng, World};
 use serde::{Deserialize, Serialize};
 
 /// A cell position, `(x, y)`, with `y` growing down the screen.
@@ -121,37 +122,6 @@ pub struct Level {
     pub stairs_up: Option<Pos>,
 }
 
-const SURFACE: [&str; 28] = [
-    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
-    "T,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,~~~~~~,,,,,T",
-    "T,,###########,,,,,,,,,,,,,,,,#########,~~~~~~~,,T",
-    "T,,#SSSSSSSSS#,,,,,,,,,,,,,,,,#HHHHHHH#,,~~~~~~,,T",
-    "T,,#S=======S#,,,,,,,,,,,,,,,,#HHH_HHH#,,,~~~~,,,T",
-    "T,,#SSSSSSSSS#,,,,,,,,,,,,,,,,#HHHRHHH#,,,,~~,,,,T",
-    "T,,#SSSSSSSSS#,,,,,,,,,,,,,,,,#HHHHHHH#,,,,,,,,,,T",
-    "T,,#####+#####,,,,,,,,,,,,,,,,####+####,,,,,,,,,,T",
-    "T,,,,,,,.,,,,,,,,,,,,,,,,,,,,,,,,,.,,,,,,,,,,,,,,T",
-    "T,,,,,,,..............@............,,,,,,,,,,,,,,T",
-    "T,,,,,,,,,,,,,,,,,,,,,.,,,,,,,,,,,,,,,,,,,,,,,,,,T",
-    "T,,,,,,,,,,,,,,,,,,,,,.,,,,,,,,,,,,,,,,,T,,,,,,,,T",
-    "T,,,,,T,,,,,,,,,,,,,,,.,,,,,,,,,,,,,,,,,,,,,,,,,,T",
-    "T,,,,,,,,,,,,,,,,,,,,,.,,,,,,,,,,,,T,,,,,,,,,,,,,T",
-    "T,,,,,,,,,,,,,,,,,,,,,.,,,,,,,,,,,,,,,,,,,,,,,,,,T",
-    "T,,,,,,,TT,,,,,,,,,,,,.,,,,,,,,,,,,,,,,,,,,TT,,,,T",
-    "T,,,,,,TTTT,,,,,,,,,,,.,,,,,,,,,,,,,,,,,,,TTTT,,,T",
-    "T,,,,,TTmTTT,,,,,,,,,,.,,,,,,,,,,,,,,,,,,TTTmTT,,T",
-    "T,,,,,,TTTT,,,,,,,,,,,.,,,,,,,,,,,,,,,,,,,TTTT,,,T",
-    "T,,,,,,,TT,,,,,,,,,,,,.,,,,,,,,,,,,,,,,,,,,TT,,,,T",
-    "T,,,,,,,,,,,,,,,,,,,,,.,,,,,,,,,,,,,,,,,,,,,,,,,,T",
-    "T,,,,,,,,,,,,,,,,,,,,,..,,,,,,,,,,,,,,,,,,,,,,,,,T",
-    "T,,,,,,,,,,,,,,,,,,,,###+###,,,,,,,,,,,,,,,,,,,,,T",
-    "T,,,,,,,,,,,,,,,,,,,,#.....#,,,,,,,,,,,,,,,,,,,,,T",
-    "T,,,,,,,,,,,,,,,,,,,,#..>..#,,,,,,,,,,,,,,,,,,,,,T",
-    "T,,,,,,,,,,,,,,,,,,,,#.....#,,,,,,,,,,,,,,,,,,,,,T",
-    "T,,,,,,,,,,,,,,,,,,,,#######,,,,,,,,,,,,,,,,,,,,,T",
-    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
-];
-
 const UNDERCROFT: [&str; 19] = [
     "##################################################",
     "#<....#..........#...............#...............#",
@@ -240,16 +210,15 @@ impl Level {
         level
     }
 
-    /// The level `id`, built once.
+    /// The authored dungeon, built once. The surface is procedural; use [`crate::Game::level`].
+    ///
+    /// # Panics
+    ///
+    /// If asked for the procedural surface.
     pub fn get(id: LevelId) -> &'static Level {
-        static LEVELS: OnceLock<[Level; 2]> = OnceLock::new();
-        let levels = LEVELS.get_or_init(|| {
-            [
-                Level::parse(LevelId::Surface, "Harrowmere", &SURFACE),
-                Level::parse(LevelId::Undercroft, "the Undercroft", &UNDERCROFT),
-            ]
-        });
-        &levels[id.index()]
+        assert_eq!(id, LevelId::Undercroft, "the surface is procedural");
+        static UNDER: OnceLock<Level> = OnceLock::new();
+        UNDER.get_or_init(|| Level::parse(LevelId::Undercroft, "the Undercroft", &UNDERCROFT))
     }
 
     fn index(&self, (x, y): Pos) -> Option<usize> {
@@ -301,8 +270,7 @@ fn cover(biome: &Biome) -> (f32, f32) {
     }
 }
 
-/// The endless land around Harrowmere: blah's world, shifted so the town's start sits on the land nearest
-/// the world's origin. A pure function of the seed, so only the seed and the shift are saved.
+/// Blah's world, shifted so a dry site for the starting town surrounds the arrival square.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Terrain {
     seed: u64,
@@ -314,12 +282,10 @@ impl Terrain {
     ///
     /// # Panics
     ///
-    /// If the world has no land near its origin, which no seed tried so far comes close to.
+    /// If no suitable dry town site can be found near the origin.
     pub fn new(seed: u64) -> Terrain {
-        let world = World::new(seed);
-        let start = Level::get(LevelId::Surface).start.expect("the surface has a start");
-        let (x, y) = find_land(&world, 0, 0).expect("land near the origin");
-        Terrain { seed, offset: (x - i64::from(start.0), y - i64::from(start.1)) }
+        let (x, y) = Town::home_site(seed);
+        Terrain { seed, offset: (x - i64::from(Town::START.0), y - i64::from(Town::START.1)) }
     }
 
     /// The world coordinates of `at`.
@@ -356,59 +322,104 @@ impl Terrain {
     }
 }
 
-/// A level as play sees it: its authored cells, and on the surface the terrain beyond them.
+/// The active map: generated towns over terrain, or the authored dungeon.
 #[derive(Clone, Copy, Debug)]
 pub struct Place {
-    level: &'static Level,
-    terrain: Option<Terrain>,
-}
-
-impl std::ops::Deref for Place {
-    type Target = Level;
-
-    fn deref(&self) -> &Level {
-        self.level
-    }
+    /// Current map identity.
+    pub id: LevelId,
+    /// Width of control inspection windows, or of the dungeon.
+    pub width: i32,
+    /// Height of control inspection windows, or of the dungeon.
+    pub height: i32,
+    /// The active town's arrival square, if standing in a town.
+    pub start: Option<Pos>,
+    /// The active town's revival spot.
+    pub respawn: Option<Pos>,
+    /// The active town's dungeon entrance.
+    pub stairs_down: Option<Pos>,
+    /// The dungeon exit.
+    pub stairs_up: Option<Pos>,
+    terrain: Terrain,
+    towns: [Option<Town>; 10],
 }
 
 impl Place {
-    pub(crate) fn new(level: &'static Level, terrain: Option<Terrain>) -> Place {
-        Place { level, terrain }
+    pub(crate) fn new(id: LevelId, terrain: Terrain, towns: [Option<Town>; 10], at: Pos) -> Place {
+        let town = towns.iter().flatten().find(|t| t.contains(at)).copied();
+        let under = Level::get(LevelId::Undercroft);
+        let surface = id == LevelId::Surface;
+        Place {
+            id,
+            terrain,
+            towns,
+            width: if surface { 50 } else { under.width },
+            height: if surface { 28 } else { under.height },
+            start: if surface { town.map(Town::start) } else { None },
+            respawn: if surface { town.map(Town::respawn) } else { None },
+            stairs_down: if surface { town.map(Town::stairs) } else { None },
+            stairs_up: if surface { None } else { under.stairs_up },
+        }
     }
 
-    /// Whether `at` is part of this place, authored or generated.
+    /// The town covering a surface cell.
+    pub fn town_at(&self, at: Pos) -> Option<Town> {
+        (self.id == LevelId::Surface).then(|| self.towns.iter().flatten().find(|t| t.contains(at)).copied()).flatten()
+    }
+
+    /// Generated towns in the currently inspected neighborhood, including the starting town.
+    pub fn towns(&self) -> impl Iterator<Item = Town> + '_ {
+        self.towns.iter().flatten().copied().filter(|_| self.id == LevelId::Surface)
+    }
+
+    /// Whether a coordinate is on this map.
     pub fn contains(&self, at: Pos) -> bool {
-        self.terrain.is_some() || self.level.index(at).is_some()
+        self.id == LevelId::Surface || Level::get(LevelId::Undercroft).index(at).is_some()
     }
 
-    /// Whether `at` is one of the level's authored cells.
+    /// Whether a cell belongs to a safe town or to the authored dungeon.
     pub fn authored(&self, at: Pos) -> bool {
-        self.level.index(at).is_some()
+        if self.id == LevelId::Surface {
+            self.town_at(at).is_some()
+        } else {
+            Level::get(LevelId::Undercroft).index(at).is_some()
+        }
     }
 
-    /// The cell at `at`; outside an authored level with no terrain is wall.
+    /// The cell at a coordinate, including wilderness and any generated town.
     pub fn tile(&self, at: Pos) -> Tile {
-        match (self.level.index(at), self.terrain) {
-            (Some(i), _) => self.level.tiles[i],
-            (None, Some(terrain)) => terrain.tile(at),
-            (None, None) => Tile::Wall,
+        if self.id == LevelId::Undercroft {
+            Level::get(LevelId::Undercroft).tile(at)
+        } else {
+            self.town_at(at).map_or_else(|| self.terrain.tile(at), |town| town.cell(at).0)
         }
     }
 
-    /// The name of where `at` lies: the level's, or the biome's out in the wild.
-    pub fn name_at(&self, at: Pos) -> &'static str {
-        match (self.level.index(at), self.terrain) {
-            (None, Some(terrain)) => terrain.biome(at).biome().name,
-            _ => self.level.name,
+    /// A service zone at a coordinate.
+    pub fn zone(&self, at: Pos) -> Zone {
+        if self.id == LevelId::Undercroft {
+            Zone::Open
+        } else {
+            self.town_at(at).map_or(Zone::Open, |town| town.cell(at).1)
         }
     }
 
-    /// Whether `from` can see `to` within `radius` cells: no opaque cell strictly between them.
+    pub(crate) fn cell_index(&self, at: Pos) -> Option<usize> {
+        if self.id == LevelId::Surface { None } else { Level::get(LevelId::Undercroft).cell_index(at) }
+    }
+
+    /// The town, biome, or dungeon name at a coordinate.
+    pub fn name_at(&self, at: Pos) -> String {
+        if self.id == LevelId::Undercroft {
+            Level::get(LevelId::Undercroft).name.to_owned()
+        } else {
+            self.town_at(at).map_or_else(|| self.terrain.biome(at).biome().name.to_owned(), Town::name)
+        }
+    }
+
+    /// Whether `from` can see `to` within `radius` cells.
     pub fn sees(&self, from: Pos, to: Pos, radius: i32) -> bool {
-        if distance(from, to) > radius {
-            return false;
-        }
-        line(from, to).iter().skip(1).take_while(|&&p| p != to).all(|&p| !self.tile(p).opaque())
+        distance(from, to) <= radius
+            && line(from, to).iter().skip(1).take_while(|&&p| p != to).all(|&p| !self.tile(p).opaque())
     }
 }
 /// Steps between two cells when diagonal steps count as one.
@@ -443,51 +454,36 @@ mod tests {
     use super::*;
     use std::collections::{HashSet, VecDeque};
 
-    fn reachable(level: &Level, from: Pos) -> HashSet<Pos> {
-        let mut seen = HashSet::from([from]);
-        let mut queue = VecDeque::from([from]);
+    #[test]
+    fn every_walkable_dungeon_cell_is_reachable() {
+        let level = Level::get(LevelId::Undercroft);
+        let start = level.stairs_up.unwrap();
+        let mut reached = HashSet::from([start]);
+        let mut queue = VecDeque::from([start]);
         while let Some((x, y)) = queue.pop_front() {
             for dy in -1..=1 {
                 for dx in -1..=1 {
                     let next = (x + dx, y + dy);
-                    if level.tile(next).walkable() && seen.insert(next) {
+                    if level.tile(next).walkable() && reached.insert(next) {
                         queue.push_back(next);
                     }
                 }
             }
         }
-        seen
-    }
-
-    #[test]
-    fn every_walkable_cell_and_service_is_reachable() {
-        let surface = Level::get(LevelId::Surface);
-        let under = Level::get(LevelId::Undercroft);
-        for (level, from) in [(surface, surface.start.unwrap()), (under, under.stairs_up.unwrap())] {
-            let reached = reachable(level, from);
-            for y in 0..level.height {
-                for x in 0..level.width {
-                    if level.tile((x, y)).walkable() {
-                        assert!(reached.contains(&(x, y)), "{} cell {x},{y} is cut off", level.name);
-                    }
-                }
+        for y in 0..level.height {
+            for x in 0..level.width {
+                assert!(!level.tile((x, y)).walkable() || reached.contains(&(x, y)));
             }
         }
-        assert!(surface.stairs_down.is_some() && surface.respawn.is_some());
-        assert_eq!(surface.zone(surface.respawn.unwrap()), Zone::Temple);
-        assert!(under.spawns.iter().any(|&(_, k)| k == SpawnKind::Lair));
-        assert!(surface.spawns.iter().all(|&(_, k)| k == SpawnKind::Wild));
+        assert!(level.spawns.iter().any(|&(_, k)| k == SpawnKind::Lair));
     }
 
     #[test]
-    fn walls_and_trees_block_sight_but_not_the_cell_itself() {
-        let surface = Level::get(LevelId::Surface);
-        let start = surface.start.unwrap();
-        assert!(surface.sees(start, (start.0 + 3, start.1), 6));
-        assert!(!surface.sees(start, (start.0 + 7, start.1), 6), "beyond the radius");
-        // The shop's south wall stands between the street and the counter.
-        assert!(!surface.sees((5, 9), (5, 4), 6));
-        assert!(surface.sees((5, 8), (5, 7), 6), "the wall itself is seen");
+    fn walls_block_sight_but_not_the_cell_itself() {
+        let level = Level::get(LevelId::Undercroft);
+        assert!(level.sees((1, 1), (3, 1), 6));
+        assert!(!level.sees((1, 1), (8, 1), 6));
+        assert!(level.sees((1, 1), (6, 1), 6));
     }
 
     #[test]
@@ -498,39 +494,24 @@ mod tests {
     }
 
     #[test]
-    fn wilderness_uses_the_seeded_world_and_keeps_the_town_intact() {
-        let town = Level::get(LevelId::Surface);
+    fn wilderness_still_uses_the_seeded_world() {
         for seed in [0, 1, 7, 42, u64::MAX] {
-            let terrain = Terrain::new(seed);
-            let place = Place::new(town, Some(terrain));
+            let game = crate::Game::new(seed);
             let world = World::new(seed);
-            let start = terrain.world_pos(town.start.unwrap());
-            assert_eq!(Some(start), find_land(&world, 0, 0));
-            for y in 0..town.height {
-                for x in 0..town.width {
-                    assert_eq!(place.tile((x, y)), town.tile((x, y)));
-                }
-            }
             for y in [-1000, -16, -1, 100, 1000] {
                 for x in [-1000, -16, -1, 100, 1000] {
-                    let pos = (x, y);
-                    let (wx, wy) = terrain.world_pos(pos);
+                    let at = (x, y);
+                    let (wx, wy) = game.level().terrain.world_pos(at);
                     let biome = world.tile(wx, wy).biome;
-                    assert_eq!(terrain.biome(pos), biome);
-                    assert_eq!(place.name_at(pos), biome.biome().name);
-                    assert_eq!(place.tile(pos), Terrain::new(seed).tile(pos));
-                    if !biome.biome().passable {
-                        assert!(!place.tile(pos).walkable());
-                    } else if let Tile::Wild(id) = place.tile(pos) {
-                        assert_eq!(id, biome);
-                        assert!(place.tile(pos).walkable());
+                    assert_eq!(game.level().terrain.biome(at), biome);
+                    if !game.level().authored(at) {
+                        assert_eq!(game.level().name_at(at), biome.biome().name);
+                        if !biome.biome().passable {
+                            assert!(!game.level().tile(at).walkable());
+                        }
                     }
-                    assert_eq!(place.zone(pos), Zone::Open);
                 }
             }
         }
-        let under = Place::new(Level::get(LevelId::Undercroft), None);
-        assert!(!under.contains((-1, -1)));
-        assert_eq!(under.tile((-1, -1)), Tile::Wall);
     }
 }

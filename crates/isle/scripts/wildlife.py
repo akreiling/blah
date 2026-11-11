@@ -13,14 +13,16 @@ def wildlife():
     with Isle(seed=7) as isle:
         save = isle.batch("Wren\n", "thief\n", game=True)["game"]
         assert isle.quit() == 0
-    # A scoped fixture puts the character on seed 7's eastern shore, not in the safe town.
-    save["player"]["pos"] = [74, 26]
+    # A scoped fixture puts the character at the starting town's west edge.
+    save["player"]["pos"] = [-1, 12]
     save["creatures"], save["spawns"] = [], []
     with tempfile.TemporaryDirectory(prefix="isle-wildlife-", dir="/tmp") as directory:
         path = pathlib.Path(directory) / "save.json"
         path.write_text(json.dumps(save))
         with Isle(save=path) as isle:
-            assert at(isle.request("state", map="cells")["map"], (74, 26))["walkable"]
+            level = isle.request("state", map="cells")["map"]
+            y = next(y for y in range(1, 24) if at(level, (-1, y))["walkable"])
+            isle.batch("right", *[("up" if y < 12 else "down")] * abs(y-12), "left", interrupt=False)
             began = time.perf_counter()
             reply = isle.batch("rest\n" * 100, game=True, map="cells", interrupt=False)
             elapsed = time.perf_counter() - began
@@ -28,7 +30,9 @@ def wildlife():
             creatures = save["creatures"]
             assert 0 < len(creatures) <= 12
             assert all(c["kind"] == "Wild" and c["wild"]["name"] and c["wild"]["genome"] for c in creatures)
-            assert all(not (0 <= c["pos"][0] < 50 and 0 <= c["pos"][1] < 28) for c in creatures)
+            assert all(not any(t["origin"][0] <= c["pos"][0] < t["origin"][0] + t["width"]
+                                   and t["origin"][1] <= c["pos"][1] < t["origin"][1] + t["height"]
+                                   for t in level["towns"]) for c in creatures)
             candidates = []
             ox, oy = level["origin"]
             for c in creatures:
