@@ -92,9 +92,12 @@ def sighted(screen):
     panel = screen["panel"]
     rows = panel[panel.index("IN SIGHT") + 1:] if "IN SIGHT" in panel else []
     found = []
+    rows = iter(rows)
     for row in rows:
         if row == "Nothing stirs.":
             continue
+        if not any(word.isdigit() for word in row.split()):
+            row += " " + next(rows).strip()
         letter, rest = row.split(" ", 1)
         words = rest.split(" ")
         at = next(i for i, w in enumerate(words) if w.isdigit())

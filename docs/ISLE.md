@@ -1,8 +1,8 @@
 # Isle
 
 Isle is a solo island adventure in the manner of *Island of Kesmai* (Kesmai, 1985), being merged with
-blah one system at a time. Its wilderness now uses blah's seeded procedural terrain; its town, dungeon,
-creatures, and callings are still Isle's original systems.
+blah one system at a time. Its wilderness now uses blah's seeded procedural terrain and evolved regional
+life; its town, dungeon, and callings are still Isle's original systems.
 
 - `crates/isle-core`: the rules. Pure and deterministic; the whole `Game` serializes, dice included.
 - `crates/isle`: the GPUI window. Run it with `just isle`.
@@ -69,13 +69,25 @@ water can be waded. Explored wilderness stays remembered across saves, including
 Harrowmere remains stamped at the starting point while procedural towns are being integrated.
 
 Harrowmere holds the outfitter (`buy`, `sell`, `list`) and the temple (`heal` for five gold a level;
-the fallen wake here, leaving their gold where they fell). Woods beasts keep within seven cells of their
-lairs, so the town square is safe. South of town the old watchtower's stairs lead to the Undercroft:
+the fallen wake here, leaving their gold where they fell). Evolved wildlife lives outside the town stamp
+and cannot attack into it. As you explore, individuals arrive beyond sight from their own region's species
+pools, with productivity limiting the population to 2–12. Distant wildlife is forgotten; regional life
+regenerates exactly from the seed.
+
+Individual genomes determine health, armor, attack, speed, senses, and terrain access. Skittish creatures
+flee (cornered, provoked ones fight back), territorial creatures defend home or retaliate, and aggressive
+ones hunt. They stay within seven cells of home. Faster creatures bank speed between rounds and can take
+up to two actions per round. The IN SIGHT panel shows their regional names and temperaments; target those
+names or the usual letters. Wildlife drops small amounts of gold, not manufactured gear.
+
+South of town the old watchtower's stairs lead to the Undercroft:
 rats, goblins, goblin archers, orcs, skeletons (arrows do half), and the pit troll in its lair.
 
 Saves live in the platform data directory (`isle/save.json`) and are rewritten after every round. `--new`
 starts another character and keeps the old save beside it; `--save PATH` and `--seed N` pick the file and
 the island's dice.
+
+Save compatibility is not maintained during this merge. Use `just isle --new` if an older save will not load.
 
 ## Agent control and inspection
 
@@ -124,6 +136,8 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
 - `python3 crates/isle/scripts/smoke.py` checks the protocol against a real window in both pacing modes.
 - `python3 crates/isle/scripts/wilderness.py` checks leaving town, biome rendering, local map origins,
   wilderness memory, and save/reload.
+- `python3 crates/isle/scripts/wildlife.py` checks evolved population, reload, the IN SIGHT panel,
+  and shooting an actual spawned individual by its regional name.
 - `python3 crates/isle/scripts/seed7.py` plays seed 7 from what the window shows. It walks to the stairs,
   fights from them, and retreats to the temple to heal. Games are deterministic per seed and input, so its
   output repeats exactly.

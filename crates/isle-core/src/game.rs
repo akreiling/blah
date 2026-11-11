@@ -2,12 +2,14 @@
 
 use std::collections::BTreeMap;
 
+use blah_core::{Phenotype, Temperament};
 use serde::{Deserialize, Serialize};
 
 use crate::command::{self, Command, Dir, Instant, Parsed, Target};
-use crate::data::{Armor, Bow, Class, Item, Kind, LEVELS, SHOP, Spell, Weapon, sale_price};
+use crate::data::{Armor, Bow, Class, Item, Kind, LEVELS, SHOP, Spell, Stats, Weapon, sale_price};
 use crate::map::{Level, LevelId, Place, Pos, SpawnKind, Terrain, Tile, Zone, distance};
 use crate::rng::Rng;
+use crate::wildlife::{LifeCache, Wildlife};
 
 /// Cells a character or creature sees.
 pub const SIGHT: i32 = 6;
@@ -215,12 +217,16 @@ impl Player {
 }
 
 /// A creature on the island.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Creature {
     /// Stable identity.
     pub id: u32,
     /// What it is.
     pub kind: Kind,
+    /// Regional identity and genome, for evolved wildlife.
+    pub wild: Option<Wildlife>,
+    /// Banked speed, in tenths of an action.
+    energy: i32,
     /// Which map.
     pub at: LevelId,
     /// Where.
@@ -239,6 +245,18 @@ pub struct Creature {
     #[serde(default)]
     pub stunned: u32,
     spawn: Option<usize>,
+}
+
+impl Creature {
+    /// This individual's combat numbers, rather than a fixed species template.
+    pub fn stats(&self) -> Stats {
+        self.wild.as_ref().map_or_else(|| self.kind.stats(), Wildlife::stats)
+    }
+
+    /// The individual phenotype, if this creature comes from evolved life.
+    pub fn phenotype(&self) -> Option<Phenotype> {
+        self.wild.as_ref().map(Wildlife::phenotype)
+    }
 }
 
 /// Things lying on one cell.
@@ -270,12 +288,10 @@ pub struct Sighted<'a> {
 }
 
 /// The whole island.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Game {
     seed: u64,
-    // Optional so saves made before the wilderness still load with the same seed.
-    #[serde(default)]
-    terrain: Option<Terrain>,
+    terrain: Terrain,
     rng: Rng,
     round: u64,
     phase: Phase,
@@ -287,10 +303,12 @@ pub struct Game {
     /// Per level, cells ever seen.
     seen: Vec<Vec<bool>>,
     /// Outside the authored maps, 16×16 chunks of remembered cells, including negative coordinates.
-    #[serde(default)]
     explored: BTreeMap<i32, BTreeMap<i32, [u64; 4]>>,
     log: Vec<Line>,
     log_total: u64,
+    wild_ready: u64,
+    #[serde(skip)]
+    life: LifeCache,
 }
 
 impl Game {
@@ -300,6 +318,9 @@ impl Game {
         let player = Player::roll(String::new(), Class::Fighter, &mut rng);
         let mut spawns = Vec::new();
         for id in LevelId::ALL {
+            if id == LevelId::Surface {
+                continue;
+            }
             for index in 0..Level::get(id).spawns.len() {
                 spawns.push(SpawnState { at: id, index, occupant: None, ready: 0 });
             }
@@ -307,7 +328,7 @@ impl Game {
         let seen = LevelId::ALL.iter().map(|&id| vec![false; Level::get(id).cells()]).collect();
         let mut game = Game {
             seed,
-            terrain: Some(Terrain::new(seed)),
+            terrain: Terrain::new(seed),
             rng,
             round: 0,
             phase: Phase::Name,
@@ -320,6 +341,8 @@ impl Game {
             explored: BTreeMap::new(),
             log: Vec::new(),
             log_total: 0,
+            wild_ready: 0,
+            life: LifeCache::default(),
         };
         game.say(Tone::System, "You wash ashore on the Isle. What is your name?");
         game
@@ -349,8 +372,7 @@ impl Game {
 
     /// The map the character is on.
     pub fn level(&self) -> Place {
-        let terrain =
-            (self.player.at == LevelId::Surface).then(|| self.terrain.unwrap_or_else(|| Terrain::new(self.seed)));
+        let terrain = (self.player.at == LevelId::Surface).then_some(self.terrain);
         Place::new(Level::get(self.player.at), terrain)
     }
 
@@ -547,7 +569,7 @@ impl Game {
                     .map(|s| {
                         let (dx, dy) = (s.creature.pos.0 - self.player.pos.0, s.creature.pos.1 - self.player.pos.1);
                         let way = Dir::from_delta(dx, dy).map_or("", Dir::short);
-                        format!("{} {} ({} {way})", s.label, s.creature.kind.stats().name, distance((0, 0), (dx, dy)))
+                        format!("{} {} ({} {way})", s.label, s.creature.stats().name, distance((0, 0), (dx, dy)))
                     })
                     .collect();
                 if !sighted.is_empty() {
@@ -569,6 +591,7 @@ impl Game {
             Some(command) => self.perform(command),
             None => self.stand_ready(),
         }
+        self.populate_surface();
         self.creatures_act();
         if self.player.hp <= 0 {
             self.die();
@@ -624,7 +647,7 @@ impl Game {
             let (dx, dy) = dir.delta();
             let next = (self.player.pos.0 + dx, self.player.pos.1 + dy);
             if let Some(c) = self.creature_at(next) {
-                let name = c.kind.stats().name;
+                let name = c.stats().name;
                 self.say(Tone::Info, format!("A {name} is in the way."));
                 return;
             }
@@ -644,7 +667,7 @@ impl Game {
             if i + 1 < steps.len()
                 && let Some(c) = self.hunter_adjacent()
             {
-                let name = c.kind.stats().name;
+                let name = c.stats().name;
                 self.say(Tone::Info, format!("You stop: a {name} is beside you."));
                 return;
             }
@@ -661,7 +684,8 @@ impl Game {
                 .iter()
                 .filter(|s| {
                     let typed: Vec<&str> = name.split_whitespace().collect();
-                    let words: Vec<&str> = s.creature.kind.stats().name.split(' ').collect();
+                    let name = s.creature.stats().name.to_lowercase();
+                    let words: Vec<&str> = name.split(' ').collect();
                     typed.iter().all(|t| words.iter().any(|w| w.starts_with(t)))
                 })
                 .nth(nth - 1),
@@ -690,14 +714,14 @@ impl Game {
             }
         };
         let Some(index) = self.find_target(target) else { return };
-        let name = self.creatures[index].kind.stats().name;
+        let name = self.creatures[index].stats().name;
         if distance(self.creatures[index].pos, self.player.pos) > 1 {
             self.say(Tone::Info, format!("The {name} is out of reach."));
             return;
         }
         self.player.nocked = false;
         let ambush = std::mem::take(&mut self.player.hidden);
-        let ac = self.creatures[index].kind.stats().ac;
+        let ac = self.creatures[index].stats().ac;
         let roll = self.rng.d20() + self.player.melee_bonus() + if ambush { 4 } else { 0 };
         if roll < ac && roll - self.player.melee_bonus() != 20 {
             self.say(Tone::Miss, format!("You miss the {name}."));
@@ -733,7 +757,7 @@ impl Game {
 
     /// Checks range and a clear line to the creature at `index`.
     fn in_line(&mut self, index: usize, range: i32) -> bool {
-        let name = self.creatures[index].kind.stats().name;
+        let name = self.creatures[index].stats().name;
         let to = self.creatures[index].pos;
         if distance(self.player.pos, to) > range {
             self.say(Tone::Info, format!("The {name} is out of range."));
@@ -767,7 +791,7 @@ impl Game {
         self.player.nocked = false;
         self.player.arrows -= 1;
         let ambush = std::mem::take(&mut self.player.hidden);
-        let stats = self.creatures[index].kind.stats();
+        let stats = self.creatures[index].stats();
         let to = self.creatures[index].pos;
         let close = distance(self.player.pos, to) <= 1;
         let natural = self.rng.d20();
@@ -838,7 +862,7 @@ impl Game {
         self.player.mp -= spell.cost();
         self.player.chanted = None;
         self.player.hidden = false;
-        let stats = self.creatures[index].kind.stats();
+        let stats = self.creatures[index].stats();
         let natural = self.rng.d20();
         let roll = natural + self.player.level as i32 / 2 + modifier(self.player.int) + 2;
         if roll < stats.ac && natural != 20 {
@@ -869,7 +893,7 @@ impl Game {
             return;
         }
         if let Some(c) = self.hunter_adjacent() {
-            let name = c.kind.stats().name;
+            let name = c.stats().name;
             self.say(Tone::Info, format!("The {name} is watching you too closely."));
             return;
         }
@@ -893,7 +917,7 @@ impl Game {
             return;
         }
         let dead = self.creatures.remove(index);
-        let stats = dead.kind.stats();
+        let stats = dead.stats();
         self.say(Tone::Kill, format!("The {} dies! (+{} experience)", stats.name, stats.xp));
         if let Some(spawn) = dead.spawn {
             let delay = if dead.kind == Kind::Troll { LAIR_RESPAWN } else { RESPAWN };
@@ -911,6 +935,9 @@ impl Game {
     }
 
     fn loot(&mut self, kind: Kind) -> Vec<Item> {
+        if kind == Kind::Wild {
+            return Vec::new();
+        }
         if kind == Kind::Troll {
             return vec![Item::Ring, Item::Potion];
         }
@@ -1094,7 +1121,7 @@ impl Game {
 
     fn rest(&mut self) {
         if let Some(c) = self.creatures.iter().find(|c| c.at == self.player.at && c.hunting) {
-            let name = c.kind.stats().name;
+            let name = c.stats().name;
             self.say(Tone::Info, format!("You can't rest with a {name} hunting you."));
             return;
         }
@@ -1191,6 +1218,63 @@ impl Game {
 
     // ----- Creatures -----
 
+    fn populate_surface(&mut self) {
+        if self.player.at != LevelId::Surface || self.round < self.wild_ready {
+            return;
+        }
+        let me = self.player.pos;
+        self.creatures.retain(|c| c.kind != Kind::Wild || distance(c.pos, me) <= 32);
+        let level = self.level();
+        if level.authored(me) {
+            return;
+        }
+        let terrain = self.terrain;
+        let productivity = terrain.biome(me).biome().productivity;
+        let count = self.creatures.iter().filter(|c| c.kind == Kind::Wild).count();
+        if count >= blah_core::capacity(productivity) {
+            return;
+        }
+        let mut rng = blah_core::Rng::keyed(self.seed, b"islelife", &[self.round]);
+        if count > 0 && !rng.chance(blah_core::spawn_chance(productivity)) {
+            return;
+        }
+        for _ in 0..6 {
+            let dx = rng.below(33) as i32 - 16;
+            let dy = rng.below(33) as i32 - 16;
+            let pos = (me.0 + dx, me.1 + dy);
+            if distance(pos, me) <= SIGHT + 2
+                || level.authored(pos)
+                || self.creature_at(pos).is_some()
+                || matches!(level.tile(pos), Tile::Rock | Tile::Wall)
+            {
+                continue;
+            }
+            let wild = self.life.draw(self.seed, terrain.world_pos(pos), &mut rng);
+            if !wild.phenotype().access.allows(terrain.biome(pos).biome()) {
+                continue;
+            }
+            let hp = wild.stats().hp;
+            self.creatures.push(Creature {
+                id: self.next_id,
+                kind: Kind::Wild,
+                wild: Some(wild),
+                energy: 0,
+                at: LevelId::Surface,
+                pos,
+                hp,
+                home: pos,
+                hunting: false,
+                last_seen: None,
+                lost: 0,
+                stunned: 0,
+                spawn: None,
+            });
+            self.next_id += 1;
+            self.wild_ready = self.round + 3;
+            break;
+        }
+    }
+
     fn creatures_act(&mut self) {
         let ids: Vec<u32> = self.creatures.iter().filter(|c| c.at == self.player.at).map(|c| c.id).collect();
         for id in ids {
@@ -1198,25 +1282,65 @@ impl Game {
                 return;
             }
             let Some(index) = self.creatures.iter().position(|c| c.id == id) else { continue };
-            self.creature_turn(index);
+            if self.creatures[index].stunned > 0 {
+                self.creatures[index].stunned -= 1;
+                continue;
+            }
+            let actions = if let Some(p) = self.creatures[index].phenotype() {
+                let c = &mut self.creatures[index];
+                c.energy += p.stats.speed;
+                let actions = (c.energy / blah_core::ACTION_COST).min(blah_core::MAX_ACTIONS as i32);
+                c.energy -= actions * blah_core::ACTION_COST;
+                actions
+            } else {
+                1
+            };
+            for _ in 0..actions {
+                if self.player.hp <= 0 {
+                    return;
+                }
+                self.creature_turn(index);
+            }
         }
     }
 
     fn creature_turn(&mut self, index: usize) {
         let level = self.level();
         let me = self.player.pos;
-        let (pos, kind) = (self.creatures[index].pos, self.creatures[index].kind);
-        let stats = kind.stats();
-        if self.creatures[index].stunned > 0 {
-            self.creatures[index].stunned -= 1;
-            return;
-        }
+        let pos = self.creatures[index].pos;
+        let stats = self.creatures[index].stats();
+        let phenotype = self.creatures[index].phenotype();
         let close = distance(pos, me) <= 1;
         let leash = if self.player.at == LevelId::Surface { WILD_LEASH } else { DEEP_LEASH };
         let home = self.creatures[index].home;
-        let in_reach = distance(me, home) <= leash + 1;
-        let in_sight = in_reach && level.sees(pos, me, NOTICE);
-        let notices = in_sight && (!self.player.hidden || (close && self.rng.chance(30)));
+        let in_reach = distance(me, home) <= leash + 1 && (phenotype.is_none() || !level.authored(me));
+        let notice = phenotype.map_or(NOTICE, |p| p.sense as i32);
+        let in_sight = in_reach && level.sees(pos, me, notice);
+        let detects = in_sight && (!self.player.hidden || (close && self.rng.chance(30)));
+        let provoked = self.creatures[index].hunting;
+        let skittish = phenotype.is_some_and(|p| p.temperament == Temperament::Skittish);
+        if skittish && !detects {
+            // Losing the threat must not turn flight into a hunt back toward its last position.
+            self.creatures[index].hunting = false;
+            self.creatures[index].last_seen = None;
+        }
+        if skittish && detects {
+            let best = [Dir::N, Dir::S, Dir::E, Dir::W, Dir::Ne, Dir::Nw, Dir::Se, Dir::Sw]
+                .into_iter()
+                .map(|d| (pos.0 + d.delta().0, pos.1 + d.delta().1))
+                .filter(|&p| self.open_for_creature(index, p) && distance(p, home) <= WILD_LEASH)
+                .max_by_key(|&p| distance(p, me));
+            if let Some(next) = best
+                && distance(next, me) > distance(pos, me)
+            {
+                self.creatures[index].pos = next;
+            } else if provoked && close {
+                self.creature_strike(index, stats.hit, stats.damage, None);
+            }
+            return;
+        }
+        let territorial = phenotype.is_some_and(|p| p.temperament == Temperament::Territorial);
+        let notices = detects && (!territorial || provoked || distance(me, home) <= 3);
         if !in_reach && self.creatures[index].hunting {
             let c = &mut self.creatures[index];
             c.hunting = false;
@@ -1261,14 +1385,14 @@ impl Game {
             let dir = [Dir::N, Dir::S, Dir::E, Dir::W, Dir::Ne, Dir::Nw, Dir::Se, Dir::Sw][self.rng.below(8) as usize];
             let (dx, dy) = dir.delta();
             let next = (pos.0 + dx, pos.1 + dy);
-            if distance(next, self.creatures[index].home) <= 4 && self.open_for_creature(next) {
+            if distance(next, self.creatures[index].home) <= 4 && self.open_for_creature(index, next) {
                 self.creatures[index].pos = next;
             }
         }
     }
 
     fn creature_strike(&mut self, index: usize, hit: i32, (lo, hi): (i32, i32), missile: Option<&str>) {
-        let name = self.creatures[index].kind.stats().name;
+        let name = self.creatures[index].stats().name;
         let natural = self.rng.d20();
         let ward = match (self.player.shield > 0, missile.is_some()) {
             (true, true) => 6,
@@ -1292,9 +1416,17 @@ impl Game {
         self.say(Tone::Hurt, text);
     }
 
-    fn open_for_creature(&self, pos: Pos) -> bool {
+    fn open_for_creature(&self, index: usize, pos: Pos) -> bool {
         let level = self.level();
-        level.tile(pos).walkable()
+        let access = self.creatures[index].phenotype().map_or_else(
+            || level.tile(pos).walkable(),
+            |p| {
+                !level.authored(pos)
+                    && !matches!(level.tile(pos), Tile::Rock | Tile::Wall)
+                    && p.access.allows(self.terrain.biome(pos).biome())
+            },
+        );
+        access
             && level.zone(pos) == Zone::Open
             && pos != self.player.pos
             && !matches!(level.tile(pos), Tile::StairsDown | Tile::StairsUp)
@@ -1308,7 +1440,7 @@ impl Game {
         let best = [Dir::N, Dir::S, Dir::E, Dir::W, Dir::Ne, Dir::Nw, Dir::Se, Dir::Sw]
             .into_iter()
             .map(|d| (pos.0 + d.delta().0, pos.1 + d.delta().1))
-            .filter(|&p| self.open_for_creature(p) && distance(p, home) <= leash.max(distance(pos, home)))
+            .filter(|&p| self.open_for_creature(index, p) && distance(p, home) <= leash.max(distance(pos, home)))
             .min_by_key(|&p| score(p));
         if let Some(next) = best
             && score(next) < score(pos)
@@ -1408,6 +1540,8 @@ impl Game {
         self.creatures.push(Creature {
             id,
             kind,
+            wild: None,
+            energy: 0,
             at,
             pos,
             hp: kind.stats().hp,
@@ -1422,8 +1556,6 @@ impl Game {
     }
 
     fn update_seen(&mut self) {
-        // Upgrade old saves once, rather than finding their starting land on every terrain query.
-        self.terrain.get_or_insert_with(|| Terrain::new(self.seed));
         let level = self.level();
         let me = self.player.pos;
         let seen = &mut self.seen[self.player.at.index()];
@@ -1462,6 +1594,8 @@ impl Game {
         self.creatures.push(Creature {
             id,
             kind,
+            wild: None,
+            energy: 0,
             at,
             pos,
             hp: kind.stats().hp,
@@ -1477,8 +1611,214 @@ impl Game {
 
     pub(crate) fn clear_creatures(&mut self) {
         self.creatures.clear();
+        self.wild_ready = u64::MAX;
         for s in &mut self.spawns {
             s.occupant = Some(u32::MAX);
         }
+    }
+}
+
+#[cfg(test)]
+mod wildlife_tests {
+    use super::*;
+    use blah_core::{Genome, World};
+
+    fn made() -> Game {
+        let mut game = Game::new(7);
+        game.answer("Wren");
+        game.answer("fighter");
+        game.clear_creatures();
+        game.player.hp = 100_000;
+        game.player.max_hp = 100_000;
+        game
+    }
+
+    fn clearing(game: &Game) -> Pos {
+        for y in -100..=100 {
+            for x in -100..=100 {
+                let pos = (x, y);
+                if (-1..=1).all(|dy| {
+                    (-1..=1).all(|dx| {
+                        let at = (x + dx, y + dy);
+                        !game.level().authored(at)
+                            && game.level().tile(at).walkable()
+                            && !game.terrain.biome(at).biome().water
+                    })
+                }) {
+                    return pos;
+                }
+            }
+        }
+        panic!("seed 7 has a clearing outside town");
+    }
+
+    fn genome(size: f32, aggression: f32, water: f32) -> Genome {
+        Genome::new([size, 1.0, 0.0, 0.5, 0.5, water, aggression, 0.3])
+    }
+
+    fn add(game: &mut Game, pos: Pos, genome: Genome) {
+        let mut wild = game.life.draw(game.seed, game.terrain.world_pos(pos), &mut blah_core::Rng::new(2));
+        wild.genome = genome;
+        let hp = wild.stats().hp;
+        game.place(Kind::Wild, pos);
+        let creature = game.creatures.last_mut().unwrap();
+        creature.wild = Some(wild);
+        creature.hp = hp;
+    }
+
+    #[test]
+    fn surface_population_is_evolved_bounded_offscreen_and_outside_town() {
+        let mut game = made();
+        game.player.pos = clearing(&game);
+        game.wild_ready = 0;
+        for _ in 0..30 {
+            game.round(Some(Command::Rest));
+            if !game.creatures.is_empty() {
+                break;
+            }
+        }
+        assert!(!game.creatures.is_empty(), "normal rounds populate the wilderness");
+        assert!(game.sighted().is_empty(), "new individuals arrive beyond sight");
+        for _ in 0..100 {
+            game.round(Some(Command::Rest));
+        }
+        assert!(!game.creatures.is_empty() && game.creatures.len() <= 12);
+        for c in &game.creatures {
+            assert_eq!(c.kind, Kind::Wild);
+            assert!(!game.level().authored(c.pos));
+            let wild = c.wild.as_ref().unwrap();
+            let home = game.terrain.world_pos(c.home);
+            assert_eq!(wild.species.region, World::new(7).region_at(home.0, home.1));
+            assert!(wild.phenotype().access.allows(game.terrain.biome(c.pos).biome()));
+            assert_eq!(c.stats().hp, wild.phenotype().stats.hp);
+            assert!(distance(c.pos, c.home) <= WILD_LEASH);
+        }
+        game.player.pos = (1_000_000, -1_000_000);
+        game.round(Some(Command::Rest));
+        assert!(game.creatures.iter().all(|c| distance(c.pos, game.player.pos) <= 32));
+    }
+
+    #[test]
+    fn cold_reload_replays_wildlife_spawns_and_movement_exactly() {
+        let mut game = made();
+        game.player.pos = clearing(&game);
+        game.wild_ready = 0;
+        for _ in 0..20 {
+            game.round(Some(Command::Rest));
+        }
+        let mut loaded: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        assert!(loaded.life.inner_is_empty());
+        for _ in 0..80 {
+            game.round(Some(Command::Rest));
+            loaded.round(Some(Command::Rest));
+            assert_eq!(loaded, game);
+        }
+    }
+
+    #[test]
+    fn genome_speed_and_wounded_combat_replay_after_partial_rounds_and_stun() {
+        for (size, expected) in [(1.0, 9), (0.0, 13)] {
+            let mut game = made();
+            let me = clearing(&game);
+            game.player.pos = me;
+            add(&mut game, (me.0 + 1, me.1), genome(size, 1.0, 0.1));
+            game.creatures[0].stunned = 2;
+            game.round(Some(Command::Rest));
+            game.round(Some(Command::Rest));
+            assert_eq!(game.creatures[0].energy, 0);
+            game.creatures[0].hp -= 1;
+            let mark = game.log_total;
+            game.round(Some(Command::Rest));
+            let mut loaded: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+            assert!(loaded.creatures[0].energy > 0, "resume with a partly banked action");
+            assert_eq!(loaded.creatures[0].hp, loaded.creatures[0].stats().hp - 1);
+            for _ in 1..10 {
+                game.round(Some(Command::Rest));
+                loaded.round(Some(Command::Rest));
+                assert_eq!(loaded, game);
+            }
+            let attacks = game
+                .log
+                .iter()
+                .rev()
+                .take((game.log_total - mark) as usize)
+                .filter(|l| matches!(l.tone, Tone::Hurt | Tone::Miss))
+                .count();
+            assert_eq!(attacks, expected);
+        }
+    }
+
+    #[test]
+    fn skittish_flee_territorial_guard_home_and_aggressive_hunt() {
+        for (aggression, hunts) in [(0.1, false), (0.5, true), (1.0, true)] {
+            let mut game = made();
+            let me = clearing(&game);
+            game.player.pos = me;
+            add(&mut game, (me.0 + 1, me.1), genome(0.5, aggression, 0.1));
+            game.creature_turn(0);
+            assert_eq!(game.creatures[0].hunting, hunts);
+            if !hunts {
+                assert!(distance(game.creatures[0].pos, me) > 1);
+                assert_eq!(game.player.hp, 100_000);
+            }
+        }
+        let mut game = made();
+        let me = clearing(&game);
+        game.player.pos = me;
+        add(&mut game, (me.0 + 1, me.1), genome(0.5, 0.5, 0.1));
+        game.creatures[0].home = (me.0 + 4, me.1);
+        game.creature_turn(0);
+        assert!(!game.creatures[0].hunting, "territorial life does not attack outside its home radius");
+        game.provoke(0);
+        game.creature_turn(0);
+        assert!(game.creatures[0].hunting, "provoked territorial life fights back");
+        game.creatures[0].wild.as_mut().unwrap().genome = genome(0.5, 0.1, 0.1);
+        game.player.pos = (me.0 + 30, me.1);
+        game.creature_turn(0);
+        assert!(!game.creatures[0].hunting, "skittish life does not hunt after losing its attacker");
+    }
+
+    #[test]
+    fn wildlife_cannot_enter_or_attack_into_town_and_obeys_water_access() {
+        let mut game = made();
+        game.player.pos = (0, 9);
+        add(&mut game, (-1, 9), genome(0.5, 1.0, 0.1));
+        game.provoke(0);
+        for _ in 0..20 {
+            game.round(Some(Command::Rest));
+        }
+        assert_eq!(game.player.hp, 100_000);
+        assert!(!game.level().authored(game.creatures[0].pos));
+        assert!(!game.open_for_creature(0, (0, 9)));
+        for water in [0.1, 0.6, 1.0] {
+            game.creatures[0].wild.as_mut().unwrap().genome = genome(0.5, 1.0, water);
+            let p = game.creatures[0].phenotype().unwrap();
+            for x in -100..0 {
+                let at = (x, -100);
+                let expected = !matches!(game.level().tile(at), Tile::Rock | Tile::Wall)
+                    && p.access.allows(game.terrain.biome(at).biome())
+                    && game.creatures[0].pos != at;
+                assert_eq!(game.open_for_creature(0, at), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn regional_names_target_and_kills_use_individual_stats_and_loot() {
+        let mut game = made();
+        let me = clearing(&game);
+        game.player.pos = me;
+        add(&mut game, (me.0 + 1, me.1), genome(0.5, 1.0, 0.1));
+        let stats = game.creatures[0].stats();
+        let target = Target::Named { nth: 1, name: stats.name.to_lowercase() };
+        assert_eq!(game.find_target(Some(target)), Some(0));
+        game.creatures[0].hp -= 1;
+        let saved: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        assert_eq!(saved.creatures[0], game.creatures[0]);
+        game.wound(0, 999);
+        assert_eq!(game.player.xp, stats.xp);
+        assert!(game.creatures.is_empty());
+        assert!(game.log.iter().any(|l| l.text.contains(&stats.name)));
+        assert!(game.piles.iter().flat_map(|p| &p.items).all(|item| matches!(item, Item::Gold(_))));
     }
 }

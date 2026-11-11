@@ -334,13 +334,15 @@ pub enum Kind {
     Skeleton,
     /// The pit troll at the bottom of the undercroft.
     Troll,
+    /// An individual drawn from a region's evolved life.
+    Wild,
 }
 
 /// The numbers behind a kind of creature.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Stats {
     /// What the log calls one.
-    pub name: &'static str,
+    pub name: String,
     /// Starting and full health.
     pub hp: i32,
     /// What an attack roll must reach to hit it.
@@ -363,9 +365,9 @@ pub struct Stats {
 
 impl Kind {
     /// Its numbers.
-    pub const fn stats(self) -> Stats {
+    pub fn stats(self) -> Stats {
         let base = Stats {
-            name: "",
+            name: String::new(),
             hp: 1,
             ac: 10,
             hit: 0,
@@ -377,13 +379,15 @@ impl Kind {
             arrow_proof: false,
         };
         match self {
-            Kind::Rat => Stats { name: "rat", hp: 5, ac: 9, hit: 1, damage: (1, 3), xp: 5, gold: (0, 2), ..base },
-            Kind::Wolf => Stats { name: "wolf", hp: 10, ac: 12, hit: 3, damage: (2, 5), xp: 15, ..base },
+            Kind::Rat => {
+                Stats { name: "rat".into(), hp: 5, ac: 9, hit: 1, damage: (1, 3), xp: 5, gold: (0, 2), ..base }
+            }
+            Kind::Wolf => Stats { name: "wolf".into(), hp: 10, ac: 12, hit: 3, damage: (2, 5), xp: 15, ..base },
             Kind::Goblin => {
-                Stats { name: "goblin", hp: 9, ac: 11, hit: 2, damage: (1, 6), xp: 15, gold: (1, 8), ..base }
+                Stats { name: "goblin".into(), hp: 9, ac: 11, hit: 2, damage: (1, 6), xp: 15, gold: (1, 8), ..base }
             }
             Kind::GoblinArcher => Stats {
-                name: "goblin archer",
+                name: "goblin archer".into(),
                 hp: 8,
                 ac: 11,
                 hit: 3,
@@ -393,12 +397,21 @@ impl Kind {
                 gold: (2, 10),
                 ..base
             },
-            Kind::Orc => Stats { name: "orc", hp: 16, ac: 13, hit: 4, damage: (2, 8), xp: 35, gold: (4, 15), ..base },
-            Kind::Skeleton => {
-                Stats { name: "skeleton", hp: 18, ac: 12, hit: 4, damage: (2, 7), xp: 40, arrow_proof: true, ..base }
+            Kind::Orc => {
+                Stats { name: "orc".into(), hp: 16, ac: 13, hit: 4, damage: (2, 8), xp: 35, gold: (4, 15), ..base }
             }
+            Kind::Skeleton => Stats {
+                name: "skeleton".into(),
+                hp: 18,
+                ac: 12,
+                hit: 4,
+                damage: (2, 7),
+                xp: 40,
+                arrow_proof: true,
+                ..base
+            },
             Kind::Troll => Stats {
-                name: "pit troll",
+                name: "pit troll".into(),
                 hp: 70,
                 ac: 14,
                 hit: 6,
@@ -408,6 +421,7 @@ impl Kind {
                 regen: 2,
                 ..base
             },
+            Kind::Wild => Stats { name: "creature".into(), ..base },
         }
     }
 }

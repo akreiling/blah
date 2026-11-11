@@ -468,9 +468,20 @@ impl IsleView {
         if sighted.is_empty() {
             panel = panel.child(dim_line("Nothing stirs."));
         }
-        for s in sighted.iter().take(6) {
+        for s in sighted.iter().take(if sighted.iter().any(|s| s.creature.wild.is_some()) { 3 } else { 6 }) {
             let c = s.creature;
-            let stats = c.kind.stats();
+            let stats = c.stats();
+            if let Some(phenotype) = c.phenotype() {
+                panel = panel
+                    .child(
+                        div()
+                            .h(px(LINE))
+                            .text_color(rgb(creature_color(c.kind, c.hunting)))
+                            .child(format!("{} {}", s.label, stats.name)),
+                    )
+                    .child(dim_line_owned(format!("  {} · {}", sight_notes(p, c), phenotype.temperament.word())));
+                continue;
+            }
             panel = panel.child(
                 div()
                     .h(px(LINE))
@@ -529,8 +540,13 @@ impl IsleView {
             if sighted.is_empty() {
                 panel.push("Nothing stirs.".into());
             }
-            for s in sighted.iter().take(6) {
-                panel.push(format!("{} {} {}", s.label, s.creature.kind.stats().name, sight_notes(p, s.creature)));
+            for s in sighted.iter().take(if sighted.iter().any(|s| s.creature.wild.is_some()) { 3 } else { 6 }) {
+                if let Some(phenotype) = s.creature.phenotype() {
+                    panel.push(format!("{} {}", s.label, s.creature.stats().name));
+                    panel.push(format!("  {} · {}", sight_notes(p, s.creature), phenotype.temperament.word()));
+                } else {
+                    panel.push(format!("{} {} {}", s.label, s.creature.stats().name, sight_notes(p, s.creature)));
+                }
             }
         } else {
             panel.push("A NEW ARRIVAL".into());
@@ -677,7 +693,7 @@ fn place_text(game: &Game) -> String {
 }
 
 fn sight_notes(p: &Player, c: &Creature) -> String {
-    let stats = c.kind.stats();
+    let stats = c.stats();
     let way = isle_core::Dir::from_delta(c.pos.0 - p.pos.0, c.pos.1 - p.pos.1).map_or("", isle_core::Dir::short);
     let mut notes = vec![format!("{} {way}", distance(p.pos, c.pos))];
     if c.hp < stats.hp {
@@ -701,6 +717,7 @@ fn initial(kind: Kind) -> char {
         Kind::Orc => 'o',
         Kind::Skeleton => 's',
         Kind::Troll => 'T',
+        Kind::Wild => '*',
     }
 }
 
@@ -839,6 +856,10 @@ fn heading_owned(text: String) -> Div {
 }
 
 fn dim_line(text: &'static str) -> Div {
+    div().h(px(LINE)).text_size(px(12.0)).text_color(rgb(DIM)).child(text)
+}
+
+fn dim_line_owned(text: String) -> Div {
     div().h(px(LINE)).text_size(px(12.0)).text_color(rgb(DIM)).child(text)
 }
 

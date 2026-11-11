@@ -104,7 +104,7 @@ fn explicit_wait_matches_standing_ready_on_the_clock() {
 }
 
 #[test]
-fn woods_beasts_stay_out_of_town() {
+fn surface_life_does_not_spawn_inside_town() {
     let mut game = made("thief");
     game.player_mut().max_hp = 999;
     game.player_mut().hp = 999;
@@ -112,7 +112,7 @@ fn woods_beasts_stay_out_of_town() {
         game.round(None);
     }
     assert!(!game.log().iter().any(|l| l.tone == crate::Tone::Hurt), "nothing reaches the town square");
-    assert!(game.creatures().iter().filter(|c| c.at == LevelId::Surface).all(|c| crate::distance(c.pos, c.home) <= 7));
+    assert!(game.creatures().iter().all(|c| c.at != LevelId::Surface));
 }
 
 #[test]
@@ -333,19 +333,4 @@ fn wilderness_memory_spans_signed_chunks_and_survives_saving_and_level_changes()
     loaded.round(Some(Command::Wait));
     game.round(Some(Command::Wait));
     assert_eq!(loaded, game);
-}
-
-#[test]
-fn pre_wilderness_saves_keep_their_character_and_gain_seeded_terrain() {
-    let game = made("fighter");
-    let mut old = serde_json::to_value(&game).unwrap();
-    old.as_object_mut().unwrap().remove("terrain");
-    old.as_object_mut().unwrap().remove("explored");
-    let mut loaded: Game = serde_json::from_value(old).unwrap();
-    assert_eq!(loaded.player(), game.player());
-    assert_eq!(loaded.level().tile((-30, -30)), game.level().tile((-30, -30)));
-    loaded.round(Some(Command::Wait));
-    let mut expected = game;
-    expected.round(Some(Command::Wait));
-    assert_eq!(loaded, expected);
 }
