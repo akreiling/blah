@@ -57,6 +57,7 @@ const HP: u32 = 0xd0_48_48;
 const FOCUS: u32 = 0x5c_8c_f0;
 const CLOCK: u32 = 0x8c_c0_6a;
 const EMPTY_BAR: u32 = 0x20_22_2a;
+const CAVE_LIGHT: u32 = 0x0c_23_20;
 
 /// The one window's view.
 pub struct IsleView {
@@ -477,7 +478,7 @@ impl IsleView {
             .child(pair("Bow", bow_text(p)))
             .child(pair("Worn", worn_text(p)))
             .child(dim_line_owned(practice_text(p)));
-        if let Some(states) = states_text(p) {
+        if let Some(states) = states_text(game) {
             panel = panel.child(div().h(px(LINE)).text_color(rgb(HEADING)).child(states));
         }
         panel = panel.child(rule()).child(pair("Place", place_text(game)));
@@ -508,7 +509,7 @@ impl IsleView {
         for s in sighted.iter().take(if sighted.iter().any(|s| s.creature.wild.is_some()) { 3 } else { 6 }) {
             let c = s.creature;
             let stats = c.stats();
-            if let Some(phenotype) = c.phenotype() {
+            if c.phenotype().is_some() {
                 list = list
                     .child(
                         div()
@@ -517,7 +518,9 @@ impl IsleView {
                             .text_color(rgb(creature_color(c.kind, c.hunting)))
                             .child(format!("{} {}", s.label, stats.name)),
                     )
-                    .child(dim_line_owned(format!("  {} · {}", sight_notes(p, c), phenotype.temperament.word())));
+                    .children(wild_sight_lines(p, c).into_iter().map(|line| {
+                        div().min_h(px(LINE)).flex_none().text_size(px(12.0)).text_color(rgb(DIM)).child(line)
+                    }));
                 continue;
             }
             list = list.child(
@@ -559,7 +562,7 @@ impl IsleView {
             panel.push(format!("Bow {}", bow_text(p)));
             panel.push(format!("Worn {}", worn_text(p)));
             panel.push(practice_text(p));
-            panel.extend(states_text(p));
+            panel.extend(states_text(game));
             panel.push(format!("Place {}", place_text(game)));
             let number = game.round_number() + 1;
             match self.round {
@@ -579,9 +582,9 @@ impl IsleView {
                 panel.push("Nothing stirs.".into());
             }
             for s in sighted.iter().take(if sighted.iter().any(|s| s.creature.wild.is_some()) { 3 } else { 6 }) {
-                if let Some(phenotype) = s.creature.phenotype() {
+                if s.creature.phenotype().is_some() {
                     panel.push(format!("{} {}", s.label, s.creature.stats().name));
-                    panel.push(format!("  {} · {}", sight_notes(p, s.creature), phenotype.temperament.word()));
+                    panel.extend(wild_sight_lines(p, s.creature));
                 } else {
                     panel.push(format!("{} {} {}", s.label, s.creature.stats().name, sight_notes(p, s.creature)));
                 }
@@ -653,7 +656,7 @@ fn cell(game: &Game, pos: Pos, labels: &[(Pos, char)]) -> (String, u32, Option<u
     let back = match level.zone(pos) {
         Zone::Shop => Some(0x1a_14_0a),
         Zone::Temple => Some(0x10_12_20),
-        Zone::Open => None,
+        Zone::Open => (visible && game.illuminated(pos)).then_some(CAVE_LIGHT),
     };
     if pos == me {
         return ("@ ".into(), YOU, back);
@@ -736,7 +739,8 @@ fn worn_text(p: &Player) -> String {
     }
 }
 
-fn states_text(p: &Player) -> Option<String> {
+fn states_text(game: &Game) -> Option<String> {
+    let p = game.player();
     let mut states = Vec::new();
     if let Some(spell) = p.chanted {
         states.push(format!("chanted {}", spell.name()));
@@ -746,6 +750,9 @@ fn states_text(p: &Player) -> Option<String> {
     }
     if p.hidden {
         states.push("hidden".into());
+    }
+    if game.illuminated(p.pos) {
+        states.push("lit · no hiding".into());
     }
     (!states.is_empty()).then(|| states.join(" · "))
 }
@@ -772,6 +779,19 @@ fn sight_notes(p: &Player, c: &Creature) -> String {
         notes.push("hunting".into());
     }
     notes.join(" · ")
+}
+
+/// Shared by the visual panel and text inspection, so cues cannot drift between them.
+fn wild_sight_lines(p: &Player, c: &Creature) -> Vec<String> {
+    let mut lines = vec![format!("  {} · {}", sight_notes(p, c), c.phenotype().unwrap().temperament.word())];
+    let traits = c.cave_traits();
+    if traits.tremorsense {
+        lines.push("  tremorsense · quiet steps help".into());
+    }
+    if traits.luminous {
+        lines.push("  luminous · spoils nearby hiding".into());
+    }
+    lines
 }
 
 fn initial(kind: Kind) -> char {
@@ -1247,6 +1267,59 @@ mod tests {
         save["creatures"][0]["pos"] = serde_json::json!(far);
         game = serde_json::from_value(save).unwrap();
         assert!(sprite_creature(&game, far).is_none());
+    }
+
+    fn cave_encounter(covering: f32) -> Game {
+        let mut save = serde_json::to_value(made(7)).unwrap();
+        save["player"]["pos"] = serde_json::json!(made(7).level().stairs_down.unwrap());
+        let mut game: Game = serde_json::from_value(save).unwrap();
+        game.round(Some(Command::Down));
+        let level = game.level();
+        let at = (1..31)
+            .flat_map(|y| (1..62).map(move |x| (x, y)))
+            .find(|&(x, y)| [(x, y), (x + 1, y)].into_iter().all(|p| level.tile(p).walkable() && !level.safe(p)))
+            .unwrap();
+        let isle_core::LevelId::Deep(town, depth) = game.player().at else { unreachable!() };
+        let clade = blah_core::clades(7)[0].clone();
+        let mut genome = clade.base;
+        genome.set(blah_core::Gene::Covering, covering);
+        genome.set(blah_core::Gene::Cold, 0.8);
+        genome.set(blah_core::Gene::Limbs, 0.9);
+        let wild = isle_core::Wildlife {
+            lineage: isle_core::Lineage::Deep { town, depth, clade: clade.id },
+            name: "Test cave creature".into(),
+            genome,
+        };
+        let mut save = serde_json::to_value(&game).unwrap();
+        let mut creature = serde_json::to_value(encounter(7, Kind::Rat, 1, 20)).unwrap()["creatures"][0].clone();
+        creature["kind"] = serde_json::json!(Kind::Wild);
+        creature["wild"] = serde_json::to_value(wild).unwrap();
+        creature["at"] = save["player"]["at"].clone();
+        creature["pos"] = serde_json::json!(at);
+        creature["home"] = creature["pos"].clone();
+        save["creatures"] = serde_json::json!([creature]);
+        save["player"]["pos"] = serde_json::json!((at.0 + 1, at.1));
+        serde_json::from_value(save).unwrap()
+    }
+
+    #[test]
+    fn cave_cues_explain_traits_and_light_matches_visible_cells_and_player_status() {
+        let glowing = cave_encounter(0.95);
+        let c = &glowing.creatures()[0];
+        assert!(wild_sight_lines(glowing.player(), c).iter().any(|l| l.contains("luminous · spoils nearby hiding")));
+        assert_eq!(states_text(&glowing).as_deref(), Some("lit · no hiding"));
+        assert_eq!(cell(&glowing, glowing.player().pos, &[]).2, Some(CAVE_LIGHT));
+        assert_eq!(cell(&glowing, c.pos, &[(c.pos, 'A')]).2, Some(CAVE_LIGHT));
+        let listener = cave_encounter(0.5);
+        let c = &listener.creatures()[0];
+        assert!(wild_sight_lines(listener.player(), c).iter().any(|l| l.contains("tremorsense · quiet steps help")));
+        assert_eq!(states_text(&listener), None);
+        assert_eq!(cell(&listener, listener.player().pos, &[]).2, None);
+        for game in [&glowing, &listener] {
+            for line in wild_sight_lines(game.player(), &game.creatures()[0]) {
+                assert!(line.chars().count() <= 40, "trait cues fit the panel at 12pt");
+            }
+        }
     }
 
     #[test]

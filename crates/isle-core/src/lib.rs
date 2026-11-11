@@ -24,4 +24,4 @@ pub use game::{Creature, Game, Line, Phase, Pile, Player, SACK, SIGHT, Sighted, 
 pub use map::{LevelId, Place, Pos, Terrain, Tile, Zone, distance, line};
 pub use practice::{Practice, Practices};
 pub use town::Town;
-pub use wildlife::{DEEP, Lineage, Wildlife};
+pub use wildlife::{CaveTraits, DEEP, Lineage, Wildlife};

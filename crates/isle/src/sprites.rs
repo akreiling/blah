@@ -61,7 +61,7 @@ impl SpriteCache {
     fn get_wild(&mut self, id: u32, wild: &Wildlife) -> Option<Arc<RenderImage>> {
         if !self.images.contains_key(&id) {
             let sprite = self.draw(wild)?;
-            self.images.insert(id, enlarge(&sprite, self.factor));
+            self.images.insert(id, enlarge(&sprite, self.factor, wild.cave_traits().luminous));
         }
         self.used.insert(id);
         self.images.get(&id).cloned()
@@ -92,12 +92,18 @@ impl SpriteCache {
 }
 
 /// Nearest-neighbor device pixels, converted from straight RGBA to the straight BGRA GPUI expects.
-fn enlarge(sprite: &Sprite, factor: usize) -> Arc<RenderImage> {
+fn enlarge(sprite: &Sprite, factor: usize, luminous: bool) -> Arc<RenderImage> {
     let side = SPRITE_SIZE * factor;
     let mut bytes = Vec::with_capacity(side * side * 4);
     for y in 0..side {
         for x in 0..side {
-            let [r, g, b, a] = sprite.pixel(x / factor, y / factor);
+            let [mut r, mut g, mut b, a] = sprite.pixel(x / factor, y / factor);
+            if luminous && a != 0 {
+                // Emission lifts the palette toward a pale green without changing silhouette or alpha.
+                r += (255 - r) / 5;
+                g += (255 - g) / 3;
+                b += (255 - b) / 4;
+            }
             bytes.extend_from_slice(&[b, g, r, a]);
         }
     }
@@ -189,7 +195,7 @@ mod tests {
         let wild = wildlife(7, true);
         let sprite = SpriteCache::new(7).draw(&wild).unwrap();
         for factor in [1, 2, 3, 4] {
-            let image = enlarge(&sprite, factor);
+            let image = enlarge(&sprite, factor, false);
             let bytes = image.as_bytes(0).unwrap();
             let side = SPRITE_SIZE * factor;
             assert_eq!(image.size(0), gpui::size(gpui::DevicePixels(side as i32), gpui::DevicePixels(side as i32)));
@@ -201,5 +207,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn emission_brightens_only_opaque_pixels_and_preserves_the_genome_silhouette() {
+        let mut wild = wildlife(7, true);
+        wild.genome.set(Gene::Covering, 0.95);
+        wild.genome.set(Gene::Cold, 0.8);
+        assert!(wild.cave_traits().luminous);
+        let mut cache = SpriteCache::new(7);
+        let sprite = cache.draw(&wild).unwrap();
+        let image = cache.get_wild(1, &wild).unwrap();
+        let bytes = image.as_bytes(0).unwrap();
+        let mut lit = 0;
+        for y in 0..SPRITE_SIZE {
+            for x in 0..SPRITE_SIZE {
+                let [r, g, b, a] = sprite.pixel(x, y);
+                let at = (y * SPRITE_SIZE + x) * 4;
+                let expected = if a == 0 {
+                    [b, g, r, a]
+                } else {
+                    lit += 1;
+                    [b + (255 - b) / 4, g + (255 - g) / 3, r + (255 - r) / 5, a]
+                };
+                assert_eq!(&bytes[at..at + 4], &expected);
+            }
+        }
+        assert!(lit > 0 && lit < SPRITE_SIZE * SPRITE_SIZE);
+        let restored: Wildlife = serde_json::from_str(&serde_json::to_string(&wild).unwrap()).unwrap();
+        assert_eq!(image.as_bytes(0), cache.get_wild(2, &restored).unwrap().as_bytes(0));
     }
 }

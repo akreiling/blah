@@ -1,11 +1,11 @@
 //! The game: a character, the creatures, what lies on the ground, and the round that resolves a command.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use blah_core::{Phenotype, Temperament};
 use serde::{Deserialize, Serialize};
 
-use crate::command::{self, Command, Dir, Instant, Parsed, Target};
+use crate::command::{self, Command, Dir, Instant, MAX_STEPS, Parsed, Target};
 use crate::data::{Armor, Bow, Item, Kind, SHOP, Spell, Stats, Weapon, sale_price, treasure};
 use crate::deep::Deep;
 use crate::map::{LevelId, Place, Pos, Terrain, Tile, Zone, distance};
@@ -24,6 +24,12 @@ const PATIENCE: u32 = 12;
 const WILD_LEASH: i32 = 7;
 /// How far from home Deep life follows you.
 const DEEP_LEASH: i32 = 14;
+/// A loud footstep can be followed along at most five traversable Deep cells.
+const TREMOR_LOUD_RANGE: usize = 5;
+/// A footstep taken while still hidden carries only two traversable cells.
+const TREMOR_QUIET_RANGE: usize = 2;
+/// Dim cave light reaches two cells from its living source.
+const CAVE_LIGHT_RADIUS: i32 = 2;
 /// Rounds before an emptied spawn point raises another creature.
 const RESPAWN: u64 = 60;
 /// Rounds before a Deep's den has a new keeper.
@@ -290,10 +296,13 @@ pub struct Creature {
     pub home: Pos,
     /// Whether it is hunting you.
     pub hunting: bool,
-    /// Where it last saw you.
+    /// Where it last saw you or heard one of your footsteps.
     pub last_seen: Option<Pos>,
-    /// Rounds since it last saw you.
+    /// Rounds since it last saw or heard you.
     pub lost: u32,
+    /// Its remembered position came from tremorsense, not sight or provocation.
+    #[serde(default)]
+    listening: bool,
     /// Rounds it stays stunned.
     #[serde(default)]
     pub stunned: u32,
@@ -324,6 +333,11 @@ impl Creature {
     /// The individual phenotype, if this creature comes from evolved life.
     pub fn phenotype(&self) -> Option<Phenotype> {
         self.wild.as_ref().map(Wildlife::phenotype)
+    }
+
+    /// Cave adaptations inherited from this individual's Deep lineage and phenotype.
+    pub fn cave_traits(&self) -> crate::wildlife::CaveTraits {
+        self.wild.as_ref().map_or_else(crate::wildlife::CaveTraits::default, Wildlife::cave_traits)
     }
 
     fn speed(&self) -> i32 {
@@ -389,6 +403,14 @@ struct SpawnState {
     ready: u64,
 }
 
+/// One accepted player step, retained through the round so tremorsense can follow its real source.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Footstep {
+    at: LevelId,
+    pos: Pos,
+    quiet: bool,
+}
+
 /// A creature in sight, with the letter commands may name it by.
 #[derive(Clone, Copy, Debug)]
 pub struct Sighted<'a> {
@@ -417,6 +439,9 @@ pub struct Game {
     deeps: Vec<DeepMemory>,
     /// On the surface, 16×16 chunks of remembered cells, including negative coordinates.
     explored: BTreeMap<i32, BTreeMap<i32, [u64; 4]>>,
+    /// At most three accepted player steps from the current/most recently resolved round.
+    #[serde(default)]
+    footsteps: Vec<Footstep>,
     log: Vec<Line>,
     log_total: u64,
     wild_ready: u64,
@@ -447,6 +472,7 @@ impl Game {
             spawns: Vec::new(),
             deeps: Vec::new(),
             explored: BTreeMap::new(),
+            footsteps: Vec::new(),
             log: Vec::new(),
             log_total: 0,
             wild_ready: 0,
@@ -506,6 +532,30 @@ impl Game {
     /// Whether the character sees `pos` now.
     pub fn sees(&self, pos: Pos) -> bool {
         self.level().sees(self.player.pos, pos, SIGHT)
+    }
+
+    /// Whether living Deep life lights this walkable cell from within two cells and clear line of sight.
+    pub fn illuminated(&self, pos: Pos) -> bool {
+        if !matches!(self.player.at, LevelId::Deep(..)) {
+            return false;
+        }
+        let level = self.level();
+        level.tile(pos).walkable()
+            && self.creatures.iter().any(|creature| {
+                creature.at == self.player.at
+                    && creature.hp > 0
+                    && creature.cave_traits().luminous
+                    && level.tile(creature.pos).walkable()
+                    && distance(creature.pos, pos) <= CAVE_LIGHT_RADIUS
+                    && level.sees(creature.pos, pos, CAVE_LIGHT_RADIUS)
+            })
+    }
+
+    fn enforce_light(&mut self) {
+        if self.player.hidden && self.illuminated(self.player.pos) {
+            self.player.hidden = false;
+            self.say(Tone::Info, "The glow drives you out of the shadows.");
+        }
     }
 
     /// The log, oldest first; at most the last few hundred lines.
@@ -698,6 +748,7 @@ impl Game {
         if self.phase != Phase::Play {
             return;
         }
+        self.footsteps.clear();
         let tracking: Vec<u32> =
             self.creatures.iter().filter(|c| c.hunting && c.last_seen.is_some()).map(|c| c.id).collect();
         let start = self.player.pos;
@@ -713,6 +764,7 @@ impl Game {
             self.towns.ensure(self.seed, self.terrain, self.player.pos);
         }
         self.bind_temple();
+        self.enforce_light();
         self.populate_surface();
         self.creatures_act();
         if self.player.hp <= 0 {
@@ -776,6 +828,7 @@ impl Game {
     }
 
     fn walk(&mut self, steps: &[Dir]) {
+        let steps = &steps[..steps.len().min(MAX_STEPS)];
         for (i, dir) in steps.iter().enumerate() {
             let (dx, dy) = dir.delta();
             let next = (self.player.pos.0 + dx, self.player.pos.1 + dy);
@@ -793,6 +846,10 @@ impl Game {
             if self.player.hidden && !self.rng.chance(70 + modifier(self.player.dex) * 5) {
                 self.player.hidden = false;
                 self.say(Tone::Info, "You step out of the shadows.");
+            }
+            self.enforce_light();
+            if self.footsteps.len() < MAX_STEPS {
+                self.footsteps.push(Footstep { at: self.player.at, pos: next, quiet: self.player.hidden });
             }
             if let Some(pile) = self.pile_at(next) {
                 let items: Vec<String> = pile.items.iter().map(|i| i.name()).collect();
@@ -1088,6 +1145,10 @@ impl Game {
     }
 
     fn hide(&mut self) {
+        if self.illuminated(self.player.pos) {
+            self.say(Tone::Info, "The glow drives away the shadows; there is nowhere to hide.");
+            return;
+        }
         if let Some(c) = self.hunter_adjacent() {
             let name = c.stats().name;
             self.say(Tone::Info, format!("The {name} is watching you too closely."));
@@ -1101,6 +1162,7 @@ impl Game {
                 c.hunting = false;
                 c.last_seen = None;
                 c.lost = 0;
+                c.listening = false;
                 c.revealed_by_attack = false;
             }
             self.say(Tone::Info, "You melt into the shadows.");
@@ -1231,14 +1293,84 @@ impl Game {
     }
 
     fn creature_can_sense(&self, index: usize, target: Pos) -> bool {
+        self.creature_can_see(index, target)
+            || self.footsteps.iter().any(|step| step.pos == target && self.can_hear_footstep(index, step).is_some())
+    }
+
+    fn creature_can_see(&self, index: usize, target: Pos) -> bool {
         let creature = &self.creatures[index];
         let leash = if creature.at == LevelId::Surface { WILD_LEASH } else { DEEP_LEASH };
-        if distance(target, creature.home) > leash + 1 || (creature.phenotype().is_some() && self.level().safe(target))
+        if creature.at != self.player.at
+            || distance(target, creature.home) > leash + 1
+            || (creature.phenotype().is_some() && self.level().safe(target))
         {
             return false;
         }
         let notice = creature.phenotype().map_or(NOTICE, |p| p.sense as i32);
         distance(creature.pos, target) <= notice && self.level().sees(creature.pos, target, notice)
+    }
+
+    /// The traversable path to a heard step, bounded to its audible range or the loud-footstep limit.
+    fn tremor_route(&self, index: usize, goal: Pos, max_distance: usize) -> Option<(usize, Option<Pos>)> {
+        let creature = &self.creatures[index];
+        if creature.at != self.player.at
+            || !matches!(creature.at, LevelId::Deep(..))
+            || self.level().safe(goal)
+            || self.level().zone(goal) != Zone::Open
+            || !self.level().tile(goal).walkable()
+        {
+            return None;
+        }
+        let leash = if creature.at == LevelId::Surface { WILD_LEASH } else { DEEP_LEASH };
+        let leash_limit = leash.max(distance(creature.pos, creature.home));
+        let goal_occupied = goal == self.player.pos
+            || self
+                .creatures
+                .iter()
+                .any(|other| other.id != creature.id && other.at == self.player.at && other.pos == goal);
+        let mut queue = VecDeque::from([(creature.pos, 0_usize, None)]);
+        let mut visited = BTreeSet::from([creature.pos]);
+        while let Some((pos, steps, first)) = queue.pop_front() {
+            if pos == goal {
+                return Some((steps, first));
+            }
+            if goal_occupied && distance(pos, goal) <= 1 {
+                return Some((steps + 1, first));
+            }
+            if steps >= max_distance {
+                continue;
+            }
+            for dir in [Dir::N, Dir::S, Dir::E, Dir::W, Dir::Ne, Dir::Nw, Dir::Se, Dir::Sw] {
+                let (dx, dy) = dir.delta();
+                let next = (pos.0 + dx, pos.1 + dy);
+                if distance(next, creature.home) > leash_limit
+                    || !self.open_for_creature(index, next)
+                    || !visited.insert(next)
+                {
+                    continue;
+                }
+                let first = first.or(Some(next));
+                queue.push_back((next, steps + 1, first));
+            }
+        }
+        None
+    }
+
+    fn can_hear_footstep(&self, index: usize, step: &Footstep) -> Option<usize> {
+        let creature = &self.creatures[index];
+        let range = if step.quiet { TREMOR_QUIET_RANGE } else { TREMOR_LOUD_RANGE };
+        if step.at != creature.at
+            || !creature.cave_traits().tremorsense
+            || distance(step.pos, creature.home) > DEEP_LEASH + 1
+        {
+            return None;
+        }
+        self.tremor_route(index, step.pos, range).and_then(|(distance, _)| (distance <= range).then_some(distance))
+    }
+
+    /// The latest real step this tremorsensing creature can hear this round.
+    fn heard_footstep(&self, index: usize) -> Option<Pos> {
+        self.footsteps.iter().rev().find_map(|step| self.can_hear_footstep(index, step).map(|_| step.pos))
     }
 
     fn learn_unseen_movement(&mut self) {
@@ -1252,6 +1384,7 @@ impl Game {
                     && !c.phenotype().is_some_and(|p| p.temperament == Temperament::Skittish)
                     && c.teaches_anything()
                     && self.creature_can_sense(*i, self.player.pos)
+                    && self.heard_footstep(*i).is_none()
             })
             .map(|(_, c)| c.id)
             .collect();
@@ -1365,6 +1498,7 @@ impl Game {
         c.hunting = true;
         c.lost = 0;
         c.last_seen = Some(self.player.pos);
+        c.listening = false;
     }
 
     fn gain_xp(&mut self, xp: u32) {
@@ -1687,6 +1821,7 @@ impl Game {
                 hunting: false,
                 last_seen: None,
                 lost: 0,
+                listening: false,
                 stunned: 0,
                 learning_damage_left: hp,
                 vitality_lessons_left: hp,
@@ -1726,6 +1861,9 @@ impl Game {
                     return;
                 }
                 self.creature_turn(index);
+                if self.player.hp > 0 {
+                    self.enforce_light();
+                }
             }
         }
     }
@@ -1740,37 +1878,42 @@ impl Game {
         let leash = if self.player.at == LevelId::Surface { WILD_LEASH } else { DEEP_LEASH };
         let home = self.creatures[index].home;
         let in_reach = distance(me, home) <= leash + 1 && (phenotype.is_none() || !level.safe(me));
-        let notice = phenotype.map_or(NOTICE, |p| p.sense as i32);
-        let in_sight = in_reach && level.sees(pos, me, notice);
+        let in_sight = self.creature_can_see(index, me);
         let detects = in_sight && (!self.player.hidden || (close && self.rng.chance(30)));
-        let provoked = self.creatures[index].hunting;
+        let heard_pos = self.heard_footstep(index);
+        let provoked = self.creatures[index].hunting && !self.creatures[index].listening;
         let skittish = phenotype.is_some_and(|p| p.temperament == Temperament::Skittish);
+        let territorial = phenotype.is_some_and(|p| p.temperament == Temperament::Territorial);
+        let sound_notices = heard_pos.filter(|&source| !territorial || provoked || distance(source, home) <= 3);
         if skittish && !detects {
             // Losing the threat must not turn flight into a hunt back toward its last position.
             self.creatures[index].hunting = false;
             self.creatures[index].last_seen = None;
+            self.creatures[index].listening = false;
         }
-        if skittish && detects {
+        if skittish && (detects || sound_notices.is_some()) {
+            let threat = if detects { me } else { sound_notices.expect("a sound was heard") };
             let best = [Dir::N, Dir::S, Dir::E, Dir::W, Dir::Ne, Dir::Nw, Dir::Se, Dir::Sw]
                 .into_iter()
                 .map(|d| (pos.0 + d.delta().0, pos.1 + d.delta().1))
                 .filter(|&p| self.open_for_creature(index, p) && distance(p, home) <= WILD_LEASH)
-                .max_by_key(|&p| distance(p, me));
+                .max_by_key(|&p| distance(p, threat));
             if let Some(next) = best
-                && distance(next, me) > distance(pos, me)
+                && distance(next, threat) > distance(pos, threat)
             {
                 self.creatures[index].pos = next;
-            } else if provoked && close {
+            } else if detects && provoked && close {
                 self.creature_strike(index, stats.hit, stats.damage, None);
             }
             return;
         }
-        let territorial = phenotype.is_some_and(|p| p.temperament == Temperament::Territorial);
         let notices = detects && (!territorial || provoked || distance(me, home) <= 3);
-        if !in_reach && self.creatures[index].hunting {
+        let listens = !notices && sound_notices.is_some();
+        if !in_reach && !listens && self.creatures[index].hunting {
             let c = &mut self.creatures[index];
             c.hunting = false;
             c.last_seen = None;
+            c.listening = false;
         }
         if notices {
             if self.player.hidden {
@@ -1781,12 +1924,30 @@ impl Game {
             c.hunting = true;
             c.lost = 0;
             c.last_seen = Some(me);
+            c.listening = false;
+        } else if listens {
+            let was_hunting = self.creatures[index].hunting;
+            let source = sound_notices.expect("a sound was heard");
+            let c = &mut self.creatures[index];
+            c.hunting = true;
+            c.lost = 0;
+            c.last_seen = Some(source);
+            c.listening = true;
+            if !was_hunting {
+                let text = if self.sees(pos) {
+                    format!("The {} tracks your footsteps.", stats.name)
+                } else {
+                    "Something tracks your footsteps.".to_owned()
+                };
+                self.say(Tone::Info, text);
+            }
         } else if self.creatures[index].hunting {
             let c = &mut self.creatures[index];
             c.lost += 1;
             if c.lost > PATIENCE {
                 c.hunting = false;
                 c.last_seen = None;
+                c.listening = false;
             }
         }
         if stats.regen > 0 {
@@ -1803,8 +1964,14 @@ impl Game {
         {
             self.creature_strike(index, stats.hit, damage, Some("arrow"));
         } else if c.hunting {
-            let goal = c.last_seen.unwrap_or(me);
-            self.creature_step(index, goal);
+            if c.listening {
+                if let Some(goal) = c.last_seen {
+                    self.tremor_investigate(index, goal);
+                }
+            } else {
+                let goal = c.last_seen.unwrap_or(me);
+                self.creature_step(index, goal);
+            }
         } else if distance(pos, home) > 4 {
             self.creature_step(index, home);
         } else if self.rng.chance(30) {
@@ -1908,6 +2075,12 @@ impl Game {
         }
     }
 
+    fn tremor_investigate(&mut self, index: usize, goal: Pos) {
+        if let Some((_, Some(next))) = self.tremor_route(index, goal, TREMOR_LOUD_RANGE) {
+            self.creatures[index].pos = next;
+        }
+    }
+
     fn die(&mut self) {
         let p = &mut self.player;
         p.deaths += 1;
@@ -1927,6 +2100,7 @@ impl Game {
         for c in &mut self.creatures {
             c.hunting = false;
             c.last_seen = None;
+            c.listening = false;
         }
         self.say(Tone::Death, "You have died!");
         self.say(Tone::System, "You wake on the temple floor. Your gold lies where you fell.");
@@ -2020,6 +2194,7 @@ impl Game {
             hunting: false,
             last_seen: None,
             lost: 0,
+            listening: false,
             stunned: 0,
             learning_damage_left: hp,
             vitality_lessons_left: hp,
@@ -2081,6 +2256,7 @@ impl Game {
             hunting: false,
             last_seen: None,
             lost: 0,
+            listening: false,
             stunned: 0,
             learning_damage_left: hp,
             vitality_lessons_left: hp,
@@ -2103,6 +2279,7 @@ impl Game {
 #[cfg(test)]
 mod wildlife_tests {
     use super::*;
+    use crate::wildlife::{CaveTraits, Lineage};
     use blah_core::{Genome, World};
 
     fn made() -> Game {
@@ -2145,6 +2322,489 @@ mod wildlife_tests {
         let creature = game.creatures.last_mut().unwrap();
         creature.wild = Some(wild);
         creature.hp = hp;
+    }
+
+    fn cave_game() -> (Game, Town, Deep) {
+        let mut game = made();
+        let town = game.towns.home;
+        let deep = Deep::new(town, 1);
+        game.player.at = deep.level();
+        game.player.pos = deep.stairs();
+        game.clear_creatures();
+        game.player.pos = (0..Deep::HEIGHT)
+            .flat_map(|y| (0..Deep::WIDTH).map(move |x| (x, y)))
+            .find(|&pos| deep.tile(pos) == Tile::Floor && !deep.landing(pos))
+            .expect("a Deep floor outside the landing");
+        (game, town, deep)
+    }
+
+    fn horizontal_run(game: &Game, deep: Deep, len: i32) -> Pos {
+        for y in 0..Deep::HEIGHT {
+            for x in 0..Deep::WIDTH - len {
+                if (x..=x + len).all(|step| {
+                    let pos = (step, y);
+                    game.level().tile(pos) == Tile::Floor && !deep.landing(pos)
+                }) {
+                    return (x, y);
+                }
+            }
+        }
+        panic!("a Deep room contains a horizontal run of {len} floor cells");
+    }
+
+    fn floor_path_distance(deep: Deep, from: Pos, to: Pos, limit: usize) -> Option<usize> {
+        let mut queue = VecDeque::from([(from, 0_usize)]);
+        let mut visited = BTreeSet::from([from]);
+        while let Some((pos, steps)) = queue.pop_front() {
+            if pos == to {
+                return Some(steps);
+            }
+            if steps == limit {
+                continue;
+            }
+            for dir in [Dir::N, Dir::S, Dir::E, Dir::W, Dir::Ne, Dir::Nw, Dir::Se, Dir::Sw] {
+                let (dx, dy) = dir.delta();
+                let next = (pos.0 + dx, pos.1 + dy);
+                if deep.tile(next) == Tile::Floor && !deep.landing(next) && visited.insert(next) {
+                    queue.push_back((next, steps + 1));
+                }
+            }
+        }
+        None
+    }
+
+    fn corner_step(game: &Game, deep: Deep, desired: usize) -> (Pos, Pos, Pos, Dir) {
+        for y in 1..Deep::HEIGHT - 1 {
+            for x in 1..Deep::WIDTH - 1 {
+                let heard = (x, y);
+                if deep.tile(heard) != Tile::Floor || deep.landing(heard) {
+                    continue;
+                }
+                let Some(start) =
+                    [Dir::N, Dir::S, Dir::E, Dir::W, Dir::Ne, Dir::Nw, Dir::Se, Dir::Sw].into_iter().find_map(|dir| {
+                        let (dx, dy) = dir.delta();
+                        let from = (heard.0 - dx, heard.1 - dy);
+                        (from != heard && deep.tile(from) == Tile::Floor && !deep.landing(from)).then_some((from, dir))
+                    })
+                else {
+                    continue;
+                };
+                for cy in 1..Deep::HEIGHT - 1 {
+                    for cx in 1..Deep::WIDTH - 1 {
+                        let creature = (cx, cy);
+                        let score =
+                            |pos: Pos| (distance(pos, heard), (pos.0 - heard.0).abs() + (pos.1 - heard.1).abs());
+                        let greedy_progress = [Dir::N, Dir::S, Dir::E, Dir::W, Dir::Ne, Dir::Nw, Dir::Se, Dir::Sw]
+                            .into_iter()
+                            .any(|dir| {
+                                let (dx, dy) = dir.delta();
+                                let next = (creature.0 + dx, creature.1 + dy);
+                                deep.tile(next) == Tile::Floor
+                                    && !deep.landing(next)
+                                    && next != heard
+                                    && score(next) < score(creature)
+                            });
+                        if deep.tile(creature) != Tile::Floor
+                            || deep.landing(creature)
+                            || creature == start.0
+                            || game.level().sees(creature, heard, SIGHT)
+                            || game.level().sees(creature, start.0, SIGHT)
+                            || (desired >= 4 && greedy_progress)
+                            || floor_path_distance(deep, creature, heard, desired).is_none_or(|d| d != desired)
+                        {
+                            continue;
+                        }
+                        return (creature, start.0, heard, start.1);
+                    }
+                }
+            }
+        }
+        panic!("a Deep corner has a floor route of {desired} cells but no line of sight");
+    }
+
+    fn deep_genome(limbs: f32, covering: f32, cold: f32) -> Genome {
+        Genome::new([0.5, limbs, covering, 0.5, cold, 0.1, 0.9, 0.2])
+    }
+
+    fn add_deep(game: &mut Game, pos: Pos, genome: Genome) -> usize {
+        let LevelId::Deep(town, depth) = game.player.at else { panic!("Deep fixture") };
+        let mut wild = game.life.draw_deep(game.seed, town, depth, &mut blah_core::Rng::new(19));
+        wild.genome = genome;
+        let hp = wild.stats().hp;
+        let id = game.place(Kind::Wild, pos);
+        let index = game.creatures.iter().position(|creature| creature.id == id).unwrap();
+        let creature = &mut game.creatures[index];
+        creature.wild = Some(wild);
+        creature.hp = hp;
+        creature.learning_damage_left = hp;
+        creature.vitality_lessons_left = hp;
+        index
+    }
+
+    #[test]
+    fn cave_traits_are_deep_only_expressions_of_body_genes() {
+        let (mut game, town, _) = cave_game();
+        let clade = game.life.deep_species(game.seed, town, 1)[0].clade;
+        let deep =
+            |genome| Wildlife { lineage: Lineage::Deep { town, depth: 1, clade }, name: "fixture".into(), genome };
+        assert!(deep(deep_genome(0.6, 0.5, 0.0)).cave_traits().tremorsense, "six-legged chitin");
+        assert!(deep(deep_genome(0.6, 0.7, 0.0)).cave_traits().tremorsense, "six-legged scales");
+        assert!(!deep(deep_genome(0.59, 0.5, 0.0)).cave_traits().tremorsense, "four legs are not enough");
+        assert!(!deep(deep_genome(0.6, 0.1, 0.0)).cave_traits().tremorsense, "fur does not tremor-sense");
+
+        let glowing = deep(deep_genome(0.0, 0.9, 0.5));
+        assert_eq!(glowing.cave_traits(), CaveTraits { tremorsense: false, luminous: true });
+        assert!(!deep(deep_genome(0.0, 0.9, 0.49)).cave_traits().luminous, "cold threshold is inclusive at 0.5");
+        assert!(!deep(deep_genome(0.0, 0.7, 0.9)).cave_traits().luminous, "only slime glows");
+        assert_eq!(CaveTraits::default(), CaveTraits { tremorsense: false, luminous: false });
+
+        let mut surface = game.life.draw(game.seed, (0, 0), &mut blah_core::Rng::new(20));
+        surface.genome = deep_genome(0.6, 0.9, 0.9);
+        assert_eq!(surface.cave_traits(), CaveTraits::default());
+    }
+
+    #[test]
+    fn evolved_deep_pools_express_both_cave_traits_across_floors_and_seeds() {
+        let (mut saw_tremorsense, mut saw_luminous, mut saw_neither) = (false, false, false);
+        for seed in [3, 7, 42, 91] {
+            let mut game = Game::new(seed);
+            let town = game.towns.home;
+            for depth in [1, 4, 8] {
+                let species = game.life.deep_species(seed, town, depth);
+                for species in species {
+                    for &genome in &species.pool {
+                        let wild = Wildlife {
+                            lineage: Lineage::Deep { town, depth, clade: species.clade },
+                            name: species.name.clone(),
+                            genome,
+                        };
+                        let traits = wild.cave_traits();
+                        saw_tremorsense |= traits.tremorsense;
+                        saw_luminous |= traits.luminous;
+                        saw_neither |= !traits.tremorsense && !traits.luminous;
+                        assert!(!(traits.tremorsense && traits.luminous), "each trait is not universal");
+                    }
+                }
+            }
+        }
+        assert!(saw_tremorsense && saw_luminous && saw_neither);
+    }
+
+    #[test]
+    fn cave_light_is_local_occluded_living_and_confined_to_its_floor() {
+        let (mut game, town, deep) = cave_game();
+        let (x, y) = horizontal_run(&game, deep, 4);
+        let source = (x, y);
+        let near = (x + 2, y);
+        let far = (x + 3, y);
+        let index = add_deep(&mut game, source, deep_genome(0.1, 0.9, 0.5));
+        assert!(game.creatures[index].cave_traits().luminous);
+        assert!(game.illuminated(near));
+        assert!(game.illuminated(near), "lighting queries are stable and side-effect free");
+        assert!(!game.illuminated(far), "light ends at radius two");
+
+        let blocked = (1..Deep::HEIGHT - 1)
+            .flat_map(|by| (1..Deep::WIDTH - 1).map(move |bx| (bx, by)))
+            .find_map(|wall| {
+                (1..Deep::HEIGHT - 1)
+                    .flat_map(|ty| (1..Deep::WIDTH - 1).map(move |tx| (tx, ty)))
+                    .find(|&target| {
+                        distance(wall, target) == 2
+                            && deep.tile(wall).walkable()
+                            && deep.tile(target).walkable()
+                            && !deep.landing(wall)
+                            && !deep.landing(target)
+                            && !game.level().sees(wall, target, CAVE_LIGHT_RADIUS)
+                    })
+                    .map(|target| (wall, target))
+            })
+            .expect("a Deep wall separates two nearby floor cells");
+        game.creatures[index].pos = blocked.0;
+        assert!(!game.illuminated(blocked.1), "walls block light around corners");
+        let wall = (0..Deep::HEIGHT)
+            .flat_map(|wy| (0..Deep::WIDTH).map(move |wx| (wx, wy)))
+            .find(|&pos| !game.level().tile(pos).walkable())
+            .unwrap();
+        assert!(!game.illuminated(wall), "only walkable cells are illuminated");
+
+        game.creatures[index].pos = source;
+        game.creatures[index].hp = 0;
+        assert!(!game.illuminated(near), "dead life gives no light");
+        game.creatures[index].hp = 1;
+        game.player.at = LevelId::Deep(town, 2);
+        assert!(!game.illuminated(near), "light does not cross floors");
+        game.player.at = LevelId::Surface;
+        assert!(!game.illuminated(near), "cave light does not reach the surface");
+    }
+
+    #[test]
+    fn cave_light_blocks_hiding_breaks_concealment_and_can_be_left() {
+        let (mut game, _, deep) = cave_game();
+        let (x, y) = horizontal_run(&game, deep, 4);
+        let source = (x, y);
+        let index = add_deep(&mut game, source, deep_genome(0.1, 0.9, 0.5));
+        game.creatures[index].stunned = 100;
+        game.player.pos = (x + 3, y);
+        game.player.dex = 1_000;
+        game.player.hidden = true;
+
+        game.round(Some(Command::Move(vec![Dir::W])));
+        assert_eq!(game.player.pos, (x + 2, y));
+        assert!(!game.player.hidden, "entering a lit cell reveals the player");
+        assert!(!game.footsteps[0].quiet, "a light-revealed step is noisy");
+        assert!(game.log.iter().any(|line| line.text.contains("glow drives you out")));
+
+        game.round(Some(Command::Hide));
+        assert!(!game.player.hidden, "hiding cannot begin in the light");
+        assert!(game.log.iter().any(|line| line.text.contains("glow drives away the shadows")));
+
+        game.round(Some(Command::Move(vec![Dir::E, Dir::E])));
+        assert_eq!(game.player.pos, (x + 4, y));
+        assert!(!game.illuminated(game.player.pos), "moving out leaves the light radius");
+        game.round(Some(Command::Hide));
+        assert!(game.player.hidden, "hiding works again after leaving the light");
+    }
+
+    #[test]
+    fn a_luminous_creature_approaching_reveals_a_hidden_player_after_its_move() {
+        let (mut game, _, deep) = cave_game();
+        let (x, y) = horizontal_run(&game, deep, 4);
+        game.player.pos = (x, y);
+        game.player.hidden = true;
+        let index = add_deep(&mut game, (x + 3, y), deep_genome(0.1, 0.9, 0.5));
+        game.creatures[index].energy = 9;
+        game.creatures[index].hunting = true;
+        game.creatures[index].last_seen = Some(game.player.pos);
+        assert!(!game.illuminated(game.player.pos));
+
+        game.round(Some(Command::Rest));
+        assert_eq!(game.creatures[index].pos, (x + 2, y));
+        assert!(game.illuminated(game.player.pos));
+        assert!(!game.player.hidden, "newly arrived light reveals before the next creature action");
+        assert!(game.encounter_active(index), "revealing light counts as an active encounter");
+    }
+
+    #[test]
+    fn tremor_investigation_follows_a_route_a_greedy_step_cannot_take() {
+        let (mut game, _, deep) = cave_game();
+        let (creature, start, step, direction) = corner_step(&game, deep, 4);
+        let index = add_deep(&mut game, creature, deep_genome(0.6, 0.5, 0.0));
+        game.player.pos = start;
+        let before = floor_path_distance(deep, creature, step, 5).unwrap();
+        let hp = game.player.hp;
+
+        game.round(Some(Command::Move(vec![direction])));
+        assert!(game.creatures[index].hunting && game.creatures[index].listening);
+        assert_eq!(game.creatures[index].last_seen, Some(step));
+        assert_ne!(game.creatures[index].pos, creature, "BFS moves even where greedy pursuit makes no progress");
+        assert_eq!(floor_path_distance(deep, game.creatures[index].pos, step, 5), Some(before - 1));
+        assert_eq!(game.player.hp, hp, "the route does not authorize an attack through a wall");
+    }
+
+    #[test]
+    fn luminous_life_cannot_enter_or_attack_a_deep_landing() {
+        let (mut game, _, deep) = cave_game();
+        let pair = (0..Deep::HEIGHT)
+            .flat_map(|y| (0..Deep::WIDTH).map(move |x| (x, y)))
+            .find_map(|safe| {
+                if !deep.landing(safe) {
+                    return None;
+                }
+                (0..Deep::HEIGHT)
+                    .flat_map(|y| (0..Deep::WIDTH).map(move |x| (x, y)))
+                    .find(|&source| {
+                        !deep.landing(source)
+                            && deep.tile(source) == Tile::Floor
+                            && distance(source, safe) <= CAVE_LIGHT_RADIUS
+                            && game.level().sees(source, safe, CAVE_LIGHT_RADIUS)
+                    })
+                    .map(|source| (source, safe))
+            })
+            .expect("a corridor can light the edge of a safe landing");
+        let index = add_deep(&mut game, pair.0, deep_genome(0.1, 0.9, 0.5));
+        game.player.pos = pair.1;
+        game.player.hidden = true;
+        game.creatures[index].hunting = true;
+        game.creatures[index].last_seen = Some(pair.1);
+        let hp = game.player.hp;
+        assert!(deep.landing(game.player.pos));
+        assert!(game.illuminated(game.player.pos));
+        assert!(!game.open_for_creature(index, game.player.pos));
+
+        game.round(Some(Command::Rest));
+        assert_eq!(game.player.hp, hp, "the light does not break landing protection");
+        assert!(!deep.landing(game.creatures[index].pos));
+        assert!(!game.open_for_creature(index, game.player.pos));
+    }
+
+    #[test]
+    fn tremorsense_hears_real_steps_around_corners_with_quiet_and_loud_ranges() {
+        for (hidden, heard) in [(true, false), (false, true)] {
+            let (mut game, _, deep) = cave_game();
+            let (creature, start, step, direction) = corner_step(&game, deep, 3);
+            let index = add_deep(&mut game, creature, deep_genome(0.6, 0.5, 0.0));
+            game.player.pos = start;
+            game.player.hidden = hidden;
+            game.player.dex = 1_000;
+            let hp = game.player.hp;
+            assert!(!game.level().sees(creature, step, SIGHT), "the source is around a wall");
+
+            game.round(Some(Command::Move(vec![direction])));
+            assert_eq!(game.player.pos, step);
+            assert_eq!(game.footsteps.len(), 1);
+            assert_eq!(game.footsteps[0].quiet, hidden);
+            assert_eq!(game.creatures[index].hunting, heard);
+            assert_eq!(game.player.hidden, hidden, "hearing never globally reveals the player");
+            assert_eq!(game.player.hp, hp, "sound does not authorize an attack through a wall");
+            if heard {
+                assert!(game.creatures[index].listening);
+                assert_eq!(game.creatures[index].last_seen, Some(step));
+                assert!(game.creatures[index].pos != creature, "a listener routes toward the footstep");
+                assert!(game.log.iter().any(|line| line.text == "Something tracks your footsteps."));
+            }
+        }
+    }
+
+    #[test]
+    fn stationary_hidden_players_make_no_tremor_target_and_sound_is_not_an_opening() {
+        let (mut still, _, deep) = cave_game();
+        let (creature, _, step, _) = corner_step(&still, deep, 3);
+        let index = add_deep(&mut still, creature, deep_genome(0.6, 0.5, 0.0));
+        still.player.pos = step;
+        still.player.hidden = true;
+        still.round(Some(Command::Rest));
+        assert!(still.footsteps.is_empty());
+        assert!(!still.creatures[index].hunting, "a stationary hidden player is not sensed telepathically");
+        assert!(still.player.hidden);
+
+        let (mut game, _, deep) = cave_game();
+        let (x, y) = horizontal_run(&game, deep, 2);
+        let mut dangerous = deep_genome(0.6, 0.5, 0.0);
+        dangerous.set(blah_core::Gene::Size, 1.0);
+        let index = add_deep(&mut game, (x, y), dangerous);
+        game.creatures[index].energy = 1;
+        game.player.pos = (x + 1, y);
+        game.player.hidden = true;
+        game.player.str = 3;
+        game.player.dex = 3;
+        game.player.con = 3;
+        game.rng = Rng::new(1); // The hidden-step check rolls 46 against its 50% chance.
+        let threat = game.threat(index, Practice::Stealth);
+        assert!(threat >= 10, "the listener is a meaningful stealth encounter");
+        game.round(Some(Command::Move(vec![Dir::E])));
+        assert!(game.creatures[index].hunting && game.creatures[index].listening);
+        assert!(game.player.hidden, "listening does not clear hiding");
+        assert_eq!(game.creatures[index].stealth_lessons_left, 12);
+        assert_eq!(game.player.practice.get(Practice::Stealth), blah_core::Skill::default());
+
+        game.creatures[index].hp = 10_000;
+        game.creatures[index].learning_damage_left = 10_000;
+        let stealth_before = game.player.practice.get(Practice::Stealth);
+        game.round(Some(Command::Attack(Some(Target::Label('A')))));
+        assert!(!game.player.hidden);
+        assert_eq!(game.player.practice.get(Practice::Stealth), stealth_before);
+        assert_eq!(game.creatures[index].stealth_lessons_left, 12, "a listening hunter denies the opening lesson");
+    }
+
+    #[test]
+    fn only_accepted_walk_steps_are_recorded_and_stairs_clear_old_floor_noise() {
+        let (mut game, _, deep) = cave_game();
+        let (creature, start, _, _) = corner_step(&game, deep, 3);
+        let index = add_deep(&mut game, creature, deep_genome(0.6, 0.5, 0.0));
+        game.player.pos = start;
+        game.player.hidden = true;
+        let wall_step = [Dir::N, Dir::S, Dir::E, Dir::W, Dir::Ne, Dir::Nw, Dir::Se, Dir::Sw]
+            .into_iter()
+            .find(|dir| {
+                let (dx, dy) = dir.delta();
+                !game.level().tile((start.0 + dx, start.1 + dy)).walkable()
+            })
+            .expect("the Deep room has a wall");
+        game.round(Some(Command::Move(vec![wall_step])));
+        assert!(game.footsteps.is_empty(), "failed movement makes no noise");
+        assert!(!game.creatures[index].hunting, "failed movement is not heard");
+
+        game.round(Some(Command::Rest));
+        assert!(game.footsteps.is_empty(), "resting does not make a step");
+        game.round(Some(Command::Wait));
+        assert!(game.footsteps.is_empty(), "waiting does not make a step");
+        game.round(Some(Command::Hide));
+        assert!(game.footsteps.is_empty(), "changing hiding state does not make a step");
+
+        game.player.at = LevelId::Surface;
+        game.player.pos = game.towns.home.stairs();
+        game.footsteps.push(Footstep { at: LevelId::Surface, pos: game.player.pos, quiet: false });
+        game.round(Some(Command::Down));
+        assert!(matches!(game.player.at, LevelId::Deep(..)));
+        assert!(game.footsteps.is_empty(), "stairs do not carry footsteps onto another floor");
+    }
+
+    #[test]
+    fn a_direct_move_cannot_record_or_take_more_than_three_steps() {
+        let (mut game, _, deep) = cave_game();
+        let (x, y) = horizontal_run(&game, deep, 5);
+        game.player.pos = (x, y);
+        game.round(Some(Command::Move(vec![Dir::E; MAX_STEPS + 1])));
+        assert_eq!(game.player.pos, (x + MAX_STEPS as i32, y));
+        assert_eq!(game.footsteps.len(), MAX_STEPS);
+    }
+
+    #[test]
+    fn a_listener_follows_the_latest_audible_step_not_the_closest_older_one() {
+        let (mut game, _, deep) = cave_game();
+        let (x, y) = horizontal_run(&game, deep, 4);
+        let index = add_deep(&mut game, (x, y), deep_genome(0.6, 0.5, 0.0));
+        game.player.pos = (x + 3, y);
+        game.player.hidden = true;
+        game.player.dex = 1_000;
+        game.round(Some(Command::Move(vec![Dir::W, Dir::W, Dir::E])));
+        assert!(game.creatures[index].listening);
+        assert_eq!(game.creatures[index].last_seen, Some((x + 2, y)));
+    }
+
+    #[test]
+    fn footstep_ranges_include_the_boundary_and_exclude_the_next_cell() {
+        for (quiet, range) in [(true, TREMOR_QUIET_RANGE), (false, TREMOR_LOUD_RANGE)] {
+            for distance in [range, range + 1] {
+                let (mut game, _, deep) = cave_game();
+                let (x, y) = horizontal_run(&game, deep, 6);
+                let index = add_deep(&mut game, (x, y), deep_genome(0.6, 0.5, 0.0));
+                game.creatures[index].stunned = 1;
+                game.player.pos = (x + distance as i32 - 1, y);
+                game.player.hidden = quiet;
+                game.player.dex = 1_000;
+                game.round(Some(Command::Move(vec![Dir::E])));
+                assert_eq!(game.can_hear_footstep(index, &game.footsteps[0]), (distance == range).then_some(distance));
+            }
+        }
+    }
+
+    #[test]
+    fn a_three_step_move_tracks_an_earlier_quiet_source_and_replays_after_save() {
+        let (mut game, _, deep) = cave_game();
+        let (x, y) = horizontal_run(&game, deep, 4);
+        let index = add_deep(&mut game, (x, y), deep_genome(0.6, 0.5, 0.0));
+        game.player.pos = (x + 1, y);
+        game.player.hidden = true;
+        game.player.dex = 1_000;
+        game.round(Some(Command::Move(vec![Dir::E, Dir::E, Dir::E])));
+        assert_eq!(game.player.pos, (x + 4, y));
+        assert_eq!(game.footsteps.len(), 3);
+        assert!(game.footsteps.iter().all(|step| step.quiet));
+        assert!(game.creatures[index].hunting);
+        assert!(game.creatures[index].listening);
+        assert_eq!(game.creatures[index].last_seen, Some((x + 2, y)));
+        assert_ne!(game.creatures[index].last_seen, Some(game.player.pos), "the unheard final position is not guessed");
+        assert_eq!(game.player.hp, 100_000, "following a sound does not strike from afar");
+        assert!(game.creatures[index].energy > 0, "the listener retains partial speed energy");
+
+        game.creatures[index].stunned = 2;
+        let mut loaded: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        for command in [Some(Command::Rest), Some(Command::Wait), Some(Command::Rest)] {
+            game.round(command.clone());
+            loaded.round(command);
+            assert_eq!(loaded, game, "footstep pursuit and partial speed replay exactly");
+        }
     }
 
     #[test]

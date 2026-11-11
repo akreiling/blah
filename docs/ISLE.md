@@ -7,9 +7,10 @@ Characters are classless: practice grants power, while experience records advent
 
 Evolved creatures now appear as genome-generated pixel sprites in the map. Their clade determines the
 body plan; individual genes determine size, limbs, covering, and color. Surface life keeps its home
-biome's tint; Deep life takes a stone tint. Each sprite carries its target letter, matching IN SIGHT and
-commands such as `attack a`. Sprites stay crisp at display scale and disappear when the creature leaves
-sight. Terrain, your `@`, treasure, and fixed-table creatures retain their text glyphs for now.
+biome's tint; Deep life takes a stone tint, except luminous bodies shine pale green. Each sprite carries
+its target letter, matching IN SIGHT and commands such as `attack a`. Sprites stay crisp at display scale
+and disappear when the creature leaves sight. Terrain, your `@`, treasure, and fixed-table creatures
+retain their text glyphs for now.
 
 - `crates/isle-core`: the rules. Pure and deterministic; the whole `Game` serializes, dice included.
 - `crates/isle`: the GPUI window. Run it with `just isle`.
@@ -130,6 +131,23 @@ health, +2 to hit, and 16 experience at depth 1 to about 27 health, +7, and 140 
 +13, 7–14 damage, and about 510 experience at depth 10. They follow the same genome-driven rules as
 wildlife, within fourteen cells of home.
 
+Some Deep bodies express cave adaptations, derived from their inherited genes rather than extra random
+abilities or their names. The same body on the surface has neither adaptation:
+
+- **Tremorsense:** chitinous or scaled creatures with six or eight legs investigate footsteps along
+  connected floor, even around corners. Ordinary steps carry five floor steps; hidden steps carry two.
+  Standing still makes no footsteps, and a blocked move makes none. A creature follows the last step
+  it actually heard, not your unseen current position. Sound alone does not reveal you to every creature,
+  or let an attack pass through a wall. Quiet movement, corners, and leaving its home range can lose it.
+- **Luminous:** slimy creatures with at least half cold tolerance light walkable cells within two tiles,
+  with walls blocking the light. You cannot hide in the glow; walking into it, or having its source
+  approach, breaks hiding. Leaving it restores the ordinary hiding rules. The sprite shines, visible
+  lit cells have a green background, and your panel says `lit · no hiding`.
+
+IN SIGHT names each adaptation and gives a short cue. These are the first cave expressions of the
+existing genome, not new gene slots or separately evolved abilities. Body selection still follows the
+Deep environment above. Safe landings remain safe, and off-floor life and its light stay paused.
+
 Each room but the landings has a spawn point that refills sixty rounds after its creature dies, out of
 sight. The remaining room farthest from the stairs up is a den: its keeper is the strongest of four draws
 and sits on a hoard, returning four hundred rounds after it falls.
@@ -206,6 +224,8 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
 - `python3 crates/isle/scripts/deep.py` descends below two towns and to a second floor, and checks separate
   layouts, evolved life off the landings, tougher life deeper down, stair returns, and that each floor's life
   and memory persist across visits and reloads.
+- `python3 crates/isle/scripts/caves.py` finds naturally spawned cave-adapted genomes, then uses scoped
+  encounter reloads to check trait cues, hiding at the glow boundary, walking into light, and exact saves.
 - `python3 crates/isle/scripts/seed7.py` plans routes from the map and fights from the window's panel. It
   walks to the stairs, heads for the far end of the Deep, and retreats to the temple to heal. It checks that
   ordinary fights earn blades practice and adventuring rank, then reloads the learned state. Games are

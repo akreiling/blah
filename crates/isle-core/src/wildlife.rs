@@ -11,6 +11,20 @@ use serde::{Deserialize, Serialize};
 use crate::data::{Kind, Stats};
 use crate::town::Town;
 
+/// Deep-only adaptations expressed by an evolved creature's existing body genes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaveTraits {
+    /// Six-or-more-legged chitinous or scaled life can sense vibrations through stone.
+    pub tremorsense: bool,
+    /// Cold-tolerant slime life gives off a dim glow.
+    pub luminous: bool,
+}
+
+/// Tremorsense requires six legs, enough to read ground-borne vibrations.
+const TREMORSENSE_MIN_LEGS: u8 = 6;
+/// Only cold tolerance of at least one half yields a glow in the Deep.
+const LUMINOUS_MIN_COLD: f32 = 0.5;
+
 /// What life under a town selects for: cool, damp, unchanging stone with little to eat. Scarce food favors small
 /// bodies and boldness, broken rock favors legs, and the dark makes coloring nearly irrelevant.
 pub const DEEP: Biome = Biome {
@@ -82,6 +96,19 @@ impl Wildlife {
     /// Its genome read into behavior, access, and physical traits.
     pub fn phenotype(&self) -> Phenotype {
         Phenotype::of(&self.genome)
+    }
+
+    /// Cave adaptations read from existing body genes; surface lineages never gain cave-only traits.
+    pub fn cave_traits(&self) -> CaveTraits {
+        if !matches!(self.lineage, Lineage::Deep { .. }) {
+            return CaveTraits::default();
+        }
+        let phenotype = self.phenotype();
+        CaveTraits {
+            tremorsense: phenotype.legs >= TREMORSENSE_MIN_LEGS
+                && matches!(phenotype.covering, blah_core::Covering::Chitin | blah_core::Covering::Scale),
+            luminous: phenotype.covering == blah_core::Covering::Slime && phenotype.cold >= LUMINOUS_MIN_COLD,
+        }
     }
 
     /// Floors below the surface it lives on; zero for surface life.
