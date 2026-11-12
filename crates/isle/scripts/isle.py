@@ -22,8 +22,8 @@ KEYS = {"up", "down", "left", "right", "enter", "escape", "backspace", "delete",
 class Isle:
     """A fresh Isle process with a private save and socket, removed on exit."""
 
-    def __init__(self, seed=7, round_seconds=None, save=None):
-        self.seed, self.round_seconds, self.save_path = seed, round_seconds, save
+    def __init__(self, seed=7, round_seconds=None, save=None, flags=()):
+        self.seed, self.round_seconds, self.save_path, self.flags = seed, round_seconds, save, list(flags)
 
     def __enter__(self):
         self._dir = tempfile.TemporaryDirectory(prefix="isle-ctl-", dir="/tmp")
@@ -33,6 +33,7 @@ class Isle:
         args = [str(BINARY), "--save", str(self.save), "--seed", str(self.seed), "--control", str(self.socket)]
         if self.round_seconds:
             args += ["--round", str(self.round_seconds)]
+        args += self.flags
         self._log = (root / "app.log").open("w+")
         self.app = subprocess.Popen(args, stdout=self._log, stderr=self._log)
         deadline = time.monotonic() + 15

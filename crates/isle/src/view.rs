@@ -88,6 +88,7 @@ pub struct IsleView {
     forced_mood: mood::Override,
     _animator: Task<()>,
     control: Option<crate::control::Server>,
+    playlog: Option<crate::playlog::PlayLog>,
     _control: Option<(Task<()>, Subscription)>,
 }
 
@@ -148,6 +149,7 @@ impl IsleView {
             forced_mood: mood::Override::default(),
             _animator: animator,
             control: None,
+            playlog: None,
             _control: None,
         }
     }
@@ -157,8 +159,23 @@ impl IsleView {
         self.forced_mood = forced;
     }
 
+    /// Keep a playtime log beside the save.
+    pub fn log_play(&mut self) {
+        let path = crate::playlog::path_for(&self.path);
+        match crate::playlog::PlayLog::open(&path, &self.game, Clock::now()) {
+            Ok(log) => self.playlog = Some(log),
+            Err(e) => eprintln!("isle: playtime log {}: {e}", path.display()),
+        }
+    }
+
     fn save(&mut self) {
         self.save_error = crate::save::write(&self.path, &self.game).err();
+        if let Some(log) = &mut self.playlog
+            && let Err(e) = log.record(&self.game, Clock::now())
+        {
+            eprintln!("isle: playtime log stopped: {e}");
+            self.playlog = None;
+        }
     }
 
     fn tick(&mut self, cx: &mut Context<IsleView>) {
@@ -178,6 +195,9 @@ impl IsleView {
     }
 
     fn key(&mut self, stroke: &Keystroke, cx: &mut Context<IsleView>) {
+        if let Some(log) = &mut self.playlog {
+            log.key(Clock::now());
+        }
         if stroke.key == "escape" {
             self.show_skills = false;
         }
@@ -328,6 +348,9 @@ impl IsleView {
         let turn_based = self.round.is_none();
         if turn_based {
             self.mark = self.game.log_total();
+        }
+        if let Some(log) = &mut self.playlog {
+            log.command(line);
         }
         let quit = submit_commands(&mut self.game, &mut self.queue, &mut self.paused, turn_based, line);
         self.save();

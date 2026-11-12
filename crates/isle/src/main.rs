@@ -6,6 +6,7 @@
 //! save beside the new one. Play is turn-based: each command is a round. `--round` puts rounds on a clock
 //! instead, the way the original ticked every ten seconds. `--sky overcast|clear|mist` and
 //! `--stone limestone|slate|basalt` hold the map's look for previewing; they never change the game.
+//! A window driven through `--control` keeps no playtime log unless `--playlog` asks for one.
 
 mod art;
 mod control;
@@ -13,6 +14,7 @@ mod hero;
 mod input;
 mod mood;
 mod paint;
+mod playlog;
 mod save;
 mod sprites;
 mod view;
@@ -29,8 +31,7 @@ use isle_core::Game;
 
 use crate::view::IsleView;
 
-const USAGE: &str =
-    "usage: isle [--new] [--save PATH] [--round SECONDS] [--seed N] [--control PATH] [--sky NAME] [--stone NAME]";
+const USAGE: &str = "usage: isle [--new] [--save PATH] [--round SECONDS] [--seed N] [--control PATH] [--playlog] [--sky NAME] [--stone NAME]";
 
 actions!(
     isle,
@@ -48,16 +49,26 @@ struct Args {
     round: Option<f32>,
     seed: Option<u64>,
     control: Option<PathBuf>,
+    /// Keep the playtime log even in a controlled window.
+    playlog: bool,
     mood: mood::Override,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
-    let mut parsed =
-        Args { fresh: false, save: None, round: None, seed: None, control: None, mood: mood::Override::default() };
+    let mut parsed = Args {
+        fresh: false,
+        save: None,
+        round: None,
+        seed: None,
+        control: None,
+        playlog: false,
+        mood: mood::Override::default(),
+    };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--new" => parsed.fresh = true,
+            "--playlog" => parsed.playlog = true,
             "--save" => parsed.save = Some(PathBuf::from(args.next().ok_or("--save needs a path")?)),
             "--control" => parsed.control = Some(PathBuf::from(args.next().ok_or("--control needs a path")?)),
             "--round" => {
@@ -128,6 +139,8 @@ fn main() {
     // A controlled window must not take the keyboard from whoever launched it.
     let foreground = control.is_none();
     let forced_mood = args.mood;
+    // Scripted windows are not play, so only a person's window keeps a playtime log by default.
+    let playlog = args.playlog || control.is_none();
 
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
@@ -157,6 +170,9 @@ fn main() {
                 view.force_mood(forced_mood);
                 if let Some(server) = control {
                     view.control(server, cx);
+                }
+                if playlog {
+                    view.log_play();
                 }
                 view
             })
@@ -191,6 +207,7 @@ mod tests {
         assert!(a.control.is_none());
         assert_eq!(args(&["--control", "/tmp/isle.sock"]).unwrap().control, Some("/tmp/isle.sock".into()));
         assert!(args(&["--control"]).is_err());
+        assert!(!a.playlog && args(&["--playlog"]).unwrap().playlog);
         assert!(args(&["7"]).is_err());
         let a = args(&["--sky", "mist", "--stone", "basalt"]).unwrap();
         assert_eq!(a.mood, mood::Override { sky: mood::parse_sky("mist"), stone: Some(mood::Stone::Basalt) });

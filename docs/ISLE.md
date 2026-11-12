@@ -426,6 +426,15 @@ Saves live in the platform data directory (`isle/save.json`) and are rewritten a
 starts another character and keeps the old save beside it; `--save PATH` and `--seed N` pick the file and
 the island's dice.
 
+Each window also appends a playtime log beside its save (`save.json` keeps `save.playlog.jsonl`), for
+measuring how long the game takes to play. A line marks each launch; then each command that passes
+rounds adds one line with its rounds, the real seconds of play since the last one, the typed line,
+the depth, and the character's deaths, level, XP, health, and gold. Only time between inputs counts,
+and any one gap counts at most a minute, so a window left open does not add play. The log stays on
+this computer. `just playtime [LOG]` summarizes it per character: active hours, seconds per round
+overall, by depth, and by command. Windows driven through `--control` keep no log unless `--playlog`
+asks for one.
+
 Save compatibility is not maintained during this merge. Use `just isle --new` if an older save will not load.
 
 ## Agent control and inspection
@@ -503,6 +512,9 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
   and memory persist across visits and reloads.
 - `python3 crates/isle/scripts/caves.py` finds naturally spawned cave-adapted genomes, then uses scoped
   encounter reloads to check trait cues, hiding at the glow boundary, walking into light, and exact saves.
+- `python3 crates/isle/scripts/playlog.py` checks that the playtime log records rounds, typed lines, and
+  active time (with instant commands carried into the next round), appends across reloads, and is not
+  written by a controlled window without `--playlog`.
 - `python3 crates/isle/scripts/seed7.py` plans routes from the map and fights from the window's panel. It
   walks to the stairs, heads for the far end of the Deep, and retreats to the temple to heal. It checks that
   ordinary fights earn blades practice and adventuring rank, then reloads the learned state. Games are

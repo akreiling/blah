@@ -6,6 +6,10 @@ cargo := "mise exec -- cargo"
 isle *args:
     {{cargo}} run --quiet -p isle -- {{args}}
 
+# Summarize real Isle play time per round from the log beside the save: just playtime [LOG]
+playtime *args:
+    python3 crates/isle/scripts/playtime.py {{args}}
+
 # Run every test in the workspace.
 test:
     {{cargo}} test --workspace
