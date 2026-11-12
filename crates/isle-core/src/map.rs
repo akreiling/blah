@@ -34,7 +34,7 @@ pub enum Tile {
     Altar,
     /// Open ground of one of the world's biomes.
     Wild(BiomeId),
-    /// Bare rock that blocks movement and sight.
+    /// Bare rock that blocks movement and thins sight like a tree.
     Rock,
 }
 
@@ -50,12 +50,12 @@ impl Tile {
 
     /// Whether this cell hides what lies beyond it.
     pub const fn opaque(self) -> bool {
-        matches!(self, Tile::Wall | Tile::Rock)
+        matches!(self, Tile::Wall)
     }
 }
 
-/// Cells of sight each tree between a viewer and its target costs, so woods thin sight rather than end it.
-pub const TREE_SIGHT: i32 = 3;
+/// Cells of sight each tree or rock between a viewer and its target costs.
+pub const TREE_SIGHT: i32 = 1;
 
 /// Whether `to` lies within a round `radius` of `from`: inside the circle of radius `radius + ½`, so sight
 /// reaches as far along a diagonal as along an axis instead of filling a square.
@@ -72,8 +72,8 @@ const RAY: i64 = 8;
 const AIMS: [(i64, i64); 5] = [(4, 4), (2, 2), (6, 2), (2, 6), (6, 6)];
 
 /// Whether `from` sees `to` within a round `radius` (see [`within`]) over the cells `tile` gives. Rays run from the center of
-/// each end to the aim points of the other; the target is seen if any ray crosses no wall or rock, and if the
-/// target stays within `radius` less [`TREE_SIGHT`] for each tree that ray crosses. The cells at either end
+/// each end to the aim points of the other; the target is seen if any ray crosses no wall, and if the
+/// target stays within `radius` less [`TREE_SIGHT`] for each tree or rock that ray crosses. The cells at either end
 /// never count. Both ends cast the same rays, so sight is mutual.
 fn sight(from: Pos, to: Pos, radius: i32, tile: impl Fn(Pos) -> Tile) -> bool {
     if !within(from, to, radius) {
@@ -82,7 +82,7 @@ fn sight(from: Pos, to: Pos, radius: i32, tile: impl Fn(Pos) -> Tile) -> bool {
     if distance(from, to) <= 1 {
         return true;
     }
-    let trees = (1..).take_while(|&k| within(from, to, radius - k * TREE_SIGHT)).count();
+    let cover = (1..).take_while(|&k| within(from, to, radius - k * TREE_SIGHT)).count();
     // Rays stay inside the box spanned by both cells, so each tile there is looked up at most once.
     let (x0, y0) = (from.0.min(to.0), from.1.min(to.1));
     let width = (from.0 - to.0).unsigned_abs() as usize + 1;
@@ -103,9 +103,9 @@ fn sight(from: Pos, to: Pos, radius: i32, tile: impl Fn(Pos) -> Tile) -> bool {
             last = cell;
             match at(cell) {
                 t if t.opaque() => return false,
-                Tile::Tree => {
+                Tile::Tree | Tile::Rock => {
                     crossed += 1;
-                    if crossed > trees {
+                    if crossed > cover {
                         return false;
                     }
                 }
@@ -136,7 +136,7 @@ pub enum Zone {
     /// Inside the temple.
     Temple,
 }
-/// How much of a biome's ground is trees (passable, blocking sight) and rock (blocking both).
+/// How much of a biome's ground is trees (passable) and rock (impassable), both thinning sight.
 fn cover(biome: &Biome) -> (f32, f32) {
     match biome.name {
         "Jungle" => (0.55, 0.0),
@@ -313,8 +313,8 @@ impl Place {
         }
     }
 
-    /// Whether `from` can see `to` within `radius` cells. See [`sight`]: walls and rocks block a ray, and
-    /// each tree it crosses costs [`TREE_SIGHT`] cells of the radius.
+    /// Whether `from` can see `to` within `radius` cells. See [`sight`]: walls block a ray, and
+    /// each tree or rock it crosses costs [`TREE_SIGHT`] cells of the radius.
     pub fn sees(&self, from: Pos, to: Pos, radius: i32) -> bool {
         sight(from, to, radius, |p| self.tile(p))
     }
@@ -362,24 +362,31 @@ mod tests {
     }
 
     #[test]
-    fn trees_thin_sight_while_walls_and_rocks_end_it() {
+    fn trees_and_rocks_thin_sight_while_walls_end_it() {
         let open = field(&[]);
         assert!(sight((0, 0), (8, 2), 8, &open) && !sight((0, 0), (9, 0), 8, &open));
         // Round, not square: the corners of the old square are out of reach.
         assert!(
             sight((0, 0), (6, 5), 8, &open) && !sight((0, 0), (7, 6), 8, &open) && !sight((0, 0), (8, 8), 8, &open)
         );
-        let tree = field(&[((1, 0), Tile::Tree)]);
-        assert!(sight((0, 0), (5, 0), 8, &tree), "past one tree, five cells away");
-        assert!(!sight((0, 0), (6, 0), 8, &tree));
-        let two = field(&[((1, 0), Tile::Tree), ((3, 0), Tile::Tree)]);
-        assert!(sight((0, 0), (2, 0), 8, &two) && !sight((0, 0), (4, 0), 8, &two));
-        for wall in [Tile::Wall, Tile::Rock] {
-            assert!(!sight((0, 0), (3, 0), 8, field(&[((1, 0), wall)])));
+        for first in [Tile::Tree, Tile::Rock] {
+            for second in [Tile::Tree, Tile::Rock] {
+                let one_cell = [((1, 0), first)];
+                let one = field(&one_cell);
+                assert!(sight((0, 0), (5, 0), 6, &one), "{first:?}: five cells past one");
+                assert!(!sight((0, 0), (6, 0), 6, &one));
+                let two_cells = [((1, 0), first), ((3, 0), second)];
+                let two = field(&two_cells);
+                assert!(sight((0, 0), (4, 0), 6, &two), "{first:?} {second:?}: four cells past two");
+                assert!(!sight((0, 0), (5, 0), 6, &two));
+                // Endpoints do not charge cover, even when standing in a tree.
+                assert!(sight((0, 0), (1, 0), 1, &one));
+                assert!(sight((-2, 0), (1, 0), 3, &one));
+            }
         }
-        // You see the tree beside you, and a creature standing in a tree.
-        assert!(sight((0, 0), (1, 0), 8, &tree) && sight((0, 0), (1, 0), 1, &tree));
-        assert!(sight((-2, 0), (1, 0), 8, &tree));
+        assert!(!sight((0, 0), (3, 0), 6, field(&[((1, 0), Tile::Wall)])));
+        assert!(Tile::Tree.walkable());
+        assert!(!Tile::Rock.walkable());
     }
 
     #[test]
@@ -398,7 +405,14 @@ mod tests {
             let blocks: Vec<(Pos, Tile)> = (0..14)
                 .map(|_| {
                     let at = ((rng.unit() * 11.0) as i32 - 5, (rng.unit() * 11.0) as i32 - 5);
-                    (at, if rng.unit() < 0.7 { Tile::Tree } else { Tile::Wall })
+                    (
+                        at,
+                        match rng.below(3) {
+                            0 => Tile::Tree,
+                            1 => Tile::Rock,
+                            _ => Tile::Wall,
+                        },
+                    )
                 })
                 .collect();
             let tiles = field(&blocks);
@@ -424,8 +438,8 @@ mod tests {
                     })
             })
             .inspect(|&(x, y)| {
-                assert!(level.sees((x - 1, y), (x + 4, y), 8), "{x},{y}");
-                assert!(!level.sees((x - 1, y), (x + 5, y), 8), "{x},{y}");
+                assert!(level.sees((x - 1, y), (x + 4, y), crate::SIGHT), "{x},{y}");
+                assert!(!level.sees((x - 1, y), (x + 5, y), crate::SIGHT), "{x},{y}");
             })
             .count();
         assert!(checked > 0, "seed 7 has open trees near the start");

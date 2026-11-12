@@ -14,6 +14,7 @@ RECOVERY = {"Woundleaf": (6, 0), "Bogmint": (0, 8), "Sunroot": (3, 4)}
 def discover(isle, expected):
     # Relocated biome fixtures need an ordinary round to establish the local sight memory.
     reply = isle.batch("rest\n", "look\n", game=True, map="cells", interrupt=False)
+    origin = reply["game"]["player"]["pos"]
     for _ in range(300):
         patches = [p for p in reply["game"]["herbs"] if not p["picked"] and p["herb"] == expected]
         if patches:
@@ -32,7 +33,9 @@ def discover(isle, expected):
         cells, routes = paths(reply["map"], reply["game"]["player"]["pos"])
         frontier = [at for at in routes if routes[at] and not cells[at]["remembered"]]
         assert frontier, "there is walkable land left to explore"
-        target = min(frontier, key=lambda at: (len(routes[at]), at[1], at[0]))
+        # Search around the biome fixture, not indefinitely north into another biome.
+        target = min(frontier, key=lambda at: (
+            max(abs(at[0] - origin[0]), abs(at[1] - origin[1])), len(routes[at]), at[1], at[0]))
         reply = isle.batch(routes[target][0], game=True, map="cells", interrupt=False)
     raise AssertionError(f"no {expected} found during the bounded walk")
 
