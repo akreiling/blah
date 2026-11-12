@@ -48,6 +48,12 @@ while you *stand ready*, striking back at anything hunting you from the next cel
 
 - Movement: arrow keys take one step without clearing the command line or moving its cursor.
   Typed directions `n s e w ne nw se sw` still work, up to three steps a round (`n n e`).
+- Map: `M` on an empty command line opens the seen-only surface map. Arrows or HJKL pan;
+  Shift+arrows pan farther. `+`/`-` zoom from individual cells to a regional overview, `F` or Home
+  returns to your position, and `M` or Escape closes it. Browsing takes no rounds and pauses the
+  live clock. Underground, the map marks your surface entrance. Known settlements appear in the
+  footer. `just isle --debug-map` (alias `--reveal-map`) reveals all terrain and settlements in the
+  map view for exploration and debugging, without revealing anything in play or changing your save.
 - With an empty command line, `<` goes upstairs, `>` downstairs, and `,` picks up everything at your
   feet (subject to sack space). These act without Enter and take one round, just like `up`, `down`,
   and `get all`. While editing a command or creating a character, they insert punctuation instead.
@@ -473,6 +479,9 @@ Every reply says what the request did: `steps` (keystrokes delivered), `interrup
   `view` as two-character cells, the `panel` lines, the last ten `log` lines, and the `prompt` text and
   cursor. About 1 KB. The text map represents a genome sprite as its target letter and `*` (`A*`), not
   image pixels, so agent targeting stays the same.
+  While the world map is open, `screen` instead gives `mode: "world_map"`, its one-character `view`,
+  `center`, `origin`, zoom `step` (surface cells per glyph), `known_cells`, settlement names, and
+  whether debug reveal is enabled.
 - `"map": "rows"` adds the current level's `terrain` (one character per cell, as in `map.rs`) and `view`
   (blank where unseen), with size, `origin: [x, y]`, and stair positions. In town and underground this is
   a window at least 50×28 starting at that town's northwest corner (taller for large towns), or the
@@ -515,6 +524,8 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
   and shooting an actual spawned individual by its regional name.
 - `python3 crates/isle/scripts/towns.py` visits two generated towns, exercises their services, and checks
   stair returns and revival after reload, plus a hamlet's missing services.
+- `python3 crates/isle/scripts/world_map.py` checks seen-only and debug maps, regional zoom, panning,
+  recentering, command drafts, unchanged game state, and pausing the live clock.
 - `python3 crates/isle/scripts/deep.py` descends below two towns and to a second floor, and checks separate
   layouts, evolved life off the landings, tougher life deeper down, stair returns, and that each floor's life
   and memory persist across visits and reloads.

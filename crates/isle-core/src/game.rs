@@ -496,6 +496,21 @@ pub struct Sighted<'a> {
     pub creature: &'a Creature,
 }
 
+/// A surface cell made available to the map without exposing unexplored terrain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceMapCell {
+    /// The surface coordinate.
+    pub pos: Pos,
+    /// The cell's remembered terrain.
+    pub tile: Tile,
+    /// A service zone within a settlement, if any.
+    pub zone: Zone,
+    /// The settlement covering the cell, if one is known.
+    pub settlement: Option<Town>,
+    /// Whether this cell is in the character's current sight.
+    pub visible: bool,
+}
+
 /// The whole island.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Game {
@@ -667,8 +682,145 @@ impl Game {
             let Some(i) = self.level().deep().and_then(|d| d.cell_index(pos)) else { return false };
             return self.deeps.iter().any(|d| d.at == self.player.at && d.seen[i / 64] & 1 << (i % 64) != 0);
         }
+        self.remembers_surface(pos)
+    }
+
+    /// Whether the character has ever seen `pos` on the surface, even while below ground.
+    pub fn remembers_surface(&self, pos: Pos) -> bool {
         let (chunk, word, bit) = memory_cell(pos);
         self.explored.get(&chunk.0).and_then(|column| column.get(&chunk.1)).is_some_and(|words| words[word] & bit != 0)
+    }
+
+    /// Surface location represented by the map cursor for the player's current position.
+    ///
+    /// Below ground, this is the town's surface stairway.
+    pub fn surface_map_player_pos(&self) -> Pos {
+        match self.player.at {
+            LevelId::Surface => self.player.pos,
+            LevelId::Deep(town, _) => town.stairs(),
+        }
+    }
+
+    /// The remembered part of a rectangular surface map, in row-major order.
+    ///
+    /// Unknown cells are `None`. The returned settlements are limited to remembered cells, so
+    /// exploring the map cannot disclose hidden towns or terrain.
+    pub fn surface_map_region(&self, origin: Pos, width: i32, height: i32) -> Vec<Option<SurfaceMapCell>> {
+        self.surface_map_region_inner(origin, width, height, 1, false)
+    }
+
+    /// The surface map for explicit debug reveal mode. This does not mark cells as explored.
+    pub fn debug_surface_map_region(&self, origin: Pos, width: i32, height: i32) -> Vec<Option<SurfaceMapCell>> {
+        self.surface_map_region_inner(origin, width, height, 1, true)
+    }
+
+    /// A zoomed-out map. Each sample covers `step` square cells (1–16).
+    /// Normal samples use only remembered terrain, preferring known settlement cells.
+    pub fn surface_map_samples(
+        &self,
+        origin: Pos,
+        width: i32,
+        height: i32,
+        step: i32,
+        debug_reveal: bool,
+    ) -> Vec<Option<SurfaceMapCell>> {
+        self.surface_map_region_inner(origin, width, height, step.clamp(1, 16), debug_reveal)
+    }
+
+    fn surface_map_region_inner(
+        &self,
+        origin: Pos,
+        width: i32,
+        height: i32,
+        step: i32,
+        reveal: bool,
+    ) -> Vec<Option<SurfaceMapCell>> {
+        if width <= 0 || height <= 0 {
+            return Vec::new();
+        }
+
+        // Use a private copy so debug map exploration discovers deterministic settlement layouts
+        // without altering gameplay state or the character's saved exploration.
+        let mut revealed_towns = reveal.then(|| self.towns.clone());
+        if let Some(towns) = &mut revealed_towns {
+            let end_x = (i64::from(origin.0) + i64::from(width) * i64::from(step) - 1).min(i64::from(i32::MAX));
+            let end_y = (i64::from(origin.1) + i64::from(height) * i64::from(step) - 1).min(i64::from(i32::MAX));
+            let mut y = i64::from(origin.1);
+            loop {
+                let mut x = i64::from(origin.0);
+                loop {
+                    towns.ensure(self.seed, self.terrain, (x as i32, y as i32));
+                    if x == end_x {
+                        break;
+                    }
+                    x = (x + 128).min(end_x);
+                }
+                if y == end_y {
+                    break;
+                }
+                y = (y + 128).min(end_y);
+            }
+        }
+        let towns = revealed_towns.as_ref().unwrap_or(&self.towns);
+
+        let mut cells = Vec::with_capacity(width as usize * height as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let at = (origin.0.saturating_add(x * step), origin.1.saturating_add(y * step));
+                let nearby = towns.nearby(self.terrain, at);
+                let mut sample = None;
+                if reveal {
+                    sample = Some(at);
+                    // Keep small settlements visible between sample points.
+                    for town in nearby.iter().flatten() {
+                        let pos = (at.0.max(town.origin.0), at.1.max(town.origin.1));
+                        if town.contains(pos)
+                            && i64::from(pos.0) < i64::from(at.0) + i64::from(step)
+                            && i64::from(pos.1) < i64::from(at.1) + i64::from(step)
+                        {
+                            sample = Some(pos);
+                            break;
+                        }
+                    }
+                } else {
+                    for dy in 0..step {
+                        for dx in 0..step {
+                            let pos = (at.0.saturating_add(dx), at.1.saturating_add(dy));
+                            if self.remembers_surface(pos) {
+                                if sample.is_none() {
+                                    sample = Some(pos);
+                                }
+                                if nearby.iter().flatten().any(|t| t.contains(pos)) {
+                                    sample = Some(pos);
+                                    break;
+                                }
+                            }
+                        }
+                        if sample.is_some_and(|p| nearby.iter().flatten().any(|t| t.contains(p))) {
+                            break;
+                        }
+                    }
+                }
+                let Some(pos) = sample else {
+                    cells.push(None);
+                    continue;
+                };
+                let place = Place::new(LevelId::Surface, self.terrain, towns.nearby(self.terrain, pos), pos);
+                cells.push(Some(SurfaceMapCell {
+                    pos,
+                    tile: place.tile(pos),
+                    zone: place.zone(pos),
+                    settlement: place.town_at(pos),
+                    visible: self.player.at == LevelId::Surface
+                        && (i64::from(self.player.pos.0) - i64::from(pos.0))
+                            .abs()
+                            .max((i64::from(self.player.pos.1) - i64::from(pos.1)).abs())
+                            <= i64::from(SIGHT)
+                        && self.sees(pos),
+                }));
+            }
+        }
+        cells
     }
 
     /// Whether the character sees `pos` now.

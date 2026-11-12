@@ -318,7 +318,7 @@ fn capitalized(word: &str) -> String {
 }
 
 /// The help text, one log line each.
-pub const HELP: [&str; 11] = [
+pub const HELP: [&str; 12] = [
     "Move: n s e w ne nw se sw, up to three a round (n n e). Each command takes one round.",
     "Fight: attack <who>, nock then shoot <who>. Who is a letter (shoot a) or a name (sh 2 orc).",
     "Magic: chant <spell>, then cast [who]. Spells: spark, shield, heal, stun. Metal adds 2 Focus except shield.",
@@ -328,7 +328,8 @@ pub const HELP: [&str; 11] = [
     "Growth: useful practice improves powers; kills raise adventuring rank. Skills lists practice. Rest recovers.",
     "Skilled weapons fire techniques on their own: feint, parry, stagger, sweep, steady shot. Skills explains them.",
     "Chain rounds with ;  (nock; shoot a). A chain stops if you are hurt or something new appears.",
-    "Arrows move, keeping typed text. Ctrl-P/N recalls commands. Enter on an empty line repeats; quit leaves.",
+    "Arrows move, keeping typed text. M on an empty line opens the world map. Ctrl-P/N recalls commands.",
+    "Enter on an empty line repeats; quit leaves.",
     "Commands abbreviate: a, sh, no, ch, ca, g, l, i, sk, q, r, d, u.",
 ];
 

@@ -21,13 +21,15 @@ mod town;
 mod wildlife;
 
 #[cfg(test)]
+mod surface_map_tests;
+#[cfg(test)]
 mod tests;
 
 pub use cinder::{CinderWatch, WatchPhase};
 pub use command::{Command, Dir, HELP, Instant, MAX_STEPS, Parsed, Target, parse};
 pub use data::{Armor, Bow, Item, Kind, SHOP, Spell, Stats, Weapon, sale_price};
 pub use deep::Deep;
-pub use game::{Creature, Game, Line, Phase, Pile, Player, SACK, SIGHT, Sighted, Tone, modifier};
+pub use game::{Creature, Game, Line, Phase, Pile, Player, SACK, SIGHT, Sighted, SurfaceMapCell, Tone, modifier};
 pub use herb::{Herb, HerbPatch};
 pub use landmark::{Landmark, LandmarkKind};
 pub use map::{LevelId, Place, Pos, Terrain, Tile, Zone, distance, line};

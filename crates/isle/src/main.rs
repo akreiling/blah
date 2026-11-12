@@ -1,6 +1,6 @@
 //! Isle: a solo island adventure in the manner of *Island of Kesmai*, in one window.
 //!
-//! Usage: `isle [--new] [--save PATH] [--round SECONDS] [--seed N] [--control PATH] [--sky NAME] [--stone NAME]`.
+//! Usage: `isle [--new] [--save PATH] [--round SECONDS] [--seed N] [--control PATH] [--debug-map] [--sky NAME] [--stone NAME]`.
 //!
 //! A bare launch resumes the saved character, or starts a new one. `--new` starts over and keeps the old
 //! save beside the new one. Play is turn-based: each command is a round. `--round` puts rounds on a clock
@@ -18,6 +18,7 @@ mod playlog;
 mod save;
 mod sprites;
 mod view;
+mod world_map;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -31,7 +32,7 @@ use isle_core::Game;
 
 use crate::view::IsleView;
 
-const USAGE: &str = "usage: isle [--new] [--save PATH] [--round SECONDS] [--seed N] [--control PATH] [--playlog] [--sky NAME] [--stone NAME]";
+const USAGE: &str = "usage: isle [--new] [--save PATH] [--round SECONDS] [--seed N] [--control PATH] [--playlog] [--debug-map] [--sky NAME] [--stone NAME]";
 
 actions!(
     isle,
@@ -51,6 +52,8 @@ struct Args {
     control: Option<PathBuf>,
     /// Keep the playtime log even in a controlled window.
     playlog: bool,
+    /// Reveal unexplored terrain and settlements while viewing the map.
+    debug_map: bool,
     mood: mood::Override,
 }
 
@@ -62,6 +65,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         seed: None,
         control: None,
         playlog: false,
+        debug_map: false,
         mood: mood::Override::default(),
     };
     let mut args = args.into_iter();
@@ -69,6 +73,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         match arg.as_str() {
             "--new" => parsed.fresh = true,
             "--playlog" => parsed.playlog = true,
+            "--debug-map" | "--reveal-map" => parsed.debug_map = true,
             "--save" => parsed.save = Some(PathBuf::from(args.next().ok_or("--save needs a path")?)),
             "--control" => parsed.control = Some(PathBuf::from(args.next().ok_or("--control needs a path")?)),
             "--round" => {
@@ -139,6 +144,7 @@ fn main() {
     // A controlled window must not take the keyboard from whoever launched it.
     let foreground = control.is_none();
     let forced_mood = args.mood;
+    let debug_map = args.debug_map;
     // Scripted windows are not play, so only a person's window keeps a playtime log by default.
     let playlog = args.playlog || control.is_none();
 
@@ -168,6 +174,7 @@ fn main() {
             cx.new(|cx| {
                 let mut view = IsleView::new(game, path, round, window, cx);
                 view.force_mood(forced_mood);
+                view.debug_map(debug_map);
                 if let Some(server) = control {
                     view.control(server, cx);
                 }
@@ -208,6 +215,9 @@ mod tests {
         assert_eq!(args(&["--control", "/tmp/isle.sock"]).unwrap().control, Some("/tmp/isle.sock".into()));
         assert!(args(&["--control"]).is_err());
         assert!(!a.playlog && args(&["--playlog"]).unwrap().playlog);
+        assert!(!a.debug_map);
+        assert!(args(&["--debug-map"]).unwrap().debug_map);
+        assert!(args(&["--reveal-map"]).unwrap().debug_map);
         assert!(args(&["7"]).is_err());
         let a = args(&["--sky", "mist", "--stone", "basalt"]).unwrap();
         assert_eq!(a.mood, mood::Override { sky: mood::parse_sky("mist"), stone: Some(mood::Stone::Basalt) });

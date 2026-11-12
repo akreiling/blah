@@ -20,6 +20,7 @@ use crate::hero::Look;
 use crate::input::{CommandLine, InputAction};
 use crate::mood::{self, FRAME_MS, FRAMES};
 use crate::sprites::SpriteCache;
+use crate::world_map::WorldMap;
 
 /// Cells along each side of the map.
 const VIEW: i32 = 2 * SIGHT + 1;
@@ -76,6 +77,8 @@ pub struct IsleView {
     started: Clock,
     paused: bool,
     show_skills: bool,
+    world_map: Option<WorldMap>,
+    debug_map: bool,
     sprites: SpriteCache,
     art: ArtCache,
     /// Log total before the latest round: lines past it are news.
@@ -140,6 +143,8 @@ impl IsleView {
             started: Clock::now(),
             paused: false,
             show_skills: false,
+            world_map: None,
+            debug_map: false,
             sprites,
             art,
             mark,
@@ -157,6 +162,11 @@ impl IsleView {
     /// Preview a sky or stone regardless of the round or floor.
     pub fn force_mood(&mut self, forced: mood::Override) {
         self.forced_mood = forced;
+    }
+
+    /// Allow the world map to reveal the whole seeded surface for debugging.
+    pub fn debug_map(&mut self, enabled: bool) {
+        self.debug_map = enabled;
     }
 
     /// Keep a playtime log beside the save.
@@ -180,7 +190,7 @@ impl IsleView {
 
     fn tick(&mut self, cx: &mut Context<IsleView>) {
         let Some(round) = self.round else { return };
-        if self.game.phase() != &Phase::Play || self.paused {
+        if self.game.phase() != &Phase::Play || self.paused || self.world_map.is_some() {
             self.started = Clock::now();
             return;
         }
@@ -197,6 +207,26 @@ impl IsleView {
     fn key(&mut self, stroke: &Keystroke, cx: &mut Context<IsleView>) {
         if let Some(log) = &mut self.playlog {
             log.key(Clock::now());
+        }
+        if let Some(map) = &mut self.world_map {
+            if map.key(stroke, &self.game) {
+                self.world_map = None;
+                self.started = Clock::now();
+            }
+            cx.notify();
+            return;
+        }
+        if self.game.phase() == &Phase::Play
+            && self.input.is_empty()
+            && !stroke.modifiers.alt
+            && !stroke.modifiers.control
+            && !stroke.modifiers.platform
+            && stroke.key.eq_ignore_ascii_case("m")
+        {
+            self.world_map = Some(WorldMap::new(&self.game));
+            self.started = Clock::now();
+            cx.notify();
+            return;
         }
         if stroke.key == "escape" {
             self.show_skills = false;
@@ -458,6 +488,13 @@ impl Focusable for IsleView {
 
 impl Render for IsleView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<IsleView>) -> impl IntoElement {
+        if let Some(map) = &self.world_map {
+            self.animated = false;
+            return map
+                .render(&self.game, self.debug_map)
+                .track_focus(&self.focus)
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| this.key(&event.keystroke, cx)));
+        }
         self.sprites.begin(window);
         self.art.begin(window, mood::of(&self.game, self.forced_mood));
         let elapsed = self.born.elapsed();
@@ -616,6 +653,9 @@ impl IsleView {
 
     /// The window's contents as text: the map, the panel, the log, and the prompt.
     fn screen(&self) -> serde_json::Value {
+        if let Some(map) = &self.world_map {
+            return map.screen(&self.game, self.debug_map);
+        }
         let game = &self.game;
         let p = game.player();
         let me = p.pos;
