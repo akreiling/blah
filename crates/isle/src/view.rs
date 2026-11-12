@@ -290,8 +290,8 @@ impl IsleView {
             "stairs_up": level.stairs_up, "stairs_down": level.stairs_down,
             "towns": level.towns().map(|town| serde_json::json!({
                 "name": town.name(), "origin": town.origin,
-                "width": isle_core::Town::WIDTH, "height": isle_core::Town::HEIGHT,
-                "start": town.start(), "shop": town.shop(), "temple": town.respawn(), "stairs_down": town.stairs(),
+                "width": town.width(), "height": town.height(), "kind": town.kind(),
+                "start": town.start(), "shop": town.shop_site(), "temple": town.temple_site(), "stairs_down": town.deep_site(),
             })).collect::<Vec<_>>(),
         });
         match view.map {

@@ -22,8 +22,26 @@ def towns():
         save = reply["game"]
         known = reply["map"]["towns"]
         home = next(t for t in known if t["origin"] == [0, 0])
-        other = next(t for t in known if t["origin"] != [0, 0])
         assert isle.quit() == 0
+    # Not every neighboring settlement offers all services. Find a real full-service one,
+    # keeping each generated sector in the save rather than fabricating a settlement.
+    for x, y in [(-384, -384), (0, -384), (384, -384), (-384, 384), (384, 384)]:
+        candidates = [t for t in known if t["origin"] != [0, 0]
+                      and all(t[s] is not None for s in ["shop", "temple", "stairs_down"])]
+        if candidates:
+            break
+        save["player"]["pos"] = [x, y]
+        save["creatures"], save["spawns"] = [], []
+        with tempfile.TemporaryDirectory(prefix="isle-town-survey-", dir="/tmp") as directory:
+            path = pathlib.Path(directory) / "save.json"
+            path.write_text(json.dumps(save))
+            with Isle(save=path) as isle:
+                reply = isle.batch("wait\n", game=True, map="rows")
+                save = reply["game"]
+                known.extend(t for t in reply["map"]["towns"] if t not in known)
+                assert isle.quit() == 0
+    other = next(t for t in known if t["origin"] != [0, 0]
+                 and all(t[s] is not None for s in ["shop", "temple", "stairs_down"]))
     for town in [home, other]:
         # Select an actual generated settlement, then exercise its services with normal keyboard input.
         fixture = json.loads(json.dumps(save))
@@ -66,6 +84,29 @@ def towns():
                 assert any(town["name"] in line for line in isle.screen()["panel"])
                 assert isle.quit() == 0
         print(f"PASS town {town['name']} at {town['origin']}: shop, temple binding, stairs, reload, revival")
+    missing = next(t for t in known if any(t[s] is None for s in ["shop", "temple", "stairs_down"]))
+    fixture = json.loads(json.dumps(save))
+    fixture["player"]["pos"] = missing["start"]
+    fixture["player"]["hp"] = 1
+    fixture["creatures"], fixture["spawns"] = [], []
+    with tempfile.TemporaryDirectory(prefix="isle-missing-services-", dir="/tmp") as directory:
+        path = pathlib.Path(directory) / "save.json"
+        path.write_text(json.dumps(fixture))
+        with Isle(save=path) as isle:
+            reply = isle.batch("look\n", game=True)
+            for service, label, command in [
+                ("shop", "outfitter", "buy potion\n"),
+                ("temple", "temple", "heal\n"),
+                ("stairs_down", "dungeon stairs", ">\n"),
+            ]:
+                if missing[service] is not None:
+                    continue
+                assert any(f"No {label}" in line["text"] for line in reply["news"])
+                before = reply["game"]["player"]
+                after = isle.batch(command, game=True)["game"]["player"]
+                assert (after["gold"], after["hp"], after["at"]) == (before["gold"], before["hp"], before["at"])
+            assert isle.quit() == 0
+    print(f"PASS {missing['kind']} {missing['name']}: absent services are described and unavailable")
     print(f"PASS towns: two real settlements in {(time.perf_counter() - began) * 1000:.1f} ms")
 
 

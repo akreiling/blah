@@ -1060,8 +1060,12 @@ impl Game {
     fn town_directions(&mut self) {
         if let Some(town) = self.level().town_at(self.player.pos) {
             for (service, at) in
-                [("Outfitter", town.shop()), ("Temple", town.respawn()), ("Dungeon stairs", town.stairs())]
+                [("Outfitter", town.shop_site()), ("Temple", town.temple_site()), ("Dungeon stairs", town.deep_site())]
             {
+                let Some(at) = at else {
+                    self.say(Tone::Info, format!("No {} in this {}.", service.to_lowercase(), town.kind()));
+                    continue;
+                };
                 let me = self.player.pos;
                 let way = Dir::from_delta(at.0 - me.0, at.1 - me.1).map_or("here", Dir::short);
                 self.say(Tone::Info, format!("{service}: {} {way}.", distance(me, at)));
@@ -4831,7 +4835,10 @@ mod wildlife_tests {
     }
 
     fn other_town(game: &mut Game) -> Town {
-        game.level().towns().find(|t| *t != game.towns.home).expect("seed 7 has a neighboring town")
+        game.level()
+            .towns()
+            .find(|t| *t != game.towns.home && t.deep_site().is_some())
+            .expect("seed 7 has a neighboring Deep")
     }
 
     #[test]

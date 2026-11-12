@@ -262,8 +262,7 @@ fn size_at(pos: (i32, i32), object: Object) -> u8 {
     }
 }
 
-/// Art layers for a tile. `deep` levels draw caves; towns pave their floors with dirt and build their walls of
-/// stone.
+/// Art layers for a tile. Towns use the regional ground and climate's building palette.
 pub fn terrain_art(tile: Tile, biome: &Biome, deep: bool, pos: (i32, i32)) -> TerrainArt {
     let floor = if deep { Terrain::Floor } else { Terrain::Dirt };
     let natural = natural_ground(biome);
@@ -274,7 +273,7 @@ pub fn terrain_art(tile: Tile, biome: &Biome, deep: bool, pos: (i32, i32)) -> Te
     let (ground, object) = match tile {
         Tile::Wall => (Terrain::Wall, None),
         Tile::Floor => (floor, None),
-        Tile::Grass => (Terrain::Grass, None),
+        Tile::Grass => (open, None),
         Tile::Water => (Terrain::Water, None),
         Tile::Tree => (open, Some(tree_at(pos, style, flavor))),
         Tile::Door => (floor, Some(Object::Door)),
@@ -805,13 +804,22 @@ fn material(t: Terrain, pal: &Palette, stone: Option<Stone>, px: &Px) -> [f32; 3
             c.map(|v| v + 9.0)
         }
         Terrain::Wall => {
+            let spot = (px.world)(p.0.div_euclid(SIDE), p.1.div_euclid(SIDE));
+            // Productive, wet regions build in timber; hot dry regions use earthen brick.
+            if spot.flavor == Flavor::Lush || spot.flavor == Flavor::Marsh || spot.style == Style::Moss {
+                let u = p.0.rem_euclid(6);
+                let grain = px.n(61, 9.0, (p.0 * 3, p.1 / 3)).max(0.0);
+                let timber = mixf(f(pal.soil), pal.ink, 0.2 + grain * 0.25);
+                return if u == 0 { mixf(timber, pal.ink, 0.4) } else { mixf(timber, pal.stone, 0.1) };
+            }
             let row = p.1.div_euclid(8);
             let x = p.0 + if row % 2 == 0 { 0 } else { 8 };
             let (u, v) = (x.rem_euclid(16), p.1.rem_euclid(8));
             if u == 0 || v == 0 {
                 mixf(f(pal.rock), pal.ink, 0.5)
             } else {
-                let brick = mixf(f(pal.rock), pal.stone, lattice(px.seed, 28, x.div_euclid(16), row) * 0.45);
+                let base = if spot.style == Style::Fable { pal.soil } else { pal.rock };
+                let brick = mixf(f(base), pal.stone, lattice(px.seed, 28, x.div_euclid(16), row) * 0.45);
                 if v == 1 { mixf(brick, pal.stone, 0.25) } else { brick }
             }
         }
@@ -1685,6 +1693,26 @@ mod tests {
 
     fn world_cell(world: &dyn Fn(i32, i32) -> Terrain, pos: (i32, i32)) -> GroundCell {
         styled_cell(&|x, y| (world(x, y), Style::Moss), pos)
+    }
+
+    #[test]
+    fn settlement_yards_keep_regional_ground_and_walls_use_regional_materials() {
+        for biome in BIOMES {
+            if biome.passable && !biome.water {
+                assert_eq!(terrain_art(Tile::Grass, biome, false, (0, 0)).ground, natural_ground(biome));
+            }
+        }
+        let stone = |_, _| Spot { terrain: Terrain::Wall, style: Style::Hearth, flavor: Flavor::Plain, tint: None };
+        let timber = |_, _| Spot { terrain: Terrain::Wall, style: Style::Hearth, flavor: Flavor::Lush, tint: None };
+        let terrain = |_| Terrain::Wall;
+        // Same palette and position, but wet productive regions use planks, not stone masonry.
+        let sample = |world: World<'_>| {
+            (0..16)
+                .flat_map(|y| (0..16).map(move |x| (x, y)))
+                .map(|p| ground_pixel(7, Mood::default(), p, world, &terrain, &[]))
+                .collect::<Vec<_>>()
+        };
+        assert_ne!(sample(&stone), sample(&timber));
     }
 
     fn spots(world: Styled<'_>) -> impl Fn(i64, i64) -> Spot + '_ {

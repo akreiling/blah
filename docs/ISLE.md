@@ -172,9 +172,14 @@ so you see five cells away past one obstacle, four past two, and can glimpse pas
 block sight completely. Creatures
 see you by the same rays. Deep water and snow peaks are impassable; shallow
 water can be waded. Explored wilderness stays remembered across saves, including west and north of town.
-Every town guarantees an outfitter (`buy`, `sell`, `list`), a temple (`heal` for up to five gold),
-a revival spot, dungeon stairs, and a safe central arrival square. Paths connect all services and the
-town's edges. Names, building sizes, service placement, and layout orientation vary with the seed.
+The starting town guarantees an outfitter (`buy`, `sell`, `list`), a temple (`heal` for up to five gold),
+a revival spot, dungeon stairs, and a safe central arrival square. Newly generated settlements range from
+17×17 hamlets through 25×25 villages to 41×33 towns. Buildings, lanes, yards, walls, gates, and services
+vary with the seed. Some settlements lack an outfitter, temple, or Deep entrance; `look` tells you what is
+available. Large towns always have an outfitter and temple, but not necessarily a Deep. Paths connect
+every building and the settlement's edges. Regional ground and building materials follow the climate:
+timber in temperate or lush wet regions, earthen brick in hot dry regions, and stone in colder regions.
+Towns already recorded in a save retain their old layouts, services, and Deep identity.
 The entire town footprint sits on passable dry land; ocean sectors need not contain a town.
 The starting town is found near the world's origin, and more towns appear as you explore.
 `look` gives distances and directions to the current town's services.
@@ -470,9 +475,11 @@ Every reply says what the request did: `steps` (keystrokes delivered), `interrup
   image pixels, so agent targeting stays the same.
 - `"map": "rows"` adds the current level's `terrain` (one character per cell, as in `map.rs`) and `view`
   (blank where unseen), with size, `origin: [x, y]`, and stair positions. In town and underground this is
-  a 50×28 window starting at that town's northwest corner, or the whole 64×32 floor of a Deep at origin `[0, 0]`.
+  a window at least 50×28 starting at that town's northwest corner (taller for large towns), or the
+  whole 64×32 floor of a Deep at origin `[0, 0]`.
   Outside town it is a 50×28 window centered on the character. `towns` lists nearby generated settlements
   and the starting town, with their names, footprints, arrival points, shops, temples, and stairs.
+  Missing settlement services are `null`; `kind` distinguishes hamlets, villages, and towns.
   Row/column indices are relative to `origin`, while stair positions remain level coordinates.
   `"map": "cells"` gives every
   cell's tile, zone, walkability, visibility, and memory instead (~150 KB).
@@ -507,7 +514,7 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
 - `python3 crates/isle/scripts/wildlife.py` checks evolved population, reload, the IN SIGHT panel,
   and shooting an actual spawned individual by its regional name.
 - `python3 crates/isle/scripts/towns.py` visits two generated towns, exercises their services, and checks
-  stair returns and revival after reload.
+  stair returns and revival after reload, plus a hamlet's missing services.
 - `python3 crates/isle/scripts/deep.py` descends below two towns and to a second floor, and checks separate
   layouts, evolved life off the landings, tougher life deeper down, stair returns, and that each floor's life
   and memory persist across visits and reloads.

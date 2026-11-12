@@ -360,7 +360,12 @@ fn another_town(game: &mut Game) -> crate::Town {
         for x in [-384, 0, 384] {
             game.player_mut().pos = (x, y);
             game.round(Some(Command::Rest));
-            if let Some(town) = game.level().towns().find(|town| town.origin != (0, 0)) {
+            if let Some(town) = game.level().towns().find(|town| {
+                town.origin != (0, 0)
+                    && town.shop_site().is_some()
+                    && town.temple_site().is_some()
+                    && town.deep_site().is_some()
+            }) {
                 return town;
             }
         }
@@ -426,4 +431,47 @@ fn visiting_another_temple_changes_revival_and_death_keeps_the_new_town() {
     assert_eq!(game.player().pos, temple);
     assert_eq!(game.zone(), Zone::Temple);
     assert_eq!(game.level().town_at(temple), Some(town));
+}
+
+#[test]
+fn settlements_without_services_neither_offer_nor_silently_provide_them() {
+    let mut game = made();
+    let mut checked = [false; 3];
+    for y in [-384, 0, 384] {
+        for x in [-384, 0, 384] {
+            game.player_mut().pos = (x, y);
+            game.round(Some(Command::Rest));
+            let towns: Vec<_> = game.level().towns().collect();
+            for town in towns {
+                game.player_mut().pos = town.start();
+                game.clear_creatures();
+                round(&mut game, "look");
+                if town.shop_site().is_none() {
+                    assert!(said(&game, "No outfitter"));
+                    game.player_mut().pos = town.shop();
+                    let gold = game.player().gold;
+                    round(&mut game, "buy potion");
+                    assert_eq!(game.player().gold, gold);
+                    checked[0] = true;
+                }
+                if town.temple_site().is_none() {
+                    assert!(said(&game, "No temple"));
+                    game.player_mut().pos = town.respawn();
+                    game.player_mut().hp = 1;
+                    round(&mut game, "heal");
+                    assert_eq!(game.player().hp, 1);
+                    checked[1] = true;
+                }
+                if town.deep_site().is_none() {
+                    assert!(said(&game, "No dungeon stairs"));
+                    game.player_mut().pos = town.stairs();
+                    assert!(game.level().stairs_down.is_none());
+                    round(&mut game, "down");
+                    assert_eq!(game.player().at, LevelId::Surface);
+                    checked[2] = true;
+                }
+            }
+        }
+    }
+    assert_eq!(checked, [true; 3], "exercise all three missing services on actual generated settlements");
 }

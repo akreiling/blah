@@ -7,25 +7,107 @@ use serde::{Deserialize, Serialize};
 
 use crate::map::{Pos, Terrain, Tile, Zone};
 
-/// A terrain-placed town with three guaranteed services and a safe central square.
+/// A terrain-placed settlement. Legacy layouts retain their original geometry and services.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Town {
     /// Northwest corner, in surface coordinates.
     pub origin: Pos,
     variant: u64,
+    #[serde(default, skip_serializing_if = "is_legacy")]
+    layout: u8,
+}
+
+fn is_legacy(layout: &u8) -> bool {
+    *layout == 0
+}
+
+#[derive(Clone, Copy)]
+struct Building {
+    center: Pos,
+    width: i32,
+    height: i32,
+    zone: Zone,
+    stairs: bool,
+    south: bool,
 }
 
 impl Town {
-    /// Cells across a town's safe footprint.
+    /// Cells across a legacy town. Use [`Town::width`] for generated settlements.
     pub const WIDTH: i32 = 29;
-    /// Cells down a town's safe footprint.
+    /// Cells down a legacy town. Use [`Town::height`] for generated settlements.
     pub const HEIGHT: i32 = 25;
     /// The starting town's arrival square, in surface coordinates.
     pub const START: Pos = (14, 12);
 
     fn new(seed: u64, origin: Pos, world_center: (i64, i64)) -> Town {
         let variant = Rng::keyed(seed, b"isletown", &[world_center.0 as u64, world_center.1 as u64]).next_u64();
-        Town { origin, variant }
+        Town { origin, variant, layout: 0 }
+    }
+
+    /// Settlement category; existing towns keep their original plan.
+    pub fn kind(self) -> &'static str {
+        if self.layout == 0 {
+            "town"
+        } else {
+            match self.variant % 3 {
+                0 => "hamlet",
+                1 => "village",
+                _ => "town",
+            }
+        }
+    }
+
+    /// Width of this settlement's safe footprint.
+    pub fn width(self) -> i32 {
+        if self.layout == 0 {
+            Self::WIDTH
+        } else {
+            match self.variant % 3 {
+                0 => 17,
+                1 => 25,
+                _ => 41,
+            }
+        }
+    }
+
+    /// Height of this settlement's safe footprint.
+    pub fn height(self) -> i32 {
+        if self.layout == 0 {
+            Self::HEIGHT
+        } else {
+            match self.variant % 3 {
+                0 => 17,
+                1 => 25,
+                _ => 33,
+            }
+        }
+    }
+
+    fn has_shop(self) -> bool {
+        self.layout == 0 || self.variant % 3 == 2 || self.variant >> 12 & 1 != 0
+    }
+
+    fn has_temple(self) -> bool {
+        self.layout == 0 || self.variant % 3 == 2 || self.variant >> 13 & 1 != 0
+    }
+
+    fn has_deep(self) -> bool {
+        self.layout == 0 || self.variant >> 14 & 1 != 0
+    }
+
+    /// The outfitter, only where the settlement offers one.
+    pub fn shop_site(self) -> Option<Pos> {
+        self.has_shop().then(|| self.shop())
+    }
+
+    /// The temple, only where the settlement offers one.
+    pub fn temple_site(self) -> Option<Pos> {
+        self.has_temple().then(|| self.respawn())
+    }
+
+    /// The Deep entrance, only where the settlement offers one.
+    pub fn deep_site(self) -> Option<Pos> {
+        self.has_deep().then(|| self.stairs())
     }
 
     pub(crate) fn variant(self) -> u64 {
@@ -47,21 +129,24 @@ impl Town {
 
     /// Whether a surface coordinate lies in the safe footprint.
     pub fn contains(self, (x, y): Pos) -> bool {
-        x >= self.origin.0 && y >= self.origin.1 && x < self.origin.0 + Self::WIDTH && y < self.origin.1 + Self::HEIGHT
+        x >= self.origin.0
+            && y >= self.origin.1
+            && x < self.origin.0 + self.width()
+            && y < self.origin.1 + self.height()
     }
 
     fn local(self, (x, y): Pos) -> Pos {
         let (x, y) = (x - self.origin.0, y - self.origin.1);
         (
-            if self.variant & 1 != 0 { Self::WIDTH - 1 - x } else { x },
-            if self.variant & 2 != 0 { Self::HEIGHT - 1 - y } else { y },
+            if self.variant & 1 != 0 { self.width() - 1 - x } else { x },
+            if self.variant & 2 != 0 { self.height() - 1 - y } else { y },
         )
     }
 
     fn global(self, (x, y): Pos) -> Pos {
         let (x, y) = (
-            if self.variant & 1 != 0 { Self::WIDTH - 1 - x } else { x },
-            if self.variant & 2 != 0 { Self::HEIGHT - 1 - y } else { y },
+            if self.variant & 1 != 0 { self.width() - 1 - x } else { x },
+            if self.variant & 2 != 0 { self.height() - 1 - y } else { y },
         );
         (x + self.origin.0, y + self.origin.1)
     }
@@ -87,28 +172,40 @@ impl Town {
 
     /// The safe arrival square.
     pub fn start(self) -> Pos {
-        self.global(Self::START)
+        self.global(if self.layout == 0 { Self::START } else { (self.width() / 16 * 8, self.height() / 16 * 8) })
     }
 
-    /// A walkable point inside the outfitter.
+    /// The outfitter's reserved position. Use [`Town::shop_site`] to check that it exists.
     pub fn shop(self) -> Pos {
+        if self.layout != 0 {
+            return self.global((4, 5));
+        }
         let (center, _, _, _) = self.rooms().into_iter().find(|r| r.3 == Zone::Shop).unwrap();
         self.global((center.0, center.1 + 1))
     }
 
-    /// The temple's revival point.
+    /// The temple's reserved revival point. Use [`Town::temple_site`] to check that it exists.
     pub fn respawn(self) -> Pos {
+        if self.layout != 0 {
+            return self.global((self.width() - 5, 4));
+        }
         let (center, _, _, _) = self.rooms().into_iter().find(|r| r.3 == Zone::Temple).unwrap();
         self.global(center)
     }
 
-    /// The dungeon entrance.
+    /// The reserved dungeon entrance. Use [`Town::deep_site`] to check that it exists.
     pub fn stairs(self) -> Pos {
+        if self.layout != 0 {
+            return self.global((4, self.height() - 5));
+        }
         self.global((14, 20))
     }
 
     /// Town tile and service zone at a coordinate inside its footprint.
     pub(crate) fn cell(self, at: Pos) -> (Tile, Zone) {
+        if self.layout != 0 {
+            return self.generated_cell(self.local(at));
+        }
         let (x, y) = self.local(at);
         for ((cx, cy), width, height, zone) in self.rooms() {
             let (rx, ry) = ((x - cx).abs(), (y - cy).abs());
@@ -134,15 +231,79 @@ impl Town {
         (if street { Tile::Floor } else { Tile::Grass }, Zone::Open)
     }
 
-    fn fits(world: &World, center: (i64, i64)) -> bool {
+    fn building(self, col: i32, row: i32) -> Option<Building> {
+        let cols = (self.width() - 1) / 8;
+        let rows = (self.height() - 1) / 8;
+        let shop = col == 0 && row == 0 && self.has_shop();
+        let temple = col == cols - 1 && row == 0 && self.has_temple();
+        let stairs = col == 0 && row == rows - 1 && self.has_deep();
+        let mut rng = Rng::keyed(self.variant, b"building", &[col as u64, row as u64]);
+        if !shop && !temple && !stairs && rng.below(4) == 0 {
+            return None;
+        }
+        Some(Building {
+            center: (col * 8 + 4, row * 8 + 4),
+            width: 5 + 2 * rng.below(2) as i32,
+            height: 5 + 2 * rng.below(2) as i32,
+            zone: if shop {
+                Zone::Shop
+            } else if temple {
+                Zone::Temple
+            } else {
+                Zone::Open
+            },
+            stairs,
+            south: row != rows - 1,
+        })
+    }
+
+    fn generated_cell(self, (x, y): Pos) -> (Tile, Zone) {
+        let (w, h) = (self.width(), self.height());
+        let (col, row) = ((x / 8).min((w - 2) / 8), (y / 8).min((h - 2) / 8));
+        if let Some(b) = self.building(col, row) {
+            let (cx, cy) = b.center;
+            let (rx, ry) = ((x - cx).abs(), (y - cy).abs());
+            if rx <= b.width / 2 && ry <= b.height / 2 {
+                if rx == b.width / 2 || ry == b.height / 2 {
+                    let door_y = cy + if b.south { b.height / 2 } else { -b.height / 2 };
+                    return (if x == cx && y == door_y { Tile::Door } else { Tile::Wall }, Zone::Open);
+                }
+                let tile = if b.zone == Zone::Shop && y == cy - b.height / 2 + 1 && rx <= 1 {
+                    Tile::Counter
+                } else if b.zone == Zone::Temple && x == cx && y == cy - b.height / 2 + 1 {
+                    Tile::Altar
+                } else if b.stairs && (x, y) == b.center {
+                    Tile::StairsDown
+                } else {
+                    Tile::Floor
+                };
+                return (tile, b.zone);
+            }
+            if x == cx && (if b.south { y > cy && y < (row + 1) * 8 } else { y < cy && y > row * 8 }) {
+                return (Tile::Floor, Zone::Open);
+            }
+        }
+        // Seeded lanes join the central avenues. Larger places gain walls and gated exits.
+        let avenue = x == w / 16 * 8 || y == h / 16 * 8;
+        let lane = y % 8 == 0 || (x % 8 == 0 && (self.variant >> (x / 8 + 24) & 1 != 0));
+        let edge = x == 0 || y == 0 || x == w - 1 || y == h - 1;
+        let walled = self.variant % 3 == 2 || self.variant % 3 == 1 && self.variant & 8 != 0;
+        if edge && walled {
+            return (if avenue { Tile::Door } else { Tile::Wall }, Zone::Open);
+        }
+        (if avenue || lane { Tile::Floor } else { Tile::Grass }, Zone::Open)
+    }
+
+    fn fits(world: &World, center: (i64, i64), width: i32, height: i32) -> bool {
         let dry = |dx, dy| {
             let biome = world.tile(center.0 + dx, center.1 + dy).biome;
             biome.biome().passable && !biome.biome().water
         };
-        if ![(-14, -12), (14, -12), (-14, 12), (14, 12), (0, 0)].into_iter().all(|(x, y)| dry(x, y)) {
+        let (hw, hh) = (i64::from(width / 2), i64::from(height / 2));
+        if ![(-hw, -hh), (hw, -hh), (-hw, hh), (hw, hh), (0, 0)].into_iter().all(|(x, y)| dry(x, y)) {
             return false;
         }
-        (-12..=12).all(|y| (-14..=14).all(|x| dry(x, y)))
+        (-hh..=hh).all(|y| (-hw..=hw).all(|x| dry(x, y)))
     }
 
     pub(crate) fn home_site(seed: u64) -> (i64, i64) {
@@ -155,7 +316,7 @@ impl Town {
                         continue;
                     }
                     let center = (land.0 + x * 16, land.1 + y * 16);
-                    if Self::fits(&world, center) {
+                    if Self::fits(&world, center, Self::WIDTH, Self::HEIGHT) {
                         return center;
                     }
                 }
@@ -196,13 +357,19 @@ impl Towns {
                     for _ in 0..24 {
                         let center =
                             (x * SPACING + 32 + rng.below(128) as i64, y * SPACING + 32 + rng.below(128) as i64);
-                        if (center.0 - home.0).abs().max((center.1 - home.1).abs()) < 64 || !Town::fits(&world, center)
+                        let mut town = Town::new(seed, (0, 0), center);
+                        town.layout = 1;
+                        if (center.0 - home.0).abs().max((center.1 - home.1).abs()) < 64
+                            || !Town::fits(&world, center, town.width(), town.height())
                         {
                             continue;
                         }
-                        let Ok(ox) = i32::try_from(center.0 - offset.0 - 14) else { continue };
-                        let Ok(oy) = i32::try_from(center.1 - offset.1 - 12) else { continue };
-                        return Some(Town::new(seed, (ox, oy), center));
+                        let Ok(ox) = i32::try_from(center.0 - offset.0 - i64::from(town.width() / 2)) else { continue };
+                        let Ok(oy) = i32::try_from(center.1 - offset.1 - i64::from(town.height() / 2)) else {
+                            continue;
+                        };
+                        town.origin = (ox, oy);
+                        return Some(town);
                     }
                     None
                 });
@@ -242,33 +409,84 @@ mod tests {
             }
         }
         let mut cells = Vec::new();
-        for y in town.origin.1..town.origin.1 + Town::HEIGHT {
-            for x in town.origin.0..town.origin.0 + Town::WIDTH {
+        for y in town.origin.1..town.origin.1 + town.height() {
+            for x in town.origin.0..town.origin.0 + town.width() {
                 let tile = town.cell((x, y)).0;
-                assert!(!tile.walkable() || seen.contains(&(x, y)), "{}: {x},{y}", town.name());
+                assert!(
+                    !tile.walkable() || seen.contains(&(x, y)),
+                    "{} variant {} {}: {x},{y} local {:?}",
+                    town.name(),
+                    town.variant,
+                    town.kind(),
+                    town.local((x, y))
+                );
                 cells.push(tile);
             }
         }
-        for service in [town.shop(), town.respawn(), town.stairs()] {
+        for service in [town.shop_site(), town.temple_site(), town.deep_site()].into_iter().flatten() {
             assert!(seen.contains(&service));
         }
-        assert_eq!(town.cell(town.shop()).1, Zone::Shop);
-        assert_eq!(town.cell(town.respawn()).1, Zone::Temple);
-        assert_eq!(town.cell(town.stairs()).0, Tile::StairsDown);
-        assert!(cells.contains(&Tile::Counter) && cells.contains(&Tile::Altar));
-        assert_eq!(cells.iter().filter(|&&tile| tile == Tile::StairsDown).count(), 1);
+        if let Some(shop) = town.shop_site() {
+            assert_eq!(town.cell(shop).1, Zone::Shop);
+        }
+        if let Some(temple) = town.temple_site() {
+            assert_eq!(town.cell(temple).1, Zone::Temple);
+        }
+        if let Some(stairs) = town.deep_site() {
+            assert_eq!(town.cell(stairs).0, Tile::StairsDown);
+        }
+        assert_eq!(cells.contains(&Tile::Counter), town.has_shop());
+        assert_eq!(cells.contains(&Tile::Altar), town.has_temple());
+        assert_eq!(cells.iter().filter(|&&tile| tile == Tile::StairsDown).count(), usize::from(town.has_deep()));
         assert!(seen.iter().any(|&(x, _)| x == town.origin.0));
-        assert!(seen.iter().any(|&(x, _)| x == town.origin.0 + Town::WIDTH - 1));
+        assert!(seen.iter().any(|&(x, _)| x == town.origin.0 + town.width() - 1));
         assert!(seen.iter().any(|&(_, y)| y == town.origin.1));
-        assert!(seen.iter().any(|&(_, y)| y == town.origin.1 + Town::HEIGHT - 1));
+        assert!(seen.iter().any(|&(_, y)| y == town.origin.1 + town.height() - 1));
     }
 
     #[test]
     fn every_layout_has_services_and_cardinal_paths_to_them_and_the_edges() {
         // Exhaust every geometry bit: both mirrors, swapped services, and every room size.
         for variant in 0..4096 {
-            check(Town { origin: (-80, 37), variant });
+            check(Town { origin: (-80, 37), variant, layout: 0 });
         }
+    }
+
+    #[test]
+    fn generated_settlements_vary_in_size_buildings_services_and_walls() {
+        let mut sizes = HashSet::new();
+        let mut services = HashSet::new();
+        let mut plans = HashSet::new();
+        for variant in 0..2048_u64 {
+            let variant = variant.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            let town = Town { origin: (-80, 37), variant, layout: 1 };
+            check(town);
+            sizes.insert((town.width(), town.height()));
+            services.insert((town.has_shop(), town.has_temple(), town.has_deep()));
+            plans.insert(
+                (0..town.height())
+                    .flat_map(|y| {
+                        (0..town.width())
+                            .map(move |x| format!("{:?}", town.cell((town.origin.0 + x, town.origin.1 + y))))
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert_eq!(sizes.len(), 3);
+        assert_eq!(services.len(), 8, "every service combination can occur");
+        assert!(plans.len() > 1000, "not just mirrored copies of one fixed plan");
+    }
+
+    #[test]
+    fn old_serialized_towns_keep_their_identity_geometry_and_deep_seed() {
+        let json = r#"{"origin":[-80,37],"variant":12345678}"#;
+        let town: Town = serde_json::from_str(json).unwrap();
+        assert_eq!(town, Town { origin: (-80, 37), variant: 12345678, layout: 0 });
+        assert_eq!(serde_json::to_string(&town).unwrap(), json);
+        check(town);
+        assert_eq!(town.variant(), 12345678);
+        let generated = Town { layout: 1, ..town };
+        assert_eq!(serde_json::from_str::<Town>(&serde_json::to_string(&generated).unwrap()).unwrap(), generated);
     }
 
     #[test]
@@ -286,8 +504,8 @@ mod tests {
                 if town != towns.home {
                     others += 1;
                 }
-                for y in town.origin.1..town.origin.1 + Town::HEIGHT {
-                    for x in town.origin.0..town.origin.0 + Town::WIDTH {
+                for y in town.origin.1..town.origin.1 + town.height() {
+                    for x in town.origin.0..town.origin.0 + town.width() {
                         let (wx, wy) = terrain.world_pos((x, y));
                         let biome = world.tile(wx, wy).biome.biome();
                         assert!(biome.passable && !biome.water, "seed {seed}: {} at {x},{y}", town.name());
@@ -320,10 +538,10 @@ mod tests {
             a.sectors.values().flat_map(|column| column.values()).flatten().copied().chain([a.home]).collect();
         for (i, town) in towns.iter().enumerate() {
             for other in towns.iter().skip(i + 1) {
-                let separated = town.origin.0 + Town::WIDTH <= other.origin.0
-                    || other.origin.0 + Town::WIDTH <= town.origin.0
-                    || town.origin.1 + Town::HEIGHT <= other.origin.1
-                    || other.origin.1 + Town::HEIGHT <= town.origin.1;
+                let separated = town.origin.0 + town.width() <= other.origin.0
+                    || other.origin.0 + other.width() <= town.origin.0
+                    || town.origin.1 + town.height() <= other.origin.1
+                    || other.origin.1 + other.height() <= town.origin.1;
                 assert!(separated);
             }
         }
