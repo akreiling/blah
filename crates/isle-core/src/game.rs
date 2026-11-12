@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::command::{self, Command, Dir, Instant, MAX_STEPS, Parsed, Target};
 use crate::data::{Armor, Bow, Item, Kind, SHOP, Spell, Stats, Weapon, sale_price, treasure};
 use crate::deep::Deep;
+use crate::herb::{HerbPatch, SECTOR as HERB_SECTOR};
 use crate::landmark::{Landmark, SECTOR};
 use crate::map::{LevelId, Place, Pos, Terrain, Tile, Zone, distance};
 use crate::practice::{Practice, Practices, rank_steps};
@@ -443,6 +444,9 @@ pub struct Game {
     /// Only sites actually seen; opened caches never replenish.
     #[serde(default)]
     landmarks: Vec<Landmark>,
+    /// Only discovered patches, with permanent harvest state.
+    #[serde(default)]
+    herbs: Vec<HerbPatch>,
     /// At most three accepted player steps from the current/most recently resolved round.
     #[serde(default)]
     footsteps: Vec<Footstep>,
@@ -477,6 +481,7 @@ impl Game {
             deeps: Vec::new(),
             explored: BTreeMap::new(),
             landmarks: Vec::new(),
+            herbs: Vec::new(),
             footsteps: Vec::new(),
             log: Vec::new(),
             log_total: 0,
@@ -532,6 +537,16 @@ impl Game {
     /// A discovered site on the character's current map; never reveals an unseen site.
     pub fn landmark_at(&self, pos: Pos) -> Option<&Landmark> {
         (self.player.at == LevelId::Surface).then(|| self.landmarks.iter().find(|site| site.pos == pos)).flatten()
+    }
+
+    /// Discovered herb patches, including those already picked.
+    pub fn herbs(&self) -> &[HerbPatch] {
+        &self.herbs
+    }
+
+    /// A discovered patch on the current map. Picked patches retain their harvest record.
+    pub fn herb_at(&self, pos: Pos) -> Option<&HerbPatch> {
+        (self.player.at == LevelId::Surface).then(|| self.herbs.iter().find(|patch| patch.pos == pos)).flatten()
     }
 
     /// Whether the character has ever seen `pos` on their map.
@@ -707,7 +722,7 @@ impl Game {
                 }
             }
             Instant::Look => {
-                self.discover_landmarks();
+                self.discover_wilderness();
                 let place = match self.zone() {
                     Zone::Shop => "the outfitter's shop".to_owned(),
                     Zone::Temple => "the temple".to_owned(),
@@ -817,6 +832,7 @@ impl Game {
             Command::Wield(what) => self.wield(&what),
             Command::Wear(what) => self.wear(&what),
             Command::Quaff => self.quaff(),
+            Command::Use(what) => self.use_herb(&what),
             Command::Rest => self.rest(),
             Command::Down => self.stairs(true),
             Command::Up => self.stairs(false),
@@ -867,7 +883,7 @@ impl Game {
             self.enforce_light();
             if self.player.at == LevelId::Surface {
                 self.towns.ensure(self.seed, self.terrain, next);
-                self.discover_landmarks();
+                self.discover_wilderness();
             }
             self.describe_landmark();
             if self.footsteps.len() < MAX_STEPS {
@@ -905,6 +921,13 @@ impl Game {
             let instruction = if site.opened { "" } else { " Use get all to open it." };
             self.say(Tone::Info, format!("{}: {detail}{instruction}", site.kind.name()));
         }
+        if let Some(patch) = self.herb_at(self.player.pos).filter(|patch| !patch.picked) {
+            let herb = patch.herb;
+            self.say(
+                Tone::Info,
+                format!("{} grows here; {}. Use get all to gather it.", herb.name(), herb.description()),
+            );
+        }
     }
 
     fn landmark_directions(&mut self) {
@@ -922,6 +945,20 @@ impl Game {
                     distance(me, site.pos),
                     if site.opened { "empty cache" } else { "unopened cache" }
                 )
+            })
+            .collect();
+        for line in lines {
+            self.say(Tone::Info, line);
+        }
+        let lines: Vec<String> = self
+            .herbs
+            .iter()
+            .filter(|patch| {
+                self.player.at == LevelId::Surface && !patch.picked && patch.pos != me && self.sees(patch.pos)
+            })
+            .map(|patch| {
+                let way = Dir::from_delta(patch.pos.0 - me.0, patch.pos.1 - me.1).map_or("here", Dir::short);
+                format!("{}: {} {way} ({}).", patch.herb.name(), distance(me, patch.pos), patch.herb.description())
             })
             .collect();
         for line in lines {
@@ -1585,6 +1622,7 @@ impl Game {
     }
 
     fn get(&mut self, what: &str) {
+        self.discover_wilderness();
         let (at, pos) = (self.player.at, self.player.pos);
         if what == "all" && self.landmark_at(pos).is_some_and(|site| !site.opened) {
             let index = self.landmarks.iter().position(|site| site.pos == pos).expect("site underfoot");
@@ -1595,8 +1633,11 @@ impl Game {
             }
             self.say(Tone::Gain, format!("You open the cache at the {}.", site.kind.name()));
         }
+        let gathered = self.gather_herb(what);
         let Some(index) = self.piles.iter().position(|p| p.at == at && p.pos == pos) else {
-            self.say(Tone::Info, "There is nothing here.");
+            if !gathered {
+                self.say(Tone::Info, "There is nothing here.");
+            }
             return;
         };
         let wanted: Vec<usize> = if what == "all" {
@@ -1605,7 +1646,9 @@ impl Game {
             self.piles[index].items.iter().position(|i| i.matches(what)).into_iter().collect()
         };
         if wanted.is_empty() {
-            self.say(Tone::Info, format!("You see no {what} here."));
+            if !gathered {
+                self.say(Tone::Info, format!("You see no {what} here."));
+            }
             return;
         }
         let mut taken = Vec::new();
@@ -1708,6 +1751,48 @@ impl Game {
         self.player.hp = (self.player.hp + healed).min(self.player.max_hp);
         self.consume_injuries(healed);
         self.say(Tone::Gain, format!("You drink the potion. (+{healed} health)"));
+    }
+
+    fn gather_herb(&mut self, what: &str) -> bool {
+        let Some(patch) = self.herb_at(self.player.pos).copied().filter(|patch| !patch.picked) else {
+            return false;
+        };
+        let item = Item::Herb(patch.herb);
+        if what != "all" && !item.matches(what) {
+            return false;
+        }
+        if self.player.sack.len() >= SACK {
+            self.say(Tone::Info, format!("Your sack is full; you leave the {} growing.", patch.herb.name()));
+        } else {
+            let index = self.herbs.iter().position(|known| known.pos == patch.pos).expect("patch underfoot");
+            self.herbs[index].picked = true;
+            self.player.sack.push(item);
+            self.say(Tone::Gain, format!("You gather {}. It {}.", patch.herb.name(), patch.herb.description()));
+        }
+        true
+    }
+
+    fn use_herb(&mut self, what: &str) {
+        let Some(index) = self.player.sack.iter().position(|item| item.matches(what)) else {
+            self.say(Tone::Info, format!("You carry no {what} in your sack."));
+            return;
+        };
+        let Item::Herb(herb) = self.player.sack[index] else {
+            self.say(Tone::Info, "Use names a herb. Drink a healing potion with quaff.");
+            return;
+        };
+        let (health, focus) = herb.recovery();
+        let health = (self.player.max_hp - self.player.hp).clamp(0, health);
+        let focus = (self.player.max_focus - self.player.focus).clamp(0, focus);
+        if health == 0 && focus == 0 {
+            self.say(Tone::Info, format!("The {} would not help you now; you keep it.", herb.name()));
+            return;
+        }
+        self.player.sack.remove(index);
+        self.player.hp += health;
+        self.player.focus += focus;
+        self.consume_injuries(health);
+        self.say(Tone::Gain, format!("You use {}. (+{health} Health, +{focus} Focus)", herb.name()));
     }
 
     fn rest(&mut self) {
@@ -2286,10 +2371,10 @@ impl Game {
                 }
             }
         }
-        self.discover_landmarks();
+        self.discover_wilderness();
     }
 
-    fn discover_landmarks(&mut self) {
+    fn discover_wilderness(&mut self) {
         if self.player.at == LevelId::Surface {
             let level = self.level();
             let me = self.player.pos;
@@ -2305,6 +2390,22 @@ impl Game {
                         self.say(
                             Tone::Gain,
                             format!("You discover a site: {}. Its cache is untouched.", site.kind.name()),
+                        );
+                    }
+                }
+            }
+            for sy in (me.1 - SIGHT).div_euclid(HERB_SECTOR)..=(me.1 + SIGHT).div_euclid(HERB_SECTOR) {
+                for sx in (me.0 - SIGHT).div_euclid(HERB_SECTOR)..=(me.0 + SIGHT).div_euclid(HERB_SECTOR) {
+                    if let Some(patch) = HerbPatch::generate(self.seed, (sx, sy), &level)
+                        && level.sees(me, patch.pos, SIGHT)
+                        && !self.herbs.iter().any(|known| known.pos == patch.pos)
+                    {
+                        self.herbs.push(patch);
+                        let (chunk, word, bit) = memory_cell(patch.pos);
+                        self.explored.entry(chunk.0).or_default().entry(chunk.1).or_default()[word] |= bit;
+                        self.say(
+                            Tone::Info,
+                            format!("You find {} growing nearby; {}.", patch.herb.name(), patch.herb.description()),
                         );
                     }
                 }

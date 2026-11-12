@@ -94,6 +94,7 @@ pub enum Object {
     Cairn,
     Camp,
     Shrine,
+    Herb(isle_core::Herb),
     Coins,
     Arrows,
     Potion,
@@ -111,7 +112,7 @@ impl Object {
 }
 
 #[cfg(test)]
-pub const ALL_OBJECTS: [Object; 22] = [
+pub const ALL_OBJECTS: [Object; 25] = [
     Object::Pine,
     Object::Oak,
     Object::Acacia,
@@ -126,6 +127,9 @@ pub const ALL_OBJECTS: [Object; 22] = [
     Object::Cairn,
     Object::Camp,
     Object::Shrine,
+    Object::Herb(isle_core::Herb::Woundleaf),
+    Object::Herb(isle_core::Herb::Bogmint),
+    Object::Herb(isle_core::Herb::Sunroot),
     Object::Coins,
     Object::Arrows,
     Object::Potion,
@@ -269,6 +273,7 @@ pub fn item_art(items: &[Item]) -> Option<Object> {
         return Some(Object::Treasure);
     }
     match items.first()? {
+        Item::Herb(herb) => Some(Object::Herb(*herb)),
         Item::Gold(_) => Some(Object::Coins),
         Item::Arrows(_) => Some(Object::Arrows),
         Item::Potion => Some(Object::Potion),
@@ -2016,6 +2021,30 @@ mod tests {
         save(&image, "landmark-contact.png");
     }
 
+    /// Preview field supplies in each biome look.
+    #[test]
+    #[ignore]
+    fn herb_contact_sheet() {
+        let cache = ArtCache::new(7);
+        let world = |x: i32, _: i32| match x / 4 {
+            0 => (Terrain::Grass, Style::Moss),
+            1 => (Terrain::Grass, Style::Hearth),
+            _ => (Terrain::Sand, Style::Fable),
+        };
+        let objects = |x: i32, y: i32| {
+            (x.rem_euclid(4) == 1)
+                .then_some(match y {
+                    1 => Some(Object::Herb(isle_core::Herb::Woundleaf)),
+                    3 => Some(Object::Herb(isle_core::Herb::Bogmint)),
+                    5 => Some(Object::Herb(isle_core::Herb::Sunroot)),
+                    _ => None,
+                })
+                .flatten()
+        };
+        let image = scene(&cache, &world, Mood::Surface(mood::Sky { clear: 4, mist: 0 }), (12, 7), &objects);
+        save(&image, "herb-contact.png");
+    }
+
     /// Paint a scene of `w`×`h` cells under `mood`, with tufts, heat, and `objects` on top.
     fn scene(
         cache: &ArtCache,
@@ -2593,6 +2622,9 @@ mod tests {
     #[test]
     fn every_item_variant_and_mixed_pile_has_an_icon() {
         let variants = [
+            (Item::Herb(isle_core::Herb::Woundleaf), Object::Herb(isle_core::Herb::Woundleaf)),
+            (Item::Herb(isle_core::Herb::Bogmint), Object::Herb(isle_core::Herb::Bogmint)),
+            (Item::Herb(isle_core::Herb::Sunroot), Object::Herb(isle_core::Herb::Sunroot)),
             (Item::Gold(1), Object::Coins),
             (Item::Arrows(1), Object::Arrows),
             (Item::Potion, Object::Potion),

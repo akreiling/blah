@@ -8,6 +8,7 @@ mod command;
 mod data;
 mod deep;
 mod game;
+mod herb;
 mod landmark;
 mod map;
 mod practice;
@@ -22,6 +23,7 @@ pub use command::{Command, Dir, HELP, Instant, MAX_STEPS, Parsed, Target, parse}
 pub use data::{Armor, Bow, Item, Kind, SHOP, Spell, Stats, Weapon, sale_price};
 pub use deep::Deep;
 pub use game::{Creature, Game, Line, Phase, Pile, Player, SACK, SIGHT, Sighted, Tone, modifier};
+pub use herb::{Herb, HerbPatch};
 pub use landmark::{Landmark, LandmarkKind};
 pub use map::{LevelId, Place, Pos, Terrain, Tile, Zone, distance, line};
 pub use practice::{Practice, Practices};

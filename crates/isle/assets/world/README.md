@@ -30,6 +30,12 @@ Preview all three in grass, sand, and snow with
 `mise exec -- cargo test -p isle landmark_contact_sheet -- --ignored`
 (`target/isle-world-art/landmark-contact.png`).
 
+Herbs have small leaf-and-flower sprites: ivory woundleaf, violet bogmint, and gold-flowered sunroot with
+a visible root. Discovered, unpicked patches remain on remembered ground; harvesting removes the plant.
+Dropped herbs use the same sprite and keep the ordinary item visibility rules.
+Preview them with `mise exec -- cargo test -p isle herb_contact_sheet -- --ignored`
+(`target/isle-world-art/herb-contact.png`).
+
 The renderer uses only known terrain within two cells (looks within one), substituting the center's ground,
 tint, and look for unknown cells. Cached ground images are per position and neighborhood, evicted when
 unused, and rebuilt at display-scale changes. Preview three biomes with coasts, roads, walled yards,

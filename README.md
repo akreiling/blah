@@ -2,7 +2,8 @@
 
 A solo, turn-based island adventure inspired by *Island of Kesmai*, with generated towns,
 endless Deeps, procedural terrain, and genome-shaped creatures. Practice earns power.
-Explore cairns, abandoned camps, and ruined shrines for one-time caches. The world waits while you type.
+Explore cairns, abandoned camps, and ruined shrines for one-time caches. Gather biome-specific herbs
+for exposed field recovery. The world waits while you type.
 
 ## Play
 

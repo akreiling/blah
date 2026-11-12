@@ -123,6 +123,8 @@ pub enum Command {
     Wear(String),
     /// Drink a healing potion.
     Quaff,
+    /// Consume a named herb from the sack.
+    Use(String),
     /// Catch your breath.
     Rest,
     /// Take the stairs down.
@@ -176,6 +178,7 @@ enum Verb {
     Wield,
     Wear,
     Quaff,
+    Use,
     Rest,
     Down,
     Up,
@@ -191,7 +194,7 @@ enum Verb {
 }
 
 /// Verbs with the shortest prefix each accepts. Earlier entries win, so `we` is wear and `w` is west.
-const VERBS: [(&str, usize, Verb); 28] = [
+const VERBS: [(&str, usize, Verb); 29] = [
     ("attack", 1, Verb::Attack),
     ("fight", 1, Verb::Attack),
     ("kill", 1, Verb::Attack),
@@ -210,6 +213,7 @@ const VERBS: [(&str, usize, Verb); 28] = [
     ("rest", 1, Verb::Rest),
     ("down", 1, Verb::Down),
     ("up", 1, Verb::Up),
+    ("use", 2, Verb::Use),
     ("buy", 1, Verb::Buy),
     ("sell", 2, Verb::Sell),
     ("heal", 3, Verb::Heal),
@@ -268,6 +272,7 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
         Verb::Wield => Command::Wield(need("wield")?),
         Verb::Wear => Command::Wear(need("wear")?),
         Verb::Quaff => Command::Quaff,
+        Verb::Use => Command::Use(need("use")?),
         Verb::Rest => Command::Rest,
         Verb::Down => Command::Down,
         Verb::Up => Command::Up,
@@ -308,7 +313,7 @@ pub const HELP: [&str; 10] = [
     "Fight: attack <who>, nock then shoot <who>. Who is a letter (shoot a) or a name (sh 2 orc).",
     "Magic: chant <spell>, then cast [who]. Spells: spark, shield, heal, stun. Metal adds 2 Focus except shield.",
     "Hide: hide, then strike or shoot from hiding for extra damage. Anyone can hide and chant.",
-    "Things: get <item>|all, drop, wield, wear, quaff, inventory, look.",
+    "Things: get <item>|all (also gathers herbs), drop, wield, wear, quaff, use <herb>, inventory, look.",
     "Town: buy <item>, sell <item>, list (in the shop); heal (in the temple).",
     "Growth: useful practice improves powers; kills raise adventuring rank. Skills lists practice. Rest recovers.",
     "Chain rounds with ;  (nock; shoot a). A chain stops if you are hurt or something new appears.",
@@ -335,6 +340,9 @@ mod tests {
         assert_eq!(round("shoot at the b"), Command::Shoot(Some(Target::Label('B'))));
         assert_eq!(round("a"), Command::Attack(None));
         assert_eq!(round("get all"), Command::Get("all".into()));
+        assert_eq!(round("use woundleaf"), Command::Use("woundleaf".into()));
+        assert_eq!(round("us bogmint"), Command::Use("bogmint".into()));
+        assert_eq!(round("u"), Command::Up);
         assert_eq!(round("ch sp"), Command::Chant(Spell::Spark));
     }
 
@@ -358,6 +366,7 @@ mod tests {
         assert!(parse("n n n n").unwrap_err().contains("three"));
         assert!(parse("xyzzy").unwrap_err().contains("xyzzy"));
         assert_eq!(parse("get").unwrap_err(), "Get what?");
+        assert_eq!(parse("use").unwrap_err(), "Use what?");
         assert!(parse("chant fireball").unwrap_err().contains("fireball"));
     }
 }

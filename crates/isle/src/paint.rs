@@ -575,6 +575,26 @@ pub fn object(object: Object, p: &Palette, snowy: bool, hot: bool, size: u8) -> 
             d.rect(15, 25, 22, 28, p.bark);
             d.rect(18, 25, 19, 27, p.gold);
         }
+        Object::Herb(herb) => {
+            let bloom = match herb {
+                isle_core::Herb::Woundleaf => [236, 220, 184],
+                isle_core::Herb::Bogmint => [150, 150, 226],
+                isle_core::Herb::Sunroot => [236, 172, 68],
+            };
+            d.shadow(p);
+            d.line(&[(16, 27), (16, 12)], p.ink, 3);
+            d.line(&[(16, 26), (16, 13)], p.leaf, 1);
+            for (x, y, side) in [(15, 23, -1), (17, 20, 1), (15, 17, -1)] {
+                d.poly(&[(x, y), (x + side * 7, y - 5), (x + side * 6, y), (x, y + 2)], p.leaf, ink);
+                d.line(&[(x + side * 2, y), (x + side * 5, y - 2)], p.leafhi, 1);
+            }
+            if herb == isle_core::Herb::Sunroot {
+                d.ellipse((12, 24, 20, 29), solid(p.bark), ink);
+            }
+            for (x, y) in [(12, 10), (17, 8), (19, 12)] {
+                d.ellipse((x, y, x + 4, y + 4), solid(bloom), ink);
+            }
+        }
         Object::Coins => {
             for (x, y) in [(8, 20), (15, 18), (11, 14)] {
                 d.ellipse((x, y, x + 9, y + 5), solid(p.gold), ink);

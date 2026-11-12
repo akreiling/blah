@@ -718,6 +718,10 @@ fn cell(game: &Game, pos: Pos, labels: &[(Pos, char)]) -> (String, u32, Option<u
         let color = if visible { HEADING } else { dimmed(HEADING) };
         return (if site.opened { "&." } else { "&?" }.into(), color, back);
     }
+    if game.herb_at(pos).is_some_and(|patch| !patch.picked) {
+        let color = 0x9a_c8_76;
+        return ("h*".into(), if visible { color } else { dimmed(color) }, back);
+    }
     let (glyph, color) = match level.tile(pos) {
         Tile::Wall => ("[]", 0x9a_9a_a8),
         Tile::Floor => (". ", 0x5c_5f_6e),
@@ -917,6 +921,9 @@ fn map_cell_art_in<'a>(
             LandmarkKind::Camp => Object::Camp,
             LandmarkKind::Shrine => Object::Shrine,
         });
+    }
+    if let Some(patch) = game.herb_at(pos).filter(|patch| !patch.picked) {
+        terrain.object = Some(Object::Herb(patch.herb));
     }
     // Unknown neighbors take this cell's own ground and tint, so edges never reveal unexplored terrain.
     let near = |dx: i32, dy: i32| {
@@ -1556,6 +1563,40 @@ mod tests {
             let opened: Game = serde_json::from_value(save.clone()).unwrap();
             assert_eq!(cell(&opened, pos, &[]).0, "&.");
             save["landmarks"][0]["pos"] = serde_json::json!((me.0 + 80, me.1));
+            let unknown: Game = serde_json::from_value(save.clone()).unwrap();
+            assert!(map_cell_art(&unknown, (me.0 + 80, me.1), &[]).is_none());
+            assert_eq!(cell(&unknown, (me.0 + 80, me.1), &[]).0, "  ");
+        }
+    }
+
+    #[test]
+    fn herb_patches_render_only_when_known_and_unpicked_with_ordinary_actor_priority() {
+        let game = made(7);
+        let me = game.player().pos;
+        let pos = (me.0 + 1, me.1);
+        let mut save = serde_json::to_value(&game).unwrap();
+        for herb in [isle_core::Herb::Woundleaf, isle_core::Herb::Bogmint, isle_core::Herb::Sunroot] {
+            save["herbs"] = serde_json::json!([isle_core::HerbPatch { pos, herb, picked: false }]);
+            let visible: Game = serde_json::from_value(save.clone()).unwrap();
+            assert_eq!(cell(&visible, pos, &[]).0, "h*");
+            assert_eq!(map_cell_art(&visible, pos, &[]).unwrap().terrain.object, Some(Object::Herb(herb)));
+            let mut memory = save.clone();
+            memory["player"]["pos"] = serde_json::json!((me.0 + 40, me.1));
+            let remembered: Game = serde_json::from_value(memory).unwrap();
+            assert!(!remembered.sees(pos));
+            assert_eq!(cell(&remembered, pos, &[]).0, "h*");
+            assert!(map_cell_art(&remembered, pos, &[]).unwrap().remembered);
+            save["player"]["pos"] = serde_json::json!(pos);
+            let standing: Game = serde_json::from_value(save.clone()).unwrap();
+            assert_eq!(cell(&standing, pos, &[]).0, "@ ");
+            assert!(matches!(map_cell_art(&standing, pos, &[]).unwrap().actor, Some(MapActor::Player)));
+            save["player"]["pos"] = serde_json::json!(me);
+            save["herbs"][0]["picked"] = serde_json::json!(true);
+            let picked: Game = serde_json::from_value(save.clone()).unwrap();
+            assert_ne!(cell(&picked, pos, &[]).0, "h*");
+            assert_ne!(map_cell_art(&picked, pos, &[]).unwrap().terrain.object, Some(Object::Herb(herb)));
+            save["herbs"][0]["picked"] = serde_json::json!(false);
+            save["herbs"][0]["pos"] = serde_json::json!((me.0 + 80, me.1));
             let unknown: Game = serde_json::from_value(save.clone()).unwrap();
             assert!(map_cell_art(&unknown, (me.0 + 80, me.1), &[]).is_none());
             assert_eq!(cell(&unknown, (me.0 + 80, me.1), &[]).0, "  ");

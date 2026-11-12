@@ -140,6 +140,32 @@ take what fits in one round. It holds coins, gear, and extra arrows or a healing
 Opening is permanent: waiting, leaving, dying, and reloading never refill it. A full sack leaves
 the remaining contents on the ground, where you can return for them. The site itself remains.
 
+### Herbs and field recovery
+
+Seeded herb patches grow on open wilderness ground, never inside towns, in water, or in the Deep.
+Seeing a patch reveals its plant and effect; `look` gives directions to plants in sight.
+Each plant has its own pixel-art flowers (`h*` in the text map).
+
+| Herb | Where it grows | One use restores |
+|---|---|---|
+| Woundleaf | Grassland, forest, hills | 6 Health |
+| Bogmint | Swamp, jungle | 8 Focus |
+| Sunroot | Desert, savanna, badlands | 3 Health and 4 Focus |
+
+Stand on a patch and `get herb`, name the plant (`get bogmint`), or use `get all`/`,` to gather it
+in one round. Each herb occupies one sack slot. A full sack leaves the plant growing.
+Each 16×16 sector tries up to four sites; some sectors have no suitable plant. A harvested patch stays
+picked across visits, death, and reloads, and its flowers disappear from the map.
+
+`use woundleaf`, `use bogmint`, or `use sunroot` consumes one carried herb in one round. You can
+use it while hunted, unlike `rest`, but creatures still act: gathering and recovery provide no safety.
+Recovery never exceeds your current capacities. If the herb cannot restore either resource, you keep it,
+but the attempted command still takes a round. Herbs grant no practice or XP; dressing a wound removes
+its tracked injury just as a potion does, so later magic cannot claim it again.
+You can drop, pick up, or sell gathered herbs (two gold each); outfitters do not stock them.
+
+### Towns, wildlife, and the Deep
+
 Entering a temple makes it your revival point, even if you do not need healing. The fallen wake at the
 last temple visited, leaving their gold where they fell. Evolved wildlife lives outside town footprints
 and cannot attack into it. As you explore, individuals arrive beyond sight from their own region's species
@@ -259,6 +285,8 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
   wilderness memory, and save/reload.
 - `python3 crates/isle/scripts/landmarks.py` walks from town to a naturally generated site, checks its
   map marker and directions, opens its cache, and verifies one-time and partial claims across reloads.
+- `python3 crates/isle/scripts/herbs.py` finds natural plants in three biomes, checks full-sack gathering,
+  exact recovery, no practice gains, map markers, and permanent harvest state across reloads.
 - `python3 crates/isle/scripts/wildlife.py` checks evolved population, reload, the IN SIGHT panel,
   and shooting an actual spawned individual by its regional name.
 - `python3 crates/isle/scripts/towns.py` visits two generated towns, exercises their services, and checks
