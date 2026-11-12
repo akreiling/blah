@@ -1,5 +1,9 @@
 # Growing Into Power: design index
 
+> Retained blah systems research. The original window has been removed; UI and SQLite
+> implementation notes in this index and `systems/` are historical. Shared core rules and
+> headless examples remain. [Isle](ISLE.md) documents the current game and JSON saves.
+
 **Status:** proposed long-term systems and delivery plan. A narrow [composition proof](systems/composition-poc.md)
 is now executable; the full progression system is not.
 **Baseline:** 2026-11-09, repository revision `0b82077`.

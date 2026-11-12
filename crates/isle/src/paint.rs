@@ -539,6 +539,42 @@ pub fn object(object: Object, p: &Palette, snowy: bool, hot: bool, size: u8) -> 
             d.line(&[(15, 13), (15, 6)], p.gold, 2);
             d.ellipse((13, 2, 18, 7), solid(p.glow), ink);
         }
+        Object::Cairn => {
+            d.shadow(p);
+            for (x, y, w) in [(4, 22, 12), (16, 22, 12), (7, 16, 11), (17, 17, 8), (11, 10, 10), (13, 6, 6)] {
+                d.ellipse((x, y, x + w, y + 6), solid(p.rock), ink);
+                d.line(&[(x + 2, y + 1), (x + w - 2, y + 1)], p.stone, 1);
+            }
+            d.rect(13, 23, 19, 27, p.ink);
+            d.rect(14, 24, 18, 26, p.bark);
+        }
+        Object::Camp => {
+            d.shadow(p);
+            d.poly(&[(4, 21), (12, 5), (23, 10), (28, 25)], mix(p.bark, p.gold, 0.25), ink);
+            d.poly(&[(4, 21), (12, 5), (15, 23)], p.bark, ink);
+            d.poly(&[(7, 21), (12, 11), (13, 22)], p.ink, None);
+            for (x, y) in [(17, 25), (21, 23), (25, 26)] {
+                d.ellipse((x, y, x + 4, y + 3), solid(p.rock), ink);
+            }
+            d.line(&[(19, 26), (24, 25)], p.ink, 2);
+            d.rect(4, 24, 10, 28, p.ink);
+            d.rect(5, 25, 9, 27, p.steel);
+            d.line(&[(7, 25), (7, 27)], p.bark, 1);
+        }
+        Object::Shrine => {
+            d.shadow(p);
+            d.poly(&[(3, 24), (26, 23), (29, 28), (4, 29)], p.rock, ink);
+            d.rect(5, 7, 10, 24, p.ink);
+            d.rect(6, 8, 9, 23, p.stone);
+            d.rect(22, 14, 27, 25, p.ink);
+            d.rect(23, 15, 26, 24, p.stone);
+            d.poly(&[(4, 5), (14, 5), (12, 9), (4, 10)], p.rock, ink);
+            d.rect(12, 18, 22, 25, p.ink);
+            d.rect(13, 19, 21, 24, p.stone);
+            d.line(&[(13, 19), (21, 19)], p.steel, 1);
+            d.rect(15, 25, 22, 28, p.bark);
+            d.rect(18, 25, 19, 27, p.gold);
+        }
         Object::Coins => {
             for (x, y) in [(8, 20), (15, 18), (11, 14)] {
                 d.ellipse((x, y, x + 9, y + 5), solid(p.gold), ink);

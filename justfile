@@ -2,10 +2,6 @@
 
 cargo := "mise exec -- cargo"
 
-# Launch the game: just run [seed]
-run *args:
-    {{cargo}} run --quiet -p blah -- {{args}}
-
 # Launch Isle, the Kesmai-style island game: just isle [--new] [--round SECONDS]
 isle *args:
     {{cargo}} run --quiet -p isle -- {{args}}

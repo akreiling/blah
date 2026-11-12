@@ -1,5 +1,9 @@
 # Playable composition proof
 
+> Historical blah window proof. That frontend and `just run` have been removed, so the
+> window commands and keys below no longer apply. `just composition-demo` and the shared
+> core rules remain executable. See [Isle](../ISLE.md) for current play.
+
 [Design index](../SYSTEMS_ROADMAP.md) · [Technique rules](techniques.md) · [Jev review](../review/technique-review.md)
 
 This is a narrow executable proof, not the full advancement system. It deliberately gives the player

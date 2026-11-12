@@ -11,8 +11,8 @@ use gpui::{
 };
 
 use isle_core::{
-    Command, Creature, Game, Instant, Item, Kind, Parsed, Phase, Player, Pos, Practice, SIGHT, Tile, Tone, Zone,
-    distance,
+    Command, Creature, Game, Instant, Item, Kind, LandmarkKind, Parsed, Phase, Player, Pos, Practice, SIGHT, Tile,
+    Tone, Zone, distance,
 };
 
 use crate::art::{ArtCache, GroundCell, Object, TerrainArt, item_art, terrain_art};
@@ -714,6 +714,10 @@ fn cell(game: &Game, pos: Pos, labels: &[(Pos, char)]) -> (String, u32, Option<u
             return (glyph.into(), color, back);
         }
     }
+    if let Some(site) = game.landmark_at(pos) {
+        let color = if visible { HEADING } else { dimmed(HEADING) };
+        return (if site.opened { "&." } else { "&?" }.into(), color, back);
+    }
     let (glyph, color) = match level.tile(pos) {
         Tile::Wall => ("[]", 0x9a_9a_a8),
         Tile::Floor => (". ", 0x5c_5f_6e),
@@ -906,7 +910,14 @@ fn map_cell_art_in<'a>(
         None
     };
     let deep = level.deep().is_some();
-    let terrain = terrain_art(level.tile(pos), level.ground(pos), deep, pos);
+    let mut terrain = terrain_art(level.tile(pos), level.ground(pos), deep, pos);
+    if let Some(site) = game.landmark_at(pos) {
+        terrain.object = Some(match site.kind {
+            LandmarkKind::Cairn => Object::Cairn,
+            LandmarkKind::Camp => Object::Camp,
+            LandmarkKind::Shrine => Object::Shrine,
+        });
+    }
     // Unknown neighbors take this cell's own ground and tint, so edges never reveal unexplored terrain.
     let near = |dx: i32, dy: i32| {
         let at = (pos.0 + dx, pos.1 + dy);
@@ -1038,6 +1049,11 @@ fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache, step: u8, ela
                 marker = match object {
                     Object::StairsUp => Some("<"),
                     Object::StairsDown => Some(">"),
+                    Object::Cairn | Object::Camp | Object::Shrine
+                        if game.landmark_at(pos).is_some_and(|site| !site.opened) =>
+                    {
+                        Some("?")
+                    }
                     _ => None,
                 };
             }
@@ -1511,6 +1527,39 @@ mod tests {
         assert_eq!(cell(&game, (me.0 + 40, me.1 + 40), &[]).0, "  ");
         assert!(map_cell_art(&game, (me.0 + 40, me.1 + 40), &[]).is_none());
         assert_eq!(dimmed(0xff_ff_ff), 0x59_59_59);
+    }
+
+    #[test]
+    fn landmarks_render_in_sight_and_memory_without_revealing_unknown_sites() {
+        let game = made(7);
+        let me = game.player().pos;
+        let pos = (me.0 + 1, me.1);
+        let mut save = serde_json::to_value(&game).unwrap();
+        for (kind, object) in [
+            (LandmarkKind::Cairn, Object::Cairn),
+            (LandmarkKind::Camp, Object::Camp),
+            (LandmarkKind::Shrine, Object::Shrine),
+        ] {
+            save["landmarks"] = serde_json::json!([isle_core::Landmark { pos, kind, opened: false }]);
+            let visible: Game = serde_json::from_value(save.clone()).unwrap();
+            assert_eq!(cell(&visible, pos, &[]).0, "&?");
+            assert_eq!(map_cell_art(&visible, pos, &[]).unwrap().terrain.object, Some(object));
+            assert!(matches!(map_cell_art(&visible, me, &[]).unwrap().actor, Some(MapActor::Player)));
+            let mut memory = save.clone();
+            memory["player"]["pos"] = serde_json::json!((me.0 + 40, me.1));
+            let remembered: Game = serde_json::from_value(memory).unwrap();
+            assert!(!remembered.sees(pos));
+            assert_eq!(cell(&remembered, pos, &[]).0, "&?");
+            assert!(map_cell_art(&remembered, pos, &[]).unwrap().remembered);
+            assert_eq!(map_cell_art(&remembered, pos, &[]).unwrap().terrain.object, Some(object));
+            save["landmarks"][0]["opened"] = serde_json::json!(true);
+            let opened: Game = serde_json::from_value(save.clone()).unwrap();
+            assert_eq!(cell(&opened, pos, &[]).0, "&.");
+            save["landmarks"][0]["pos"] = serde_json::json!((me.0 + 80, me.1));
+            let unknown: Game = serde_json::from_value(save.clone()).unwrap();
+            assert!(map_cell_art(&unknown, (me.0 + 80, me.1), &[]).is_none());
+            assert_eq!(cell(&unknown, (me.0 + 80, me.1), &[]).0, "  ");
+        }
     }
 
     #[test]

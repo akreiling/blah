@@ -1,5 +1,9 @@
 # Design
 
+> Historical blah design and prototype notes. The old `crates/app` window has been removed.
+> Shared core systems and headless examples remain for the merge. For the current game,
+> renderer, controls, and saves, see [Isle](ISLE.md). Remote-art plans below are not live integrations.
+
 For the current detailed systems plan, start with [Growing Into Power](SYSTEMS_ROADMAP.md). Its focused
 documents cover committed character growth, physical and magical disciplines, emergent skill weaving,
 treasure, apex encounters, generated arcs, and implementation checkpoints. They supersede earlier progression
@@ -392,13 +396,13 @@ ecology or remote generation.
   and sim tests are property-style ("500 generations in desert raise mean water retention").
 - **`gen`**, planned, will hold remote clients behind fixture-capable interfaces, plus request queues,
   validation handoff, spending caps, and durable request accounting. It is not an existing crate.
-- **`app`** is the GPUI frontend. The map is a grid of tile elements, which is plenty at viewport size; it
-  becomes one `canvas` element if that stops being fast enough. Panels and overlays are ordinary views.
-  GPUI's actions and keybindings carry the one-key commands. GPUI comes from crates.io at an exact version
+- **`app`**, removed, was the blah GPUI frontend. Its map used a grid of tile elements, with ordinary
+  views for panels and overlays and GPUI action bindings for one-key commands.
+  Isle now owns the window. GPUI comes from crates.io at an exact version
   (`=0.2.2`) because its API changes often. It uses the `runtime_shaders` feature, which compiles the Metal
   shaders at launch, so building needs only Xcode and not its separately downloaded Metal Toolchain.
-- **Save** is one versioned SQLite file per character/world; the first slice saves the game state after
-  every turn. It will grow to record
+- **Save** in the removed frontend was one versioned SQLite file per character/world, rewritten after
+  every turn. Isle uses JSON instead. The earlier persistence plan would grow to record
   item ownership, encounter definitions and progress, learning and reward claims, and later regional
   history. Base terrain is regenerated from a saved seed and compatible generator version; persistent
   terrain changes are overlays. Incompatible rules cannot silently reinterpret old saves. See
@@ -406,7 +410,7 @@ ecology or remote generation.
 
 ## Toolchain and secrets
 
-- `mise.toml` pins Rust stable and `just`. The `justfile` holds the tasks (`run`, `test`, `lint`).
+- `mise.toml` pins Rust stable and `just`. The `justfile` holds the tasks (`isle`, `test`, `lint`).
 - API keys (`OPENROUTER_API_KEY`, `PIXELLAB_SECRET`) live in `.env.local`. That file is gitignored, and mise
   loads it into the environment. If a key is missing, the game runs offline.
 

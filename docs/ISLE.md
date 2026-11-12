@@ -128,6 +128,18 @@ The entire town footprint sits on passable dry land; ocean sectors need not cont
 The starting town is found near the world's origin, and more towns appear as you explore.
 `look` gives distances and directions to the current town's services.
 
+The wilderness holds weathered cairns, abandoned camps, and ruined wayside shrines. Their sites and
+cache contents come from the island seed, not your build or the order you explore. Each 32×32 sector
+tries up to eight dry, open sites; some sectors have none. Sites never replace town cells or alter
+terrain. Seeing one logs a discovery, and its pixel-art remains stay on the remembered map.
+`look` gives directions to sites currently in sight. A `?` badge marks an unopened cache
+(`&?` in the text map, `&.` once opened).
+
+Stand on the site and use `get all`, or press `,` with an empty command line, to open its cache and
+take what fits in one round. It holds coins, gear, and extra arrows or a healing potion.
+Opening is permanent: waiting, leaving, dying, and reloading never refill it. A full sack leaves
+the remaining contents on the ground, where you can return for them. The site itself remains.
+
 Entering a temple makes it your revival point, even if you do not need healing. The fallen wake at the
 last temple visited, leaving their gold where they fell. Evolved wildlife lives outside town footprints
 and cannot attack into it. As you explore, individuals arrive beyond sight from their own region's species
@@ -245,6 +257,8 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
   `skills`, shared Focus, explicit recovery, and exact save/reload.
 - `python3 crates/isle/scripts/wilderness.py` checks leaving town, biome rendering, local map origins,
   wilderness memory, and save/reload.
+- `python3 crates/isle/scripts/landmarks.py` walks from town to a naturally generated site, checks its
+  map marker and directions, opens its cache, and verifies one-time and partial claims across reloads.
 - `python3 crates/isle/scripts/wildlife.py` checks evolved population, reload, the IN SIGHT panel,
   and shooting an actual spawned individual by its regional name.
 - `python3 crates/isle/scripts/towns.py` visits two generated towns, exercises their services, and checks

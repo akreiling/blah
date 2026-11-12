@@ -91,6 +91,9 @@ pub enum Object {
     StairsDown,
     Counter,
     Altar,
+    Cairn,
+    Camp,
+    Shrine,
     Coins,
     Arrows,
     Potion,
@@ -108,7 +111,7 @@ impl Object {
 }
 
 #[cfg(test)]
-pub const ALL_OBJECTS: [Object; 19] = [
+pub const ALL_OBJECTS: [Object; 22] = [
     Object::Pine,
     Object::Oak,
     Object::Acacia,
@@ -120,6 +123,9 @@ pub const ALL_OBJECTS: [Object; 19] = [
     Object::StairsDown,
     Object::Counter,
     Object::Altar,
+    Object::Cairn,
+    Object::Camp,
+    Object::Shrine,
     Object::Coins,
     Object::Arrows,
     Object::Potion,
@@ -1984,6 +1990,30 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         image.save(&path).unwrap();
         eprintln!("{}", path.display());
+    }
+
+    /// Preview each wilderness site in the three biome looks.
+    #[test]
+    #[ignore]
+    fn landmark_contact_sheet() {
+        let cache = ArtCache::new(7);
+        let world = |x: i32, _: i32| match x / 4 {
+            0 => (Terrain::Grass, Style::Moss),
+            1 => (Terrain::Sand, Style::Fable),
+            _ => (Terrain::Snow, Style::Hearth),
+        };
+        let objects = |x: i32, y: i32| {
+            (x.rem_euclid(4) == 1)
+                .then_some(match y {
+                    1 => Some(Object::Cairn),
+                    3 => Some(Object::Camp),
+                    5 => Some(Object::Shrine),
+                    _ => None,
+                })
+                .flatten()
+        };
+        let image = scene(&cache, &world, Mood::Surface(mood::Sky { clear: 4, mist: 0 }), (12, 7), &objects);
+        save(&image, "landmark-contact.png");
     }
 
     /// Paint a scene of `w`×`h` cells under `mood`, with tufts, heat, and `objects` on top.

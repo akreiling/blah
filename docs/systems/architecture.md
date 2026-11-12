@@ -1,5 +1,9 @@
 # Architecture, persistence, and determinism
 
+> Retained blah architecture research. The SQLite window adapter described below was
+> removed with the old frontend. Shared core snapshots remain; [Isle](../ISLE.md) uses
+> its own deterministic rules and JSON saves.
+
 [Design index](../SYSTEMS_ROADMAP.md) · [Decisions](decisions.md) · [Checkpoints](checkpoints.md)
 
 Proposed design. See the decisions document for committed direction versus prototype rules.
@@ -177,7 +181,7 @@ cd /Users/andy/projects/blah
 mise exec -- just test
 mise exec -- just lint
 mise exec -- cargo test -p blah-core --release pinned_to_exact_bits
-mise exec -- just run 42
+mise exec -- just isle --seed 42
 ```
 
 For visual evolution checks, choose a workspace output path:

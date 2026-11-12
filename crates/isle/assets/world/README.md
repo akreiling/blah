@@ -23,6 +23,13 @@ acacias, and marshes willows. Object images have 12 pixels of headroom above the
 rise above the grid; the map frame clips the outermost crowns. Stairs keep a small `<` or `>` badge above
 actors, including the hero standing on them.
 
+Discovered wilderness cairns, camps, and shrines have their own code-drawn stonework, canvas, and ruins.
+They remain on remembered ground; a `?` badge disappears permanently when their cache is opened.
+Items left behind render over the site, with creatures and the player keeping ordinary actor priority.
+Preview all three in grass, sand, and snow with
+`mise exec -- cargo test -p isle landmark_contact_sheet -- --ignored`
+(`target/isle-world-art/landmark-contact.png`).
+
 The renderer uses only known terrain within two cells (looks within one), substituting the center's ground,
 tint, and look for unknown cells. Cached ground images are per position and neighborhood, evicted when
 unused, and rebuilt at display-scale changes. Preview three biomes with coasts, roads, walled yards,

@@ -1,5 +1,8 @@
 # Current implementation baseline
 
+> Historical blah baseline, not current Isle behavior. The original window has been removed.
+> Shared core systems remain; see [Isle](../ISLE.md) for the current window and rules.
+
 [Design index](../SYSTEMS_ROADMAP.md) · [Decisions](decisions.md) · [Checkpoints](checkpoints.md)
 
 Code-inspected baseline at `0b82077`; proposed features are listed separately.
@@ -43,10 +46,8 @@ not claim CP5's full delivery gate.
 - [`RegionLife`](../../crates/core/src/life.rs) currently grows independent pools from `(seed, region)`, with
   24 representative genomes per pool and 32 generations.
 - [`Biome`](../../crates/core/src/biome.rs) owns climate, fitness data, terrain properties, and productivity.
-- [`main.rs`](../../crates/app/src/main.rs) owns the command line and GPUI action bindings.
-- [`view.rs`](../../crates/app/src/view.rs) renders the map, status, nearby species, and log.
-- [`sprites.rs`](../../crates/app/src/sprites.rs) caches displayed sprite images.
-- [`justfile`](../../justfile) has `run`, `test`, `lint`, `map`, and `bestiary` tasks.
+- The former `crates/app` owned input, GPUI rendering, and displayed sprite images; it has been removed.
+- [`justfile`](../../justfile) retains `test`, `lint`, `map`, and `bestiary`; `isle` launches the current window.
 
 ## Baseline evidence
 

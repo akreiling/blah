@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::command::{self, Command, Dir, Instant, MAX_STEPS, Parsed, Target};
 use crate::data::{Armor, Bow, Item, Kind, SHOP, Spell, Stats, Weapon, sale_price, treasure};
 use crate::deep::Deep;
+use crate::landmark::{Landmark, SECTOR};
 use crate::map::{LevelId, Place, Pos, Terrain, Tile, Zone, distance};
 use crate::practice::{Practice, Practices, rank_steps};
 use crate::rng::Rng;
@@ -439,6 +440,9 @@ pub struct Game {
     deeps: Vec<DeepMemory>,
     /// On the surface, 16×16 chunks of remembered cells, including negative coordinates.
     explored: BTreeMap<i32, BTreeMap<i32, [u64; 4]>>,
+    /// Only sites actually seen; opened caches never replenish.
+    #[serde(default)]
+    landmarks: Vec<Landmark>,
     /// At most three accepted player steps from the current/most recently resolved round.
     #[serde(default)]
     footsteps: Vec<Footstep>,
@@ -472,6 +476,7 @@ impl Game {
             spawns: Vec::new(),
             deeps: Vec::new(),
             explored: BTreeMap::new(),
+            landmarks: Vec::new(),
             footsteps: Vec::new(),
             log: Vec::new(),
             log_total: 0,
@@ -517,6 +522,16 @@ impl Game {
     /// The pile on `pos` of the character's map, if any.
     pub fn pile_at(&self, pos: Pos) -> Option<&Pile> {
         self.piles.iter().find(|p| p.at == self.player.at && p.pos == pos)
+    }
+
+    /// Wilderness sites the character has discovered, including opened caches.
+    pub fn landmarks(&self) -> &[Landmark] {
+        &self.landmarks
+    }
+
+    /// A discovered site on the character's current map; never reveals an unseen site.
+    pub fn landmark_at(&self, pos: Pos) -> Option<&Landmark> {
+        (self.player.at == LevelId::Surface).then(|| self.landmarks.iter().find(|site| site.pos == pos)).flatten()
     }
 
     /// Whether the character has ever seen `pos` on their map.
@@ -692,6 +707,7 @@ impl Game {
                 }
             }
             Instant::Look => {
+                self.discover_landmarks();
                 let place = match self.zone() {
                     Zone::Shop => "the outfitter's shop".to_owned(),
                     Zone::Temple => "the temple".to_owned(),
@@ -704,6 +720,7 @@ impl Game {
                 };
                 self.say(Tone::Info, format!("You are in {place}.{underfoot}"));
                 self.town_directions();
+                self.landmark_directions();
                 if let Some(pile) = self.pile_at(self.player.pos) {
                     let items: Vec<String> = pile.items.iter().map(|i| i.name()).collect();
                     self.say(Tone::Info, format!("On the ground: {}.", items.join(", ")));
@@ -848,6 +865,11 @@ impl Game {
                 self.say(Tone::Info, "You step out of the shadows.");
             }
             self.enforce_light();
+            if self.player.at == LevelId::Surface {
+                self.towns.ensure(self.seed, self.terrain, next);
+                self.discover_landmarks();
+            }
+            self.describe_landmark();
             if self.footsteps.len() < MAX_STEPS {
                 self.footsteps.push(Footstep { at: self.player.at, pos: next, quiet: self.player.hidden });
             }
@@ -874,6 +896,36 @@ impl Game {
                 let way = Dir::from_delta(at.0 - me.0, at.1 - me.1).map_or("here", Dir::short);
                 self.say(Tone::Info, format!("{service}: {} {way}.", distance(me, at)));
             }
+        }
+    }
+
+    fn describe_landmark(&mut self) {
+        if let Some(site) = self.landmark_at(self.player.pos) {
+            let detail = if site.opened { "The cache is empty." } else { site.kind.description() };
+            let instruction = if site.opened { "" } else { " Use get all to open it." };
+            self.say(Tone::Info, format!("{}: {detail}{instruction}", site.kind.name()));
+        }
+    }
+
+    fn landmark_directions(&mut self) {
+        self.describe_landmark();
+        let me = self.player.pos;
+        let lines: Vec<String> = self
+            .landmarks
+            .iter()
+            .filter(|site| self.player.at == LevelId::Surface && site.pos != me && self.sees(site.pos))
+            .map(|site| {
+                let way = Dir::from_delta(site.pos.0 - me.0, site.pos.1 - me.1).map_or("here", Dir::short);
+                format!(
+                    "{}: {} {way} ({}).",
+                    site.kind.name(),
+                    distance(me, site.pos),
+                    if site.opened { "empty cache" } else { "unopened cache" }
+                )
+            })
+            .collect();
+        for line in lines {
+            self.say(Tone::Info, line);
         }
     }
 
@@ -1534,6 +1586,15 @@ impl Game {
 
     fn get(&mut self, what: &str) {
         let (at, pos) = (self.player.at, self.player.pos);
+        if what == "all" && self.landmark_at(pos).is_some_and(|site| !site.opened) {
+            let index = self.landmarks.iter().position(|site| site.pos == pos).expect("site underfoot");
+            let site = self.landmarks[index];
+            self.landmarks[index].opened = true;
+            for item in site.contents(self.seed) {
+                self.drop_at(at, pos, item);
+            }
+            self.say(Tone::Gain, format!("You open the cache at the {}.", site.kind.name()));
+        }
         let Some(index) = self.piles.iter().position(|p| p.at == at && p.pos == pos) else {
             self.say(Tone::Info, "There is nothing here.");
             return;
@@ -2222,6 +2283,30 @@ impl Game {
                 } else {
                     let (chunk, word, bit) = memory_cell(pos);
                     self.explored.entry(chunk.0).or_default().entry(chunk.1).or_default()[word] |= bit;
+                }
+            }
+        }
+        self.discover_landmarks();
+    }
+
+    fn discover_landmarks(&mut self) {
+        if self.player.at == LevelId::Surface {
+            let level = self.level();
+            let me = self.player.pos;
+            for sy in (me.1 - SIGHT).div_euclid(SECTOR)..=(me.1 + SIGHT).div_euclid(SECTOR) {
+                for sx in (me.0 - SIGHT).div_euclid(SECTOR)..=(me.0 + SIGHT).div_euclid(SECTOR) {
+                    if let Some(site) = Landmark::generate(self.seed, (sx, sy), &level)
+                        && level.sees(me, site.pos, SIGHT)
+                        && !self.landmarks.iter().any(|known| known.pos == site.pos)
+                    {
+                        self.landmarks.push(site);
+                        let (chunk, word, bit) = memory_cell(site.pos);
+                        self.explored.entry(chunk.0).or_default().entry(chunk.1).or_default()[word] |= bit;
+                        self.say(
+                            Tone::Gain,
+                            format!("You discover a site: {}. Its cache is untouched.", site.kind.name()),
+                        );
+                    }
                 }
             }
         }
