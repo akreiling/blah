@@ -11,13 +11,16 @@ biome's tint; Deep life takes a stone tint, except luminous bodies shine pale gr
 its target letter, matching IN SIGHT and commands such as `attack a`. Sprites stay crisp at display scale
 and disappear when the creature leaves sight.
 
-The map draws grass, sand, water, rock, town streets and stone, and Deep floors and walls from 32×32 PixelLab
-tilesets. Seeded world-space noise warps their textures and boundaries and gently varies brightness, so cells
-do not repeat in a grid. Broad meadow patches and sparse grass tufts, sand ripples, pebbles, and rock cracks
-vary natural ground; streets and Deep masonry stay straighter. Neighboring cells sample the same warped world;
-terrain pairs without a joining tileset still meet at a hard edge. Trees, boulders, doors, stairs, services,
-and ground items are objects over the ground; trees and boulders also vary by mirroring. Unknown neighbors
-never shape a visible edge. Your character is a code-drawn figure: your highest weapon, magic, or stealth
+The whole map is painted in code at 32×32 per cell, after the offline design studies. Every pixel comes from
+its world position, so cells never repeat and neighbors always agree. Natural ground (water, grass, sand,
+snow, rock, and Deep caves) takes its shape from nearby cell centers through a smooth warp, so shores wobble,
+corners round off, and a lone pond is a blob; town streets and walls keep square edges and straight masonry.
+Each biome picks a look from its climate: warm lowlands (desert, savanna, jungle, badlands) are sunlit and
+golden, cold, wet, or high land (tundra, taiga, swamp, hills, mountains, peaks) is cool and blue-green, and the
+temperate rest is mossy. Looks blend across biome borders. Water and rock keep a little of their biome's color.
+Meadow patches, swaying grass tufts, sand ripples, and rock cracks vary natural ground. Trees (conifers in the
+cold, broadleaves in the warm), boulders, doors, stairs, services, and ground items are code-drawn objects in
+the biome's look; trees and boulders also vary by mirroring. Unknown neighbors never shape a visible edge. Your character is a code-drawn figure: your highest weapon, magic, or stealth
 practice rank shapes its clothing and headgear, while your current weapon, bow, armor, and ring appear
 on the body. Skilled practice adds gold trim; a shadowed yellow ring marks your feet. Fixed-table creatures keep
 their text glyphs, and the text map still represents you as `@`.

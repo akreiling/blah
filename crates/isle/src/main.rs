@@ -12,6 +12,7 @@ mod control;
 mod hero;
 mod input;
 mod mood;
+mod paint;
 mod save;
 mod sprites;
 mod view;

@@ -1,33 +1,28 @@
 # Isle world art
 
-PixelLab-generated 32×32 terrain tilesets and object icons for Isle. Creature bodies remain genome-generated.
-The player is a code-drawn figure shaped by practice and current gear; fixed-table creatures keep text markers.
+The map is painted in code: ground in `src/art.rs`, palettes and objects in `src/paint.rs`. Creature bodies
+remain genome-generated. The player is a code-drawn figure shaped by practice and current gear; fixed-table
+creatures keep text markers.
 
-- `terrain_<set>.png`: a corner-matched (Wang) tileset joining two terrains, packed 4×4 by corner mask
-  (NW = 8, NE = 4, SW = 2, SE = 1, set where the corner is the set's terrain `b`). The game draws each cell as
-  four quarters, each from the tile centered on that corner of the cell. The renderer then samples this layout
-  through seeded world-space noise, bending textures and boundaries across cell edges without independent
-  per-tile seams. Slow brightness drift varies broad fields; water keeps its source cell's biome tint.
-- `objects.png`: 16 transparent 32×32 objects in the order listed in the manifest.
-- `manifest.json`: the PixelLab requests, seeds, billed usage, and hashes of each original response and each
-  checked-in sheet. It contains no credentials.
+The PixelLab tilesets and object sheet in this directory (`terrain_<set>.png`, `objects.png`, `manifest.json`)
+are no longer drawn. They stay as a record of the earlier art and of what the generation tools produced.
 
-Local processing never resizes or resamples. Shared terrains (the path set's grass and the rocky set's sand) are
-recolored to the shore set's grass and sand so the sets meet without seams; object alpha is made binary. No image
-is fetched or generated during play.
+Each ground pixel is computed from its world position. Built ground (town streets and walls) owns exactly its
+cell's square. Natural ground is warped by seeded world-space noise, and its terrain at a pixel is the vote of
+the four nearest cell centers, weighted by distance, so corners round off. Underground, floors and walls are
+natural too, giving organic caves. Edge shading reads the terrain a few pixels away: wet sand and shallows at
+shores, darker grass at path and wall edges, pale rims on cave walls.
 
-Natural ground gets sparse, world-anchored pixel details: clustered grass tufts, sand pebbles and ripples,
-and small rock cracks. Meadow colors drift in broad patches, while transition tiles keep their original
-colors. These details are drawn locally, not generated or fetched, and never cover built ground or water.
-Town streets suppress the warp; Deep floors and walls keep their masonry straight. The rigidity field
-interpolates across world positions so neighboring cells still sample the same layout.
+Palettes follow the biome (`style_of`): Moss (temperate), Fable (warm lowlands), and Hearth (cold, wet, or
+high). The four nearest cell centers blend the palettes, so looks change gradually across a border. The Deep
+paints in its stone (limestone, slate, or basalt) instead. Grass tufts and sand ripples sit on a shared 9px
+world lattice and grow only where their whole footprint has that terrain.
 
-The renderer uses only known terrain in its 5×5 neighborhood, substituting the center's ground and tint for
-unknown cells. Trees and boulders may be mirrored. Cached ground images are per position and neighborhood,
-evicted when unused, and rebuilt at display-scale changes. Terrain pairs without a joining set still have a
-hard boundary. Preview the runtime warp offline with
+The renderer uses only known terrain within one cell, substituting the center's ground, tint, and look for
+unknown cells. Cached ground images are per position and neighborhood, evicted when unused, and rebuilt at
+display-scale changes. Preview three biomes with coasts, roads, walled yards, objects, and items with
 `mise exec -- cargo test -p isle contact_sheet -- --ignored`
-(`target/isle-world-art/noise-contact.png`). Measure CPU raster/cache costs with
+(`target/isle-world-art/paint-contact.png`). Measure CPU raster/cache costs with
 `mise exec -- cargo test -p isle ground_render_cost -- --ignored --nocapture`.
 
 The player's 32×32 figure is drawn locally in `src/hero.rs`, with no generated assets. The highest weapon,
@@ -40,7 +35,7 @@ the same figures on grass under each sky, sand, dirt, rock, water, and each Deep
 `mise exec -- cargo test -p isle hero_contact_sheet -- --ignored`
 (`target/isle-world-art/hero-contact.png`).
 
-Presentation-only weather grades ground and scenery in world-space patches. The round drives slow
+Presentation-only weather grades surface ground and scenery in world-space patches. The round drives slow
 overcast/clear/mist changes; a separate 180 ms visual timer cycles eight cached grass-sway frames.
 Deep geology comes in seeded three-floor bands, with broad stone veins, damp slate patches, and narrow
 basalt seams. Seam heat and visible living cave light pulse through GPU opacity; remembered ground does
@@ -50,7 +45,7 @@ Preview palettes with `mise exec -- cargo test -p isle mood_contact_sheet -- --i
 (`target/isle-world-art/mood-contact.png`), or launch with `--sky overcast|clear|mist` and
 `--stone limestone|slate|basalt`. The cost test above includes cold, sway-fill, cached, and scrolling frames.
 
-## Growing the library
+## The PixelLab library (retired)
 
 Use the existing gitignored `.env.local` entry `PIXELLAB_SECRET`, loaded by mise. Never paste the key into a
 command, source file, manifest, or log.

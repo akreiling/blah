@@ -9,7 +9,7 @@ use std::hash::{Hash, Hasher};
 
 use isle_core::{Game, LevelId};
 
-use crate::art::{Terrain, lattice, value_noise};
+use crate::art::{lattice, value_noise};
 
 /// Milliseconds per animation frame, and frames per grass-sway cycle.
 pub const FRAME_MS: u64 = 180;
@@ -156,10 +156,11 @@ fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
 }
 
-/// Grade one pixel. `p` is its world pixel when known (ground), or None for objects, which take the
-/// island-wide amount. Overcast surface is the art as drawn.
-pub fn grade(seed: u64, mood: Mood, p: Option<(i64, i64)>, surface: Option<Terrain>, pixel: [u8; 4]) -> [u8; 4] {
-    if pixel[3] == 0 || mood == Mood::default() {
+/// Grade one pixel under the sky. `p` is its world pixel when known (ground), or None for objects, which take
+/// the island-wide amount. Overcast is the art as drawn, and the Deep paints in its own stone instead.
+pub fn grade(seed: u64, mood: Mood, p: Option<(i64, i64)>, pixel: [u8; 4]) -> [u8; 4] {
+    let Mood::Surface(sky) = mood else { return pixel };
+    if pixel[3] == 0 || sky == Sky::default() {
         return pixel;
     }
     let local = |channel: u64, period: f32| {
@@ -167,49 +168,17 @@ pub fn grade(seed: u64, mood: Mood, p: Option<(i64, i64)>, surface: Option<Terra
     };
     let mut c = [f32::from(pixel[0]), f32::from(pixel[1]), f32::from(pixel[2])];
     let lum = 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
-    match mood {
-        Mood::Surface(sky) => {
-            let clear = (f32::from(sky.clear) / 8.0 * (0.75 + 0.45 * local(42, 150.0))).clamp(0.0, 1.0);
-            let mist = (f32::from(sky.mist) / 8.0 * (0.7 + 0.5 * local(43, 110.0))).clamp(0.0, 1.0);
-            if clear > 0.0 {
-                let warm = [c[0] * 1.06 + 5.0, c[1] * 1.03 + 3.0, c[2] * 0.93];
-                let lum = 0.3 * warm[0] + 0.59 * warm[1] + 0.11 * warm[2];
-                let vivid = warm.map(|v| lum + (v - lum) * 1.1);
-                c = mix(c, vivid, clear);
-            }
-            if mist > 0.0 {
-                let grey = mix(c, [lum; 3], 0.45);
-                c = mix(c, mix(grey, [156.0, 171.0, 176.0], 0.3), mist);
-            }
-        }
-        Mood::Deep(..) => {
-            let stone = p.map_or(
-                match mood {
-                    Mood::Deep(main, _) => main,
-                    Mood::Surface(_) => unreachable!(),
-                },
-                |p| mood.stone_at(seed, p).expect("deep mood"),
-            );
-            let floor = surface == Some(Terrain::Floor);
-            c = match stone {
-                Stone::Limestone => mix(c, [lum * 1.04 + 8.0, lum * 0.98 + 6.0, lum * 0.82 + 2.0], 0.55),
-                Stone::Slate => {
-                    let s = mix(c, [lum * 0.72, lum * 0.86 + 2.0, lum * 1.0 + 10.0], 0.6);
-                    // Damp patches fade in and out with a dithered edge rather than a hard outline.
-                    let jitter = p.map_or(0.0, |p| (lattice(seed, 49, p.0, p.1) - 0.5) * 0.25);
-                    let wet = if floor { ((local(48, 60.0) - 0.05) / 0.35 + jitter).clamp(0.0, 1.0) } else { 0.0 };
-                    mix(s, [s[0] * 0.8, s[1] * 0.87, s[2] * 0.97], wet)
-                }
-                Stone::Basalt => mix(c, [lum * 0.42 + 6.0, lum * 0.39 + 4.0, lum * 0.42 + 7.0], 0.85),
-            };
-            if surface == Some(Terrain::Wall) {
-                // Known walls must not sink into the black of unexplored cells.
-                c = c.map(|v| v + 9.0);
-            }
-            if floor && stone == Stone::Basalt && p.is_some_and(|p| seam(seed, p)) {
-                c = EMBER.map(f32::from);
-            }
-        }
+    let clear = (f32::from(sky.clear) / 8.0 * (0.75 + 0.45 * local(42, 150.0))).clamp(0.0, 1.0);
+    let mist = (f32::from(sky.mist) / 8.0 * (0.7 + 0.5 * local(43, 110.0))).clamp(0.0, 1.0);
+    if clear > 0.0 {
+        let warm = [c[0] * 1.06 + 5.0, c[1] * 1.03 + 3.0, c[2] * 0.93];
+        let lum = 0.3 * warm[0] + 0.59 * warm[1] + 0.11 * warm[2];
+        let vivid = warm.map(|v| lum + (v - lum) * 1.1);
+        c = mix(c, vivid, clear);
+    }
+    if mist > 0.0 {
+        let grey = mix(c, [lum; 3], 0.45);
+        c = mix(c, mix(grey, [156.0, 171.0, 176.0], 0.3), mist);
     }
     let [r, g, b] = c.map(|v| v.round().clamp(0.0, 255.0) as u8);
     [r, g, b, pixel[3]]
@@ -269,30 +238,23 @@ mod tests {
     #[test]
     fn overcast_is_the_art_as_drawn_and_other_moods_shift_it_without_touching_alpha() {
         let px = [90, 130, 70, 255];
-        assert_eq!(grade(7, Mood::default(), Some((3, 4)), Some(Terrain::Grass), px), px);
-        assert_eq!(grade(7, Mood::Surface(Sky { clear: 8, mist: 0 }), Some((3, 4)), None, [1, 2, 3, 0]), [1, 2, 3, 0]);
-        let clear = grade(7, Mood::Surface(Sky { clear: 8, mist: 0 }), Some((3, 4)), None, px);
-        let mist = grade(7, Mood::Surface(Sky { clear: 0, mist: 8 }), Some((3, 4)), None, px);
+        assert_eq!(grade(7, Mood::default(), Some((3, 4)), px), px);
+        assert_eq!(grade(7, Mood::Surface(Sky { clear: 8, mist: 0 }), Some((3, 4)), [1, 2, 3, 0]), [1, 2, 3, 0]);
+        let clear = grade(7, Mood::Surface(Sky { clear: 8, mist: 0 }), Some((3, 4)), px);
+        let mist = grade(7, Mood::Surface(Sky { clear: 0, mist: 8 }), Some((3, 4)), px);
         assert!(clear[0] > px[0] && clear[2] < px[2], "clear skies warm: {clear:?}");
         assert!((i16::from(mist[0]) - i16::from(mist[1])).abs() < 40, "mist greys: {mist:?}");
         // Mist strength varies across the land.
-        let strengths: std::collections::HashSet<_> = (0..40)
-            .map(|i| grade(7, Mood::Surface(Sky { clear: 0, mist: 4 }), Some((i * 97, i * 41)), None, px))
-            .collect();
+        let strengths: std::collections::HashSet<_> =
+            (0..40).map(|i| grade(7, Mood::Surface(Sky { clear: 0, mist: 4 }), Some((i * 97, i * 41)), px)).collect();
         assert!(strengths.len() > 10);
     }
 
     #[test]
-    fn lava_seams_glow_only_on_basalt_floor() {
-        let basalt = Mood::Deep(Stone::Basalt, Stone::Basalt);
-        let slate = Mood::Deep(Stone::Slate, Stone::Slate);
-        let points: Vec<_> = (0..400).flat_map(|y| (0..400).map(move |x| (x, y))).filter(|&p| seam(7, p)).collect();
-        assert!(points.len() > 200 && points.len() < 400 * 400 / 10, "{}", points.len());
+    fn lava_seams_are_narrow_and_the_deep_is_not_graded_by_the_sky() {
+        let points = (0..400).flat_map(|y| (0..400).map(move |x| (x, y))).filter(|&p| seam(7, p)).count();
+        assert!(points > 200 && points < 400 * 400 / 10, "{points}");
         let px = [120, 120, 120, 255];
-        for &p in points.iter().take(50) {
-            assert_eq!(&grade(7, basalt, Some(p), Some(Terrain::Floor), px)[..3], &EMBER);
-            assert_ne!(&grade(7, basalt, Some(p), Some(Terrain::Wall), px)[..3], &EMBER);
-            assert_ne!(&grade(7, slate, Some(p), Some(Terrain::Floor), px)[..3], &EMBER);
-        }
+        assert_eq!(grade(7, Mood::Deep(Stone::Basalt, Stone::Slate), Some((3, 4)), px), px);
     }
 }

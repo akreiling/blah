@@ -909,6 +909,7 @@ fn map_cell_art<'a>(game: &'a Game, pos: Pos, labels: &[(Pos, char)]) -> Option<
         pos,
         around: [-2, -1, 0, 1, 2].map(|dy| [-2, -1, 0, 1, 2].map(|dx| near(dx, dy).ground)),
         tints: [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| near(dx, dy).tint)),
+        styles: [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| near(dx, dy).style)),
     };
     Some(MapCellArt { terrain, ground, remembered, lit: visible && game.illuminated(pos), actor })
 }
@@ -946,7 +947,13 @@ fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache, step: u8, ela
                     );
                 }
                 if let Some(object) = cell_art.terrain.object {
-                    let image = art.object(object, cell_art.terrain.mirrored, cell_art.remembered, cell_art.lit);
+                    let image = art.object(
+                        object,
+                        cell_art.terrain.mirrored,
+                        cell_art.terrain.style,
+                        cell_art.remembered,
+                        cell_art.lit,
+                    );
                     base = base.child(img(image).size(px(image_size)).absolute().top_0().left_0());
                     let marker = match object {
                         Object::StairsUp => Some("<"),
@@ -1423,6 +1430,7 @@ mod tests {
                         assert_eq!(cell.ground.around[(dy + 2) as usize][(dx + 2) as usize], expected.ground);
                         if dx.abs() <= 1 && dy.abs() <= 1 {
                             assert_eq!(cell.ground.tints[(dy + 1) as usize][(dx + 1) as usize], expected.tint);
+                            assert_eq!(cell.ground.styles[(dy + 1) as usize][(dx + 1) as usize], expected.style);
                         }
                     }
                 }

@@ -1,12 +1,12 @@
-//! Embedded 32×32 terrain and object artwork.
+//! Isle's map art, painted in code.
 //!
-//! Terrain comes from corner-matched (Wang) tilesets. Each map cell is made of four quarters, and each
-//! quarter comes from the tile whose four corners are the terrains of the 2×2 block of cells meeting at that
-//! corner of the cell, so a single cell of one terrain still shows. Natural ground samples that layout through
-//! smooth world-space noise, with clustered detail and meadow color patches. Built surfaces suppress the warp
-//! to keep streets and masonry straight. Both cells on a shared edge sample the same world; visibility stays
-//! per cell. Images are enlarged by integer nearest-neighbor duplication for the display scale and cached
-//! only while the visible map uses them.
+//! Every ground pixel is computed from its world position, so neighboring cells always agree and a field never
+//! repeats. Natural ground (water, grass, sand, snow, rock, and Deep caves) takes each pixel's terrain from the
+//! nearby cell centers after a smooth world-space warp, which rounds corners and wobbles shores; built ground
+//! (streets, masonry) keeps square edges. Each biome picks a look (see [`style_of`]), and looks blend across
+//! biome borders. The Deep paints in its stone instead. Weather grades the result (see [`crate::mood`]).
+//! Objects, items, and the hero are drawn in code too. Images are enlarged by integer nearest-neighbor
+//! duplication for the display scale and cached only while the visible map uses them.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -19,113 +19,40 @@ use blah_core::Biome;
 
 use crate::hero::{self, Look};
 use crate::mood::{self, FRAMES, Mood, Stone};
+use crate::paint::{self, Palette, STYLES, Style};
 
 const NATIVE_SIDE: usize = 32;
-const QUARTER: usize = NATIVE_SIDE / 2;
+const SIDE: i64 = NATIVE_SIDE as i64;
 const DISPLAY_SIDE: f32 = 32.0;
 const BIOME_TINT_PERCENT: u16 = 18;
 const CAVE_TINT: [u8; 3] = [76, 150, 101];
 const CAVE_TINT_PERCENT: u16 = 22;
 
-/// A ground surface drawn from a tileset.
+/// A kind of ground.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Terrain {
     Water,
     Grass,
     Dirt,
     Sand,
+    Snow,
     Rock,
     Floor,
     Wall,
 }
 
-/// One embedded tileset joining terrains `a` and `b`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum TileSet {
-    Shore,
-    Path,
-    Rocky,
-    Dungeon,
-    Beach,
-    Dunes,
-    Highland,
-}
-
-pub const ALL_SETS: [TileSet; 7] = [
-    TileSet::Shore,
-    TileSet::Path,
-    TileSet::Rocky,
-    TileSet::Dungeon,
-    TileSet::Beach,
-    TileSet::Dunes,
-    TileSet::Highland,
-];
-
-impl TileSet {
-    /// The two terrains, matching the manifest the art tool writes.
-    pub fn terrains(self) -> (Terrain, Terrain) {
-        match self {
-            TileSet::Shore => (Terrain::Water, Terrain::Grass),
-            TileSet::Path => (Terrain::Dirt, Terrain::Grass),
-            TileSet::Rocky => (Terrain::Sand, Terrain::Rock),
-            TileSet::Dungeon => (Terrain::Floor, Terrain::Wall),
-            TileSet::Beach => (Terrain::Water, Terrain::Sand),
-            TileSet::Dunes => (Terrain::Sand, Terrain::Grass),
-            TileSet::Highland => (Terrain::Grass, Terrain::Rock),
-        }
-    }
-
-    #[cfg(test)]
-    fn name(self) -> &'static str {
-        match self {
-            TileSet::Shore => "shore",
-            TileSet::Path => "path",
-            TileSet::Rocky => "rocky",
-            TileSet::Dungeon => "dungeon",
-            TileSet::Beach => "beach",
-            TileSet::Dunes => "dunes",
-            TileSet::Highland => "highland",
-        }
-    }
-
-    fn bytes(self) -> &'static [u8] {
-        match self {
-            TileSet::Shore => include_bytes!("../assets/world/terrain_shore.png"),
-            TileSet::Path => include_bytes!("../assets/world/terrain_path.png"),
-            TileSet::Rocky => include_bytes!("../assets/world/terrain_rocky.png"),
-            TileSet::Dungeon => include_bytes!("../assets/world/terrain_dungeon.png"),
-            TileSet::Beach => include_bytes!("../assets/world/terrain_beach.png"),
-            TileSet::Dunes => include_bytes!("../assets/world/terrain_dunes.png"),
-            TileSet::Highland => include_bytes!("../assets/world/terrain_highland.png"),
-        }
-    }
-}
-
 impl Terrain {
-    /// The set whose full tile draws this terrain alone, and whether it is that set's `b` side.
-    fn home(self) -> (TileSet, bool) {
+    /// Built ground keeps the grid's square edges and straight lines. Underground, floors and walls are cave.
+    fn rigid(self, deep: bool) -> bool {
         match self {
-            Terrain::Water => (TileSet::Shore, false),
-            Terrain::Grass => (TileSet::Shore, true),
-            Terrain::Dirt => (TileSet::Path, false),
-            Terrain::Sand => (TileSet::Rocky, false),
-            Terrain::Rock => (TileSet::Rocky, true),
-            Terrain::Floor => (TileSet::Dungeon, false),
-            Terrain::Wall => (TileSet::Dungeon, true),
+            Terrain::Dirt => true,
+            Terrain::Floor | Terrain::Wall => !deep,
+            _ => false,
         }
     }
 }
 
-/// A set joining two terrains, if one exists, and whether `first` is its `b` side.
-fn joining(first: Terrain, second: Terrain) -> Option<(TileSet, bool)> {
-    ALL_SETS.into_iter().find_map(|set| match set.terrains() {
-        (a, b) if a == first && b == second => Some((set, false)),
-        (a, b) if b == first && a == second => Some((set, true)),
-        _ => None,
-    })
-}
-
-/// Objects drawn over terrain, in the embedded sheet's order.
+/// Objects drawn over terrain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Object {
     Pine,
@@ -146,6 +73,7 @@ pub enum Object {
     Treasure,
 }
 
+#[cfg(test)]
 pub const ALL_OBJECTS: [Object; 16] = [
     Object::Pine,
     Object::Oak,
@@ -165,22 +93,16 @@ pub const ALL_OBJECTS: [Object; 16] = [
     Object::Treasure,
 ];
 
-const OBJECTS: &[u8] = include_bytes!("../assets/world/objects.png");
-
-impl Object {
-    fn index(self) -> usize {
-        ALL_OBJECTS.iter().position(|&o| o == self).expect("every object is in the sheet")
-    }
-}
-
 /// What a cell shows, before its neighbors shape the ground's edges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TerrainArt {
     pub ground: Terrain,
     /// A transparent object placed over the ground, if any.
     pub object: Option<Object>,
-    /// A gentle biome-color wash applied to water, if any.
+    /// A gentle biome-color wash applied to water and rock, if any.
     pub tint: Option<[u8; 3]>,
+    /// The biome's look.
+    pub style: Style,
     /// Whether a natural object is drawn mirrored, so repeated trees and boulders vary.
     pub mirrored: bool,
 }
@@ -189,12 +111,26 @@ pub struct TerrainArt {
 fn natural_ground(biome: &Biome) -> Terrain {
     if biome.water {
         Terrain::Water
-    } else if !biome.passable || biome.temperature.max <= 0.40 {
+    } else if biome.temperature.max <= 0.13 || biome.elevation.min >= 0.79 && biome.temperature.max <= 0.35 {
+        Terrain::Snow
+    } else if !biome.passable || biome.elevation.min >= 0.7 && biome.productivity < 0.3 {
         Terrain::Rock
-    } else if biome.productivity >= 0.45 {
+    } else if biome.productivity >= 0.3 {
         Terrain::Grass
     } else {
         Terrain::Sand
+    }
+}
+
+/// A biome's look from its climate: warm lowlands are sunlit, cold, wet, or high land is cool and misty, and
+/// the temperate rest is mossy.
+pub fn style_of(biome: &Biome) -> Style {
+    if biome.temperature.min >= 0.45 {
+        Style::Fable
+    } else if biome.temperature.max <= 0.38 || biome.elevation.min >= 0.72 || biome.moisture.min >= 0.7 {
+        Style::Hearth
+    } else {
+        Style::Moss
     }
 }
 
@@ -202,22 +138,31 @@ fn mix(pos: (i32, i32)) -> u32 {
     ((pos.0 as u32).wrapping_mul(0x9e37_79b9) ^ (pos.1 as u32).wrapping_mul(0x85eb_ca6b)).rotate_left(13)
 }
 
-/// A stable per-cell choice between two tree shapes, so woods are not uniform.
-fn tree_at(pos: (i32, i32)) -> Object {
-    if mix(pos) & 4 == 0 { Object::Pine } else { Object::Oak }
+/// A stable per-cell tree shape: conifers in cold land, broadleaves in warm, both in between.
+fn tree_at(pos: (i32, i32), style: Style) -> Object {
+    let roll = (mix(pos) >> 3) % 8;
+    let pines = match style {
+        Style::Hearth => 7,
+        Style::Moss => 4,
+        Style::Fable => 1,
+    };
+    if roll < pines { Object::Pine } else { Object::Oak }
 }
 
-/// Art layers for a tile. `deep` levels use the dungeon set; towns pave their floors with the dirt path and build
-/// their walls of gray stone.
+/// Art layers for a tile. `deep` levels draw caves; towns pave their floors with dirt and build their walls of
+/// stone.
 pub fn terrain_art(tile: Tile, biome: &Biome, deep: bool, pos: (i32, i32)) -> TerrainArt {
     let floor = if deep { Terrain::Floor } else { Terrain::Dirt };
     let natural = natural_ground(biome);
+    // Trees and boulders never stand in water.
+    let open = if natural == Terrain::Water { Terrain::Grass } else { natural };
+    let style = style_of(biome);
     let (ground, object) = match tile {
-        Tile::Wall => (if deep { Terrain::Wall } else { Terrain::Rock }, None),
+        Tile::Wall => (Terrain::Wall, None),
         Tile::Floor => (floor, None),
         Tile::Grass => (Terrain::Grass, None),
         Tile::Water => (Terrain::Water, None),
-        Tile::Tree => (if natural == Terrain::Water { Terrain::Grass } else { natural }, Some(tree_at(pos))),
+        Tile::Tree => (open, Some(tree_at(pos, style))),
         Tile::Door => (floor, Some(Object::Door)),
         Tile::StairsUp => (floor, Some(Object::StairsUp)),
         Tile::StairsDown => (floor, Some(Object::StairsDown)),
@@ -226,13 +171,13 @@ pub fn terrain_art(tile: Tile, biome: &Biome, deep: bool, pos: (i32, i32)) -> Te
         Tile::Wild(_) => (natural, None),
         // Impassable rock is a terrain; a passable biome's scattered rocks are boulders on its ground.
         Tile::Rock if !biome.passable => (Terrain::Rock, None),
-        Tile::Rock => (if natural == Terrain::Water { Terrain::Grass } else { natural }, Some(Object::Boulder)),
+        Tile::Rock => (if deep { floor } else { open }, Some(Object::Boulder)),
     };
-    // Only water keeps its biome's color, which separates deep from shallow; elsewhere a per-biome wash makes
-    // patchy blocks where neighboring biomes share a texture.
-    let tint = (ground == Terrain::Water).then_some(biome.color);
+    // Water and rock keep a little of their biome's color, which separates deep from shallow water and red
+    // badlands from grey peaks. The Deep has its own stone.
+    let tint = (!deep && matches!(ground, Terrain::Water | Terrain::Rock)).then_some(biome.color);
     let mirrored = matches!(object, Some(Object::Pine | Object::Oak | Object::Boulder)) && mix(pos) & 16 != 0;
-    TerrainArt { ground, object, tint, mirrored }
+    TerrainArt { ground, object, tint, style, mirrored }
 }
 
 /// The ground-pile icon. Mixed piles use a single treasure mark, and empty piles have no icon.
@@ -251,73 +196,40 @@ pub fn item_art(items: &[Item]) -> Option<Object> {
     }
 }
 
-/// One quarter of a cell: a tile chosen by corner mask (NW = 8, NE = 4, SW = 2, SE = 1, set where terrain `b`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Quarter {
-    pub set: TileSet,
-    pub mask: u8,
-}
-
-impl Quarter {
-    fn pure(self) -> Option<Terrain> {
-        match self.mask {
-            0 => Some(self.set.terrains().0),
-            15 => Some(self.set.terrains().1),
-            _ => None,
-        }
-    }
-}
-
-/// The four quarters (NW, NE, SW, SE) of a cell whose ground is `around[1][1]`. `around` is the 3×3 block of
-/// grounds centered on the cell, rows north to south; callers pass the center's own ground for cells the player
-/// does not know, so edges never reveal unseen terrain.
-pub fn ground_quarters(around: [[Terrain; 3]; 3]) -> [Quarter; 4] {
-    let center = around[1][1];
-    [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(qx, qy)| {
-        // The 2×2 block meeting at this corner of the cell, as tile corners NW, NE, SW, SE.
-        let block = [around[qy][qx], around[qy][qx + 1], around[qy + 1][qx], around[qy + 1][qx + 1]];
-        let mut partners: Vec<(usize, Terrain)> = Vec::new();
-        for &t in block.iter().filter(|&&t| t != center) {
-            match partners.iter_mut().find(|(_, p)| *p == t) {
-                Some((count, _)) => *count += 1,
-                None => partners.push((1, t)),
-            }
-        }
-        partners.sort_by_key(|x| std::cmp::Reverse(x.0));
-        let joined = partners.iter().find_map(|&(_, partner)| joining(center, partner).map(|j| (j, partner)));
-        match joined {
-            Some(((set, center_is_b), partner)) => {
-                let mask = block.iter().enumerate().fold(0u8, |mask, (i, &t)| {
-                    let is_b = if t == partner { !center_is_b } else { center_is_b };
-                    mask | if is_b { 8 >> i } else { 0 }
-                });
-                Quarter { set, mask }
-            }
-            None => {
-                let (set, is_b) = center.home();
-                Quarter { set, mask: if is_b { 15 } else { 0 } }
-            }
-        }
-    })
-}
-
-/// The 5×5 block of grounds centered on a cell, rows north to south, and the 3×3 block of water tints. Callers
-/// pass the center's own ground and tint for cells the player does not know, so edges never reveal unexplored
-/// terrain. A warped sample reaches at most one cell away, and that cell needs its own 3×3 to pick quarters.
+/// The 5×5 block of grounds centered on a cell, rows north to south, and the 3×3 blocks of tints and looks.
+/// Callers pass the center's own values for cells the player does not know, so edges never reveal unexplored
+/// terrain. Painting reaches at most one cell away; the outer ring of `around` is spare.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GroundCell {
     pub pos: (i32, i32),
     pub around: [[Terrain; 5]; 5],
     pub tints: [[Option<[u8; 3]>; 3]; 3],
+    pub styles: [[Style; 3]; 3],
 }
+
+/// What painting needs to know of one map cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Spot {
+    terrain: Terrain,
+    style: Style,
+    tint: Option<[u8; 3]>,
+}
+
+impl GroundCell {
+    fn spot(&self, x: i64, y: i64) -> Spot {
+        let (dx, dy) = ((x - i64::from(self.pos.0)) as isize, (y - i64::from(self.pos.1)) as isize);
+        let (r, c) = ((dy + 1) as usize, (dx + 1) as usize);
+        Spot { terrain: self.around[r + 1][c + 1], style: self.styles[r][c], tint: self.tints[r][c] }
+    }
+}
+
+type World<'a> = &'a dyn Fn(i64, i64) -> Spot;
 
 /// Layers of the world-space warp as (period, amplitude) in source pixels. The amplitudes sum to well under a
 /// cell, so a warped sample never reaches past a neighboring cell.
 const WARP: [(f32, f32); 2] = [(24.0, 5.0), (9.0, 2.0)];
 #[cfg(test)]
 const WARP_REACH: i64 = 7;
-const SHADE_PERIOD: f32 = 72.0;
-const SHADE_PERCENT: f32 = 5.0;
 
 pub(crate) fn lattice(seed: u64, channel: u64, x: i64, y: i64) -> f32 {
     let mut h = seed
@@ -344,6 +256,10 @@ pub(crate) fn value_noise(seed: u64, channel: u64, x: f32, y: f32) -> f32 {
     (top + (bottom - top) * sy) * 2.0 - 1.0
 }
 
+fn noise(seed: u64, channel: u64, period: f32, p: (i64, i64)) -> f32 {
+    value_noise(seed, channel, p.0 as f32 / period, p.1 as f32 / period)
+}
+
 /// The whole-pixel offset at which world pixel `p` samples the terrain. It depends only on world position, so
 /// neighboring cells agree on every shared edge.
 fn warp(seed: u64, p: (i64, i64)) -> (i64, i64) {
@@ -356,107 +272,338 @@ fn warp(seed: u64, p: (i64, i64)) -> (i64, i64) {
     (offset.0.round() as i64, offset.1.round() as i64)
 }
 
-/// A slow brightness drift across wide fields, in percent.
-fn shade(seed: u64, p: (i64, i64)) -> u16 {
-    let n = value_noise(seed, 9, p.0 as f32 / SHADE_PERIOD, p.1 as f32 / SHADE_PERIOD);
-    (100.0 + n * SHADE_PERCENT).round() as u16
-}
-
-fn warp_weight(terrain: Terrain) -> f32 {
+fn warp_weight(terrain: Terrain, deep: bool) -> f32 {
     match terrain {
-        Terrain::Floor | Terrain::Wall => 0.0,
-        Terrain::Dirt => 0.15,
-        Terrain::Rock => 0.7,
+        t if t.rigid(deep) => 0.0,
+        Terrain::Rock => 0.9,
         _ => 1.0,
     }
 }
 
-/// Interpolate rigidity in world space, not separately per output cell. Masonry stays straight, and the
+/// The four cell centers around world pixel `p` and their bilinear weights.
+fn corners(p: (i64, i64)) -> [((i64, i64), f32); 4] {
+    let (x, y) = ((p.0 - 16).div_euclid(SIDE), (p.1 - 16).div_euclid(SIDE));
+    let fx = (p.0 - 16).rem_euclid(SIDE) as f32 / SIDE as f32;
+    let fy = (p.1 - 16).rem_euclid(SIDE) as f32 / SIDE as f32;
+    [
+        ((x, y), (1.0 - fx) * (1.0 - fy)),
+        ((x + 1, y), fx * (1.0 - fy)),
+        ((x, y + 1), (1.0 - fx) * fy),
+        ((x + 1, y + 1), fx * fy),
+    ]
+}
+
+/// Interpolate rigidity in world space, not separately per output cell. Built ground stays straight, and the
 /// natural ground next to it gradually loses its warp rather than tearing at the cell boundary.
-fn ground_point(seed: u64, p: (i64, i64), ground: impl Fn(i64, i64) -> Terrain) -> (i64, i64) {
-    let (x, y) = ((p.0 - 16).div_euclid(32), (p.1 - 16).div_euclid(32));
-    let smooth = |v: i64| {
-        let t = v.rem_euclid(32) as f32 / 32.0;
-        t * t * (3.0 - 2.0 * t)
-    };
-    let (fx, fy) = (smooth(p.0 - 16), smooth(p.1 - 16));
-    let top = warp_weight(ground(x, y)) * (1.0 - fx) + warp_weight(ground(x + 1, y)) * fx;
-    let bottom = warp_weight(ground(x, y + 1)) * (1.0 - fx) + warp_weight(ground(x + 1, y + 1)) * fx;
+fn ground_point(seed: u64, p: (i64, i64), deep: bool, ground: impl Fn(i64, i64) -> Terrain) -> (i64, i64) {
+    let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
+    let (x, y) = ((p.0 - 16).div_euclid(SIDE), (p.1 - 16).div_euclid(SIDE));
+    let fx = smooth((p.0 - 16).rem_euclid(SIDE) as f32 / SIDE as f32);
+    let fy = smooth((p.1 - 16).rem_euclid(SIDE) as f32 / SIDE as f32);
+    let w = |x, y| warp_weight(ground(x, y), deep);
+    let top = w(x, y) * (1.0 - fx) + w(x + 1, y) * fx;
+    let bottom = w(x, y + 1) * (1.0 - fx) + w(x + 1, y + 1) * fx;
     let strength = ((top * (1.0 - fy) + bottom * fy - 0.5) * 2.0).clamp(0.0, 1.0);
     let (wx, wy) = if strength == 0.0 { (0, 0) } else { warp(seed, p) };
     (p.0 + (wx as f32 * strength).round() as i64, p.1 + (wy as f32 * strength).round() as i64)
 }
 
-fn ground_color(seed: u64, surface: Option<Terrain>, p: (i64, i64), pixel: [u8; 4]) -> [u8; 4] {
-    let drift = i32::from(shade(seed, p)) - 100;
-    let drift = match surface {
-        Some(Terrain::Dirt | Terrain::Floor | Terrain::Wall) => drift / 3,
-        _ => drift,
-    };
-    let mut pixel = shaded(pixel, (100 + drift) as u16);
-    if surface == Some(Terrain::Grass) {
-        // Broad meadow patches, independent of cell layout. Color follows the ground's actual pure side,
-        // so it never washes green over sand or water in a transition tile.
-        let patch = value_noise(seed, 12, p.0 as f32 / 128.0, p.1 as f32 / 128.0);
-        let (color, amount) = if patch > 0.0 { ([153, 142, 67], patch * 22.0) } else { ([44, 97, 54], -patch * 16.0) };
-        for (channel, target) in pixel[..3].iter_mut().zip(color) {
-            *channel = blend(*channel, target, amount as u16);
-        }
+/// The terrain shown at world pixel `p`. A built cell owns exactly its square; elsewhere the nearest natural
+/// cell centers vote by distance at the warped point, so corners round off and lone cells become blobs.
+fn terrain_at(seed: u64, p: (i64, i64), deep: bool, world: World) -> Terrain {
+    let own = world(p.0.div_euclid(SIDE), p.1.div_euclid(SIDE)).terrain;
+    if own.rigid(deep) {
+        return own;
     }
-    pixel
-}
-
-/// Tiny world-anchored marks. Only pure natural terrain accepts them; transitions and built ground stay
-/// readable. A shared 12px lattice lets a tuft or pebble cross a cell edge without being cut in half.
-#[derive(Clone, Copy)]
-struct GroundMark {
-    pos: (i64, i64),
-    variant: bool,
-}
-
-fn ground_marks(seed: u64, origin: (i64, i64), side: i64) -> Vec<GroundMark> {
-    let mut marks = Vec::new();
-    for y in (origin.1 - 4).div_euclid(12)..=(origin.1 + side + 4).div_euclid(12) {
-        for x in (origin.0 - 4).div_euclid(12)..=(origin.0 + side + 4).div_euclid(12) {
-            let pos =
-                (x * 12 + (lattice(seed, 20, x, y) * 10.0) as i64, y * 12 + (lattice(seed, 21, x, y) * 10.0) as i64);
-            let patch = value_noise(seed, 22, pos.0 as f32 / 96.0, pos.1 as f32 / 96.0);
-            if lattice(seed, 23, x, y) < 0.22 + patch * 0.18 {
-                marks.push(GroundMark { pos, variant: lattice(seed, 24, x, y) > 0.5 });
+    let q = ground_point(seed, p, deep, |x, y| world(x, y).terrain);
+    let mut votes: [(Terrain, f32); 4] = [(own, 1e-4); 4];
+    let mut n = 1;
+    for (at, w) in corners(q) {
+        let t = world(at.0, at.1).terrain;
+        if t.rigid(deep) {
+            continue;
+        }
+        match votes[..n].iter_mut().find(|(v, _)| *v == t) {
+            Some(vote) => vote.1 += w,
+            None => {
+                votes[n] = (t, w);
+                n += 1;
             }
         }
     }
-    marks
+    votes[..n].iter().fold(votes[0], |best, &v| if v.1 > best.1 { v } else { best }).0
 }
 
-fn mark_color(mark: GroundMark, terrain: Terrain, p: (i64, i64)) -> Option<[u8; 3]> {
+/// Look weights at world pixel `p`, summing to one, and the blended tint of the water or rock around it.
+fn looks(seed: u64, p: (i64, i64), deep: bool, world: World) -> ([f32; 3], Option<[f32; 3]>) {
+    let q = ground_point(seed, p, deep, |x, y| world(x, y).terrain);
+    let mut styles = [0.0; 3];
+    let (mut tint, mut tinted) = ([0.0; 3], 0.0);
+    for (at, w) in corners(q) {
+        let spot = world(at.0, at.1);
+        styles[STYLES.iter().position(|&s| s == spot.style).expect("listed")] += w;
+        if let Some(t) = spot.tint {
+            tinted += w;
+            for (sum, c) in tint.iter_mut().zip(t) {
+                *sum += w * f32::from(c);
+            }
+        }
+    }
+    (styles, (tinted > 0.0).then(|| tint.map(|c| c / tinted)))
+}
+
+/// The nearest different terrain within three pixels along the axes, and how far.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Near(Option<(Terrain, i64)>);
+
+impl Near {
+    fn of(p: (i64, i64), here: Terrain, terrain: &dyn Fn((i64, i64)) -> Terrain) -> Near {
+        for r in 1..=3 {
+            for (dx, dy) in [(r, 0), (-r, 0), (0, r), (0, -r)] {
+                let t = terrain((p.0 + dx, p.1 + dy));
+                if t != here {
+                    return Near(Some((t, r)));
+                }
+            }
+        }
+        Near(None)
+    }
+
+    fn within(self, reach: i64, of: impl Fn(Terrain) -> bool) -> bool {
+        self.0.is_some_and(|(t, d)| d <= reach && of(t))
+    }
+}
+
+fn mixf(a: [f32; 3], b: [u8; 3], t: f32) -> [f32; 3] {
+    [0, 1, 2].map(|i| a[i] + (f32::from(b[i]) - a[i]) * t)
+}
+
+fn f(c: [u8; 3]) -> [f32; 3] {
+    c.map(f32::from)
+}
+
+/// One material's color at world pixel `p` (warped to `q`) in palette `pal`.
+#[expect(clippy::too_many_arguments, reason = "one argument per painting input")]
+fn material(
+    seed: u64,
+    t: Terrain,
+    pal: &Palette,
+    stone: Option<Stone>,
+    p: (i64, i64),
+    q: (i64, i64),
+    near: Near,
+    tint: Option<[f32; 3]>,
+) -> [f32; 3] {
+    let n = |channel, period, at| noise(seed, channel, period, at);
+    let roll = |channel| lattice(seed, channel, p.0, p.1);
+    let deep = stone.is_some();
+    match t {
+        Terrain::Grass => {
+            let patch = n(12, 75.0, q);
+            let mut c = mixf(f(pal.grass), if patch > 0.0 { pal.grass2 } else { pal.grassdark }, patch.abs() * 0.65);
+            if near.within(2, |t| matches!(t, Terrain::Dirt | Terrain::Floor | Terrain::Wall | Terrain::Rock)) {
+                c = mixf(c, pal.grassdark, 0.3);
+            } else if near.within(1, |t| matches!(t, Terrain::Sand | Terrain::Water | Terrain::Snow)) {
+                c = mixf(c, pal.sand, 0.2);
+            }
+            if roll(17) < 0.045 {
+                c = mixf(c, pal.blade, 0.14);
+            }
+            c
+        }
+        Terrain::Sand => {
+            let mut c = f(pal.sand);
+            let ripple = ((q.1 as f32 + n(6, 30.0, q) * 6.0) / 3.0).sin().abs();
+            if ripple < 0.12 && roll(18) > 0.25 {
+                c = mixf(c, pal.soil, 0.2);
+            }
+            if near.within(2, |t| t == Terrain::Water) {
+                c = mixf(c, pal.water, 0.3);
+            }
+            if roll(17) < 0.045 {
+                c = mixf(c, pal.stone, 0.14);
+            }
+            c
+        }
+        Terrain::Water if stone == Some(Stone::Basalt) => {
+            // A dark crust over hot rock, not an orange flood.
+            let vein = (n(31, 13.0, q) + n(32, 6.0, q) * 0.28).abs();
+            if vein < 0.025 {
+                f(pal.glow)
+            } else if vein < 0.12 {
+                f(pal.lava)
+            } else {
+                mixf(f(pal.water), pal.ink, 0.4)
+            }
+        }
+        Terrain::Water => {
+            let mut c = match tint {
+                Some(tint) if !deep => mixf(f(pal.water), tint.map(|v| v as u8), 0.3),
+                _ if deep => mixf(f(pal.water), pal.ink, 0.25),
+                _ => f(pal.water),
+            };
+            if (q.1 as f32 / 4.0 + n(6, 30.0, q) * 2.0).sin().abs() < 0.10 {
+                c = mixf(c, pal.ripple, 0.4);
+            }
+            if near.within(2, |t| t != Terrain::Water) {
+                c = mixf(f(pal.sand), pal.water, 0.55);
+            } else if near.within(3, |t| t != Terrain::Water) {
+                c = mixf(c, pal.ripple, 0.25);
+            }
+            c
+        }
+        Terrain::Dirt => {
+            let mut c = mixf(f(pal.soil), pal.sand, n(26, 18.0, p).max(0.0) * 0.3);
+            if near.within(2, |t| t == Terrain::Grass) {
+                c = mixf(c, pal.grassdark, 0.3);
+            }
+            if roll(19) < 0.03 {
+                c = mixf(c, pal.stone, 0.3);
+            } else if roll(19) > 0.97 {
+                c = mixf(c, pal.ink, 0.15);
+            }
+            c
+        }
+        Terrain::Snow => {
+            let mut c = mixf(f(pal.snow), pal.ripple, n(27, 40.0, q).max(0.0) * 0.3);
+            if roll(17) < 0.008 {
+                c = mixf(c, pal.grassdark, 0.35);
+            }
+            if near.within(1, |_| true) {
+                c = mixf(c, pal.stone, 0.3);
+            }
+            c
+        }
+        Terrain::Rock => {
+            let base = tint.map_or(f(pal.rock), |tint| mixf(f(pal.rock), tint.map(|v| v as u8), 0.3));
+            let mut c = mixf(base, pal.stone, n(47, 12.0, p).max(0.0) * 0.5);
+            if n(48, 13.0, q).abs() < 0.05 {
+                c = mixf(c, pal.ink, 0.4);
+            }
+            if roll(17) < 0.05 {
+                c = mixf(c, pal.stone, 0.2);
+            }
+            if near.within(1, |t| t != Terrain::Snow) {
+                c = mixf(c, pal.ink, 0.25);
+            }
+            c
+        }
+        Terrain::Wall if deep => {
+            let mut c = mixf(f(pal.wall), pal.rock, n(47, 12.0, p).max(0.0) * 0.34);
+            // Facet highlights and a pale rim keep known walls distinct from unseen black.
+            if n(48, 13.0, q).abs() < 0.04 {
+                c = mixf(c, pal.stone, 0.14);
+            }
+            if near.within(2, |t| t != Terrain::Wall) {
+                c = mixf(c, pal.stone, 0.22);
+            }
+            c.map(|v| v + 9.0)
+        }
+        Terrain::Wall => {
+            let row = p.1.div_euclid(8);
+            let x = p.0 + if row % 2 == 0 { 0 } else { 8 };
+            let (u, v) = (x.rem_euclid(16), p.1.rem_euclid(8));
+            if u == 0 || v == 0 {
+                mixf(f(pal.rock), pal.ink, 0.5)
+            } else {
+                let brick = mixf(f(pal.rock), pal.stone, lattice(seed, 28, x.div_euclid(16), row) * 0.45);
+                if v == 1 { mixf(brick, pal.stone, 0.25) } else { brick }
+            }
+        }
+        Terrain::Floor => {
+            let mut c = mixf(f(pal.floor), pal.stone, n(29, 23.0, p).max(0.0) * 0.18);
+            if n(30, 17.0, q).abs() < 0.03 {
+                c = mixf(c, pal.ink, 0.25);
+            }
+            if stone == Some(Stone::Slate) {
+                c = mixf(c, pal.water, n(50, 23.0, p).max(0.0) * 0.3);
+            }
+            if roll(17) < 0.04 {
+                c = mixf(c, pal.stone, 0.14);
+            }
+            if near.within(1, |t| t == Terrain::Wall) {
+                c = mixf(c, pal.ink, 0.3);
+            }
+            c
+        }
+    }
+}
+
+/// Lava seams glow on basalt cave floor.
+fn ember(seed: u64, mood: Mood, t: Terrain, p: (i64, i64)) -> bool {
+    t == Terrain::Floor && mood.stone_at(seed, p) == Some(Stone::Basalt) && mood::seam(seed, p)
+}
+
+fn finish(seed: u64, mood: Mood, p: (i64, i64), c: [f32; 3]) -> [u8; 4] {
+    // A slow brightness drift across wide fields.
+    let drift = 1.0 + noise(seed, 15, 72.0, p) * 0.035;
+    let [r, g, b] = c.map(|v| (v * drift).round().clamp(0.0, 255.0) as u8);
+    mood::grade(seed, mood, Some(p), [r, g, b, 255])
+}
+
+/// The palette at `p`: the Deep's stone, or the heaviest surface look.
+fn palette_at(seed: u64, mood: Mood, p: (i64, i64), world: World) -> &'static Palette {
+    match mood.stone_at(seed, p) {
+        Some(stone) => paint::stone(stone),
+        None => {
+            let (weights, _) = looks(seed, p, false, world);
+            let i = (0..3).fold(0, |best, i| if weights[i] > weights[best] { i } else { best });
+            paint::surface(STYLES[i])
+        }
+    }
+}
+
+/// World-anchored marks: sand ripples and grass tufts on a shared 9px lattice, so a tuft can cross a cell edge
+/// without being cut in half.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Mark {
+    pos: (i64, i64),
+    flip: bool,
+}
+
+/// Marks whose shape can reach the `side`-pixel square at `origin`.
+fn marks(seed: u64, origin: (i64, i64), side: i64) -> Vec<Mark> {
+    let mut out = Vec::new();
+    for gy in (origin.1 - 9).div_euclid(9)..=(origin.1 + side + 4).div_euclid(9) {
+        for gx in (origin.0 - 10).div_euclid(9)..=(origin.0 + side + 3).div_euclid(9) {
+            let pos =
+                (gx * 9 + (lattice(seed, 20, gx, gy) * 7.0) as i64, gy * 9 + (lattice(seed, 21, gx, gy) * 7.0) as i64);
+            let patch = noise(seed, 22, 48.0, pos);
+            if lattice(seed, 23, gx, gy) <= 0.22 + patch * 0.19 {
+                out.push(Mark { pos, flip: lattice(seed, 24, gx, gy) < 0.5 });
+            }
+        }
+    }
+    out
+}
+
+/// A mark only grows where its whole footprint shows `kind`, so blades never bleed onto paths.
+fn mark_fits(mark: Mark, kind: Terrain, terrain: &dyn Fn((i64, i64)) -> Terrain) -> bool {
+    [(0, 0), (-3, 0), (3, 0), (0, -4), (0, 1)]
+        .iter()
+        .all(|&(dx, dy)| terrain((mark.pos.0 + dx, mark.pos.1 + dy)) == kind)
+}
+
+/// A sand ripple's shade at `p`, if it covers `p`.
+fn ripple_shade(mark: Mark, p: (i64, i64)) -> bool {
     let (mut x, y) = (p.0 - mark.pos.0, p.1 - mark.pos.1);
-    if mark.variant {
+    if mark.flip {
         x = -x;
     }
-    match terrain {
-        Terrain::Grass => match (x, y) {
-            (-2, 0) | (-1, 1) | (0, 1) | (1, 0) | (0, -1) => Some([64, 102, 38]),
-            (-2, -1) | (0, -3) | (1, -2) => Some([157, 172, 76]),
-            (-1, 0) | (0, 0) | (0, -2) | (1, -1) => Some([112, 145, 48]),
-            _ => None,
-        },
-        Terrain::Sand if !mark.variant => match (x, y) {
-            (-1..=1, 1) | (2, 0) => Some([191, 164, 119]),
-            (-1..=1, 0) => Some([222, 207, 167]),
-            (0, -1) => Some([239, 224, 185]),
-            _ => None,
-        },
-        Terrain::Sand => match (x, y) {
-            (-3..=-2, 0) | (-1..=1, -1) | (2..=3, -2) => Some([218, 187, 137]),
-            (-2..=-1, 1) | (0..=2, 0) => Some([242, 218, 169]),
-            _ => None,
-        },
-        Terrain::Rock => match (x, y) {
-            (-2, -2) | (-1, -1) | (0, 0..=1) | (1, 2) => Some([63, 64, 70]),
-            (-1, -2) | (0, -1) | (1, 0..=1) => Some([121, 122, 126]),
-            _ => None,
-        },
+    matches!((x, y), (-2..=-1, 0) | (0..=2, -1))
+}
+
+/// Which part of a tuft covers `p`, with its upper blades leaning by `lean`: 0 dark, 1 blade, 2 tip.
+fn tuft_part(mark: Mark, p: (i64, i64), lean: i64) -> Option<u8> {
+    let y = p.1 - mark.pos.1;
+    let mut x = p.0 - mark.pos.0 - if y <= -2 { lean } else { 0 };
+    if mark.flip {
+        x = -x;
+    }
+    match (x, y) {
+        (0, 0..=0) | (0, -3..=-1) | (1, -4) => Some(1),
+        (-2, -2..=-1) | (-1, 0) | (1, 0) => Some(0),
+        (2, -2) => Some(2),
         _ => None,
     }
 }
@@ -464,24 +611,108 @@ fn mark_color(mark: GroundMark, terrain: Terrain, p: (i64, i64)) -> Option<[u8; 
 /// How far a tuft's blade tips lean, -1 to 1 pixel, at an animation frame. A wave rolls across the world, and
 /// slow gusts make some meadows livelier than others. It depends only on the tuft's world position, so a tuft
 /// straddling a cell edge leans the same way in both cells.
-fn sway(seed: u64, mark: GroundMark, frame: u8, wind: u8) -> i64 {
+fn sway(seed: u64, mark: Mark, frame: u8, wind: u8) -> i64 {
     let gust = 1.1 + 0.4 * value_noise(seed, 25, mark.pos.0 as f32 / 160.0, mark.pos.1 as f32 / 160.0);
     let travel = (mark.pos.0 as f32 + 0.5 * mark.pos.1 as f32) / 96.0;
     let wave = std::f32::consts::TAU * (f32::from(frame) / f32::from(FRAMES) - travel);
     (f32::from(wind) / 10.0 * gust * wave.sin()).round().clamp(-1.0, 1.0) as i64
 }
 
-/// A grass tuft's pixel with its upper blades leaning by `lean`.
-fn tuft_color(mark: GroundMark, p: (i64, i64), lean: i64) -> Option<[u8; 3]> {
-    let shift = if p.1 - mark.pos.1 <= -2 { lean } else { 0 };
-    mark_color(mark, Terrain::Grass, (p.0 - shift, p.1))
+/// A ground pixel. `terrain` answers [`terrain_at`] (the renderer caches it), and `marks` holds every mark that
+/// can reach `p`.
+fn ground_pixel(
+    seed: u64,
+    mood: Mood,
+    p: (i64, i64),
+    world: World,
+    terrain: &dyn Fn((i64, i64)) -> Terrain,
+    marks: &[Mark],
+) -> [u8; 4] {
+    let t = terrain(p);
+    if ember(seed, mood, t, p) {
+        let [r, g, b] = mood::EMBER;
+        return [r, g, b, 255];
+    }
+    let stone = mood.stone_at(seed, p);
+    let deep = stone.is_some();
+    let q = ground_point(seed, p, deep, |x, y| world(x, y).terrain);
+    let near = Near::of(p, t, terrain);
+    if t == Terrain::Sand
+        && let Some(&mark) = marks.iter().rev().find(|&&m| ripple_shade(m, p) && mark_fits(m, Terrain::Sand, terrain))
+    {
+        let pal = palette_at(seed, mood, mark.pos, world);
+        return finish(seed, mood, p, f(paint::mix(pal.sand, pal.soil, 0.4)));
+    }
+    let c = match stone {
+        Some(stone) => material(seed, t, paint::stone(stone), Some(stone), p, q, near, None),
+        None => {
+            let (weights, tint) = looks(seed, p, false, world);
+            let mut c = [0.0; 3];
+            for (style, w) in STYLES.into_iter().zip(weights).filter(|&(_, w)| w > 0.0) {
+                let one = material(seed, t, paint::surface(style), None, p, q, near, tint);
+                for (sum, v) in c.iter_mut().zip(one) {
+                    *sum += w * v;
+                }
+            }
+            c
+        }
+    };
+    finish(seed, mood, p, c)
 }
 
-fn shaded(mut pixel: [u8; 4], percent: u16) -> [u8; 4] {
-    for channel in &mut pixel[..3] {
-        *channel = (u16::from(*channel) * percent / 100).min(255) as u8;
+/// A pixel of the swaying tuft layer, or None where no tuft covers `p`.
+#[expect(clippy::too_many_arguments, reason = "one argument per painting input")]
+fn tuft_pixel(
+    seed: u64,
+    mood: Mood,
+    p: (i64, i64),
+    frame: u8,
+    wind: u8,
+    world: World,
+    terrain: &dyn Fn((i64, i64)) -> Terrain,
+    marks: &[Mark],
+) -> Option<[u8; 4]> {
+    if terrain(p) != Terrain::Grass {
+        return None;
     }
-    pixel
+    let (mark, part) = marks
+        .iter()
+        .rev()
+        .filter_map(|&m| tuft_part(m, p, sway(seed, m, frame, wind)).map(|part| (m, part)))
+        .find(|&(m, _)| mark_fits(m, Terrain::Grass, terrain))?;
+    let pal = palette_at(seed, mood, mark.pos, world);
+    let c = match part {
+        0 => pal.grassdark,
+        1 => paint::mix(pal.blade, pal.grass, 0.25),
+        _ => pal.blade,
+    };
+    Some(finish(seed, mood, p, f(c)))
+}
+
+/// Terrain over a cell and an eight-pixel margin, which edge shading and marks reach into.
+struct Field {
+    origin: (i64, i64),
+    terrains: Vec<Terrain>,
+}
+
+const MARGIN: i64 = 8;
+const SPAN: i64 = SIDE + 2 * MARGIN;
+
+impl Field {
+    fn new(seed: u64, cell: &GroundCell, deep: bool) -> Field {
+        let origin = (i64::from(cell.pos.0) * SIDE - MARGIN, i64::from(cell.pos.1) * SIDE - MARGIN);
+        let world = |x, y| cell.spot(x, y);
+        let terrains = (0..SPAN * SPAN)
+            .map(|i| terrain_at(seed, (origin.0 + i % SPAN, origin.1 + i / SPAN), deep, &world))
+            .collect();
+        Field { origin, terrains }
+    }
+
+    fn at(&self, p: (i64, i64)) -> Terrain {
+        let (x, y) = (p.0 - self.origin.0, p.1 - self.origin.1);
+        assert!((0..SPAN).contains(&x) && (0..SPAN).contains(&y), "painting stays within the margin");
+        self.terrains[(y * SPAN + x) as usize]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -490,6 +721,7 @@ enum Source {
     Object {
         object: Object,
         mirrored: bool,
+        style: Style,
     },
     Hero(Look),
     /// The grass tufts over a cell's ground at one animation frame, in tenths of wind.
@@ -502,9 +734,6 @@ enum Source {
     Heat(GroundCell),
 }
 
-/// One warped ground sample: its quarter, the pixel within that quarter's tile, and the source cell's water tint.
-type Sample = (Quarter, (usize, usize), Option<[u8; 3]>);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct ImageKey {
     source: Source,
@@ -513,11 +742,9 @@ struct ImageKey {
     mood: Mood,
 }
 
-/// Decoded sheets plus the scale- and visibility-bounded images used by the current frame.
+/// The scale- and visibility-bounded images used by the current frame.
 pub struct ArtCache {
     seed: u64,
-    sets: HashMap<TileSet, RgbaImage>,
-    objects: RgbaImage,
     images: HashMap<ImageKey, Arc<RenderImage>>,
     /// Transparent layers; None when a cell has nothing to draw in them.
     overlays: HashMap<ImageKey, Option<Arc<RenderImage>>>,
@@ -527,22 +754,11 @@ pub struct ArtCache {
     factor: usize,
     device_side: usize,
 }
-fn decode(bytes: &[u8]) -> RgbaImage {
-    let image = image::load_from_memory(bytes).expect("embedded world art must be a PNG").to_rgba8();
-    assert_eq!(
-        image.dimensions(),
-        (4 * NATIVE_SIDE as u32, 4 * NATIVE_SIDE as u32),
-        "embedded world art must be a 4×4 sheet of 32-pixel tiles"
-    );
-    image
-}
 
 impl ArtCache {
     pub fn new(seed: u64) -> Self {
         Self {
             seed,
-            sets: ALL_SETS.into_iter().map(|set| (set, decode(set.bytes()))).collect(),
-            objects: decode(OBJECTS),
             images: HashMap::new(),
             overlays: HashMap::new(),
             used: HashSet::new(),
@@ -585,19 +801,26 @@ impl ArtCache {
         self.device_side as f32 / self.scale
     }
 
-    /// A cell's warped ground.
+    /// A cell's painted ground.
     pub fn ground(&mut self, cell: GroundCell, remembered: bool, lit: bool) -> Arc<RenderImage> {
         self.get(ImageKey { source: Source::Ground(cell), remembered, lit, mood: self.mood })
     }
 
-    /// A terrain object over the ground, optionally mirrored left to right, graded like the ground.
-    pub fn object(&mut self, object: Object, mirrored: bool, remembered: bool, lit: bool) -> Arc<RenderImage> {
-        self.get(ImageKey { source: Source::Object { object, mirrored }, remembered, lit, mood: self.mood })
+    /// A terrain object over the ground in its biome's look, optionally mirrored left to right.
+    pub fn object(
+        &mut self,
+        object: Object,
+        mirrored: bool,
+        style: Style,
+        remembered: bool,
+        lit: bool,
+    ) -> Arc<RenderImage> {
+        self.get(ImageKey { source: Source::Object { object, mirrored, style }, remembered, lit, mood: self.mood })
     }
 
     /// A ground item's icon. Items keep their colors in every weather so they stay easy to spot.
     pub fn item(&mut self, object: Object) -> Arc<RenderImage> {
-        let source = Source::Object { object, mirrored: false };
+        let source = Source::Object { object, mirrored: false, style: Style::Moss };
         self.get(ImageKey { source, remembered: false, lit: false, mood: Mood::default() })
     }
 
@@ -633,39 +856,6 @@ impl ArtCache {
         self.overlay(ImageKey { source: Source::Heat(cell), remembered: false, lit, mood: self.mood })
     }
 
-    /// The pixel of a quarter's tile at `local` within the cell. The cell's NW quarter is the SE quarter of the
-    /// tile centered on the cell's NW corner.
-    fn quarter_pixel(&self, quarter: Quarter, local: (usize, usize)) -> [u8; 4] {
-        let (qx, qy) = (local.0 / QUARTER, local.1 / QUARTER);
-        let x = (quarter.mask as usize % 4) * NATIVE_SIDE + (1 - qx) * QUARTER + local.0 % QUARTER;
-        let y = (quarter.mask as usize / 4) * NATIVE_SIDE + (1 - qy) * QUARTER + local.1 % QUARTER;
-        self.sets[&quarter.set].get_pixel(x as u32, y as u32).0
-    }
-
-    /// Per pixel of a cell, rows north to south: the quarter its warped sample lands in, the pixel within that
-    /// quarter's tile, and the water tint of the source cell.
-    fn samples(&self, cell: GroundCell) -> Vec<Sample> {
-        // Quarters of the cell and its eight neighbors, which warped samples may reach.
-        let quarters = [0, 1, 2].map(|r| {
-            [0, 1, 2].map(|c| ground_quarters([0, 1, 2].map(|y| [0, 1, 2].map(|x| cell.around[r + y][c + x]))))
-        });
-        let side = NATIVE_SIDE as i64;
-        let (cx, cy) = (i64::from(cell.pos.0), i64::from(cell.pos.1));
-        let mut out = Vec::with_capacity(NATIVE_SIDE * NATIVE_SIDE);
-        for y in 0..side {
-            for x in 0..side {
-                let p = (cx * side + x, cy * side + y);
-                let q =
-                    ground_point(self.seed, p, |gx, gy| cell.around[(gy - cy + 2) as usize][(gx - cx + 2) as usize]);
-                let r = (q.1.div_euclid(side) - cy + 1) as usize;
-                let c = (q.0.div_euclid(side) - cx + 1) as usize;
-                let local = (q.0.rem_euclid(side) as usize, q.1.rem_euclid(side) as usize);
-                out.push((quarters[r][c][(local.1 / QUARTER) * 2 + local.0 / QUARTER], local, cell.tints[r][c]));
-            }
-        }
-        out
-    }
-
     #[cfg(test)]
     fn native(&self, source: Source) -> RgbaImage {
         self.native_in(source, Mood::default())
@@ -673,90 +863,57 @@ impl ArtCache {
 
     fn native_in(&self, source: Source, mood: Mood) -> RgbaImage {
         let mut out = RgbaImage::new(NATIVE_SIDE as u32, NATIVE_SIDE as u32);
-        let side = NATIVE_SIDE as i64;
-        let world = |cell: GroundCell, i: usize| {
-            let (x, y) = ((i % NATIVE_SIDE) as i64, (i / NATIVE_SIDE) as i64);
-            (i64::from(cell.pos.0) * side + x, i64::from(cell.pos.1) * side + y)
+        let seed = self.seed;
+        let deep = matches!(mood, Mood::Deep(..));
+        let pixels = |cell: GroundCell| {
+            let origin = (i64::from(cell.pos.0) * SIDE, i64::from(cell.pos.1) * SIDE);
+            (0..SIDE * SIDE).map(move |i| (i, (origin.0 + i % SIDE, origin.1 + i / SIDE)))
+        };
+        let put = |out: &mut RgbaImage, i: i64, pixel: [u8; 4]| {
+            out.put_pixel((i % SIDE) as u32, (i / SIDE) as u32, image::Rgba(pixel));
         };
         match source {
             Source::Ground(cell) => {
-                let (cx, cy) = (i64::from(cell.pos.0), i64::from(cell.pos.1));
-                let mut surfaces = [[None; NATIVE_SIDE]; NATIVE_SIDE];
-                for (i, (quarter, local, tint)) in self.samples(cell).into_iter().enumerate() {
-                    let p = world(cell, i);
-                    let surface = quarter.pure();
-                    surfaces[i / NATIVE_SIDE][i % NATIVE_SIDE] = surface;
-                    let pixel = ground_color(self.seed, surface, p, self.quarter_pixel(quarter, local));
-                    let pixel = transform_pixel(pixel, tint, false, false);
-                    let pixel = mood::grade(self.seed, mood, Some(p), surface, pixel);
-                    out.put_pixel((i % NATIVE_SIDE) as u32, (i / NATIVE_SIDE) as u32, image::Rgba(pixel));
-                }
-                for mark in ground_marks(self.seed, (cx * side, cy * side), side) {
-                    for dy in -3..=2 {
-                        for dx in -3..=3 {
-                            let p = (mark.pos.0 + dx, mark.pos.1 + dy);
-                            let (x, y) = (p.0 - cx * side, p.1 - cy * side);
-                            if !(0..side).contains(&x) || !(0..side).contains(&y) {
-                                continue;
-                            }
-                            let Some(terrain) = surfaces[y as usize][x as usize] else { continue };
-                            // Grass tufts sway in their own layer.
-                            if terrain == Terrain::Grass {
-                                continue;
-                            }
-                            if let Some([r, g, b]) = mark_color(mark, terrain, p) {
-                                let pixel = ground_color(self.seed, Some(terrain), p, [r, g, b, 255]);
-                                let pixel = mood::grade(self.seed, mood, Some(p), Some(terrain), pixel);
-                                out.put_pixel(x as u32, y as u32, image::Rgba(pixel));
-                            }
-                        }
-                    }
+                let field = Field::new(seed, &cell, deep);
+                let world = |x, y| cell.spot(x, y);
+                let marks = marks(seed, (i64::from(cell.pos.0) * SIDE, i64::from(cell.pos.1) * SIDE), SIDE);
+                for (i, p) in pixels(cell) {
+                    put(&mut out, i, ground_pixel(seed, mood, p, &world, &|p| field.at(p), &marks));
                 }
             }
             Source::Tufts { cell, frame, wind } => {
-                let grass: Vec<bool> =
-                    self.samples(cell).iter().map(|(quarter, _, _)| quarter.pure() == Some(Terrain::Grass)).collect();
-                let origin = (i64::from(cell.pos.0) * side, i64::from(cell.pos.1) * side);
-                for mark in ground_marks(self.seed, origin, side) {
-                    let lean = sway(self.seed, mark, frame, wind);
-                    for dy in -3..=2 {
-                        for dx in -4..=4 {
-                            let p = (mark.pos.0 + dx, mark.pos.1 + dy);
-                            let (x, y) = (p.0 - origin.0, p.1 - origin.1);
-                            if !(0..side).contains(&x) || !(0..side).contains(&y) || !grass[(y * side + x) as usize] {
-                                continue;
-                            }
-                            if let Some([r, g, b]) = tuft_color(mark, p, lean) {
-                                let pixel = ground_color(self.seed, Some(Terrain::Grass), p, [r, g, b, 255]);
-                                let pixel = mood::grade(self.seed, mood, Some(p), Some(Terrain::Grass), pixel);
-                                out.put_pixel(x as u32, y as u32, image::Rgba(pixel));
-                            }
-                        }
+                let field = Field::new(seed, &cell, deep);
+                let world = |x, y| cell.spot(x, y);
+                let marks = marks(seed, (i64::from(cell.pos.0) * SIDE, i64::from(cell.pos.1) * SIDE), SIDE);
+                for (i, p) in pixels(cell) {
+                    if let Some(pixel) = tuft_pixel(seed, mood, p, frame, wind, &world, &|p| field.at(p), &marks) {
+                        put(&mut out, i, pixel);
                     }
                 }
             }
             Source::Heat(cell) => {
-                for (i, (quarter, _, _)) in self.samples(cell).into_iter().enumerate() {
-                    let p = world(cell, i);
-                    if quarter.pure() == Some(Terrain::Floor)
-                        && mood.stone_at(self.seed, p) == Some(Stone::Basalt)
-                        && mood::seam(self.seed, p)
-                    {
-                        let [r, g, b] = mood::HEAT;
-                        out.put_pixel((i % NATIVE_SIDE) as u32, (i / NATIVE_SIDE) as u32, image::Rgba([r, g, b, 255]));
+                if deep {
+                    let field = Field::new(seed, &cell, deep);
+                    for (i, p) in pixels(cell) {
+                        if ember(seed, mood, field.at(p), p) {
+                            let [r, g, b] = mood::HEAT;
+                            put(&mut out, i, [r, g, b, 255]);
+                        }
                     }
                 }
             }
             Source::Hero(look) => out = hero::draw(look),
-            Source::Object { object, mirrored } => {
-                let i = object.index();
-                let (ox, oy) = ((i % 4) * NATIVE_SIDE, (i / 4) * NATIVE_SIDE);
-                for y in 0..NATIVE_SIDE {
-                    for x in 0..NATIVE_SIDE {
-                        let sx = if mirrored { NATIVE_SIDE - 1 - x } else { x };
-                        let pixel = self.objects.get_pixel((ox + sx) as u32, (oy + y) as u32).0;
-                        out.put_pixel(x as u32, y as u32, image::Rgba(mood::grade(self.seed, mood, None, None, pixel)));
-                    }
+            Source::Object { object, mirrored, style } => {
+                let (pal, snowy, hot) = match mood {
+                    Mood::Deep(main, _) => (paint::stone(main), false, main == Stone::Basalt),
+                    Mood::Surface(_) => (paint::surface(style), style == Style::Hearth, false),
+                };
+                let mut image = paint::object(object, pal, snowy, hot);
+                if mirrored {
+                    image = image::imageops::flip_horizontal(&image);
+                }
+                for (x, y, pixel) in image.enumerate_pixels() {
+                    out.put_pixel(x, y, image::Rgba(mood::grade(seed, mood, None, pixel.0)));
                 }
             }
         }
@@ -807,7 +964,6 @@ impl ArtCache {
         dropped
     }
 }
-
 /// Integer-only nearest-neighbor enlargement. Fractional display scales get edge padding (or transparent
 /// padding for objects), never resampling, so the resulting raster fits the device cell exactly.
 fn rasterize(
@@ -880,122 +1036,45 @@ mod tests {
     use blah_core::{BIOMES, BiomeId};
     use isle_core::{Armor, Bow, Weapon};
 
-    fn terrain_named(name: &str) -> Terrain {
-        match name {
-            "water" => Terrain::Water,
-            "grass" => Terrain::Grass,
-            "dirt" => Terrain::Dirt,
-            "sand" => Terrain::Sand,
-            "rock" => Terrain::Rock,
-            "floor" => Terrain::Floor,
-            "wall" => Terrain::Wall,
-            other => panic!("unknown terrain {other}"),
-        }
+    fn tint_of(terrain: Terrain, x: i32) -> Option<[u8; 3]> {
+        (terrain == Terrain::Water).then_some([20, 70, 90 + (x.rem_euclid(3) * 30) as u8])
     }
 
-    #[test]
-    fn embedded_sheets_decode_and_match_the_manifest() {
-        let manifest: serde_json::Value = serde_json::from_str(include_str!("../assets/world/manifest.json")).unwrap();
-        assert_eq!(manifest["tile_size"], 32);
-        for set in ALL_SETS {
-            decode(set.bytes());
-            let entry = &manifest["terrain"][set.name()];
-            let (a, b) = set.terrains();
-            assert_eq!(
-                (terrain_named(entry["a"].as_str().unwrap()), terrain_named(entry["b"].as_str().unwrap())),
-                (a, b)
-            );
-        }
-        let sheet = decode(OBJECTS);
-        let order: Vec<&str> =
-            manifest["objects"]["order"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
-        assert_eq!(order.len(), ALL_OBJECTS.len());
-        for object in ALL_OBJECTS {
-            let i = object.index();
-            let visible = (0..32)
-                .flat_map(|y| (0..32).map(move |x| (x, y)))
-                .filter(|&(x, y)| sheet.get_pixel((i % 4 * 32 + x) as u32, (i / 4 * 32 + y) as u32)[3] > 0)
-                .count();
-            assert!(visible > 40 && visible < 1024, "{object:?} must be a visible object on transparency");
-        }
-        for set in ALL_SETS {
-            let sheet = decode(set.bytes());
-            assert!(sheet.pixels().all(|p| p[3] == 255), "{set:?} terrain must be opaque");
-        }
-    }
+    type Styled<'a> = &'a dyn Fn(i32, i32) -> (Terrain, Style);
 
-    #[test]
-    fn every_terrain_has_a_home_tile_of_its_own_side() {
-        for terrain in
-            [Terrain::Water, Terrain::Grass, Terrain::Dirt, Terrain::Sand, Terrain::Rock, Terrain::Floor, Terrain::Wall]
-        {
-            let (set, is_b) = terrain.home();
-            let (a, b) = set.terrains();
-            assert_eq!(if is_b { b } else { a }, terrain);
-            assert_eq!(ground_quarters([[terrain; 3]; 3]), [Quarter { set, mask: if is_b { 15 } else { 0 } }; 4]);
-        }
-    }
-
-    #[test]
-    fn quarters_meet_neighbors_on_cell_edges() {
-        use Terrain::{Floor, Grass, Sand, Wall, Water};
-        // Grass with water to the east: the east quarters use shore tiles whose east corners are water.
-        let around = [[Grass, Grass, Water], [Grass, Grass, Water], [Grass, Grass, Water]];
-        let q = ground_quarters(around);
-        assert_eq!(q[0], Quarter { set: TileSet::Shore, mask: 15 });
-        assert_eq!(q[1], Quarter { set: TileSet::Shore, mask: 0b1010 });
-        assert_eq!(q[3], Quarter { set: TileSet::Shore, mask: 0b1010 });
-        // A lone wall pillar keeps its own corners in every quarter, so it still shows.
-        let mut pillar = [[Floor; 3]; 3];
-        pillar[1][1] = Wall;
-        assert_eq!(ground_quarters(pillar).map(|q| q.mask), [0b0001, 0b0010, 0b0100, 0b1000]);
-        // The island's common neighbors all have a joining set.
-        use Terrain::{Dirt, Rock};
-        for (first, second) in
-            [(Grass, Water), (Sand, Water), (Grass, Sand), (Grass, Rock), (Sand, Rock), (Grass, Dirt), (Floor, Wall)]
-        {
-            assert!(joining(first, second).is_some() && joining(second, first).is_some(), "{first:?}/{second:?}");
-        }
-        // Terrains no set joins meet with a hard edge: the center's full tile.
-        let mut unjoined = [[Sand; 3]; 3];
-        unjoined[1][1] = Wall;
-        assert_eq!(ground_quarters(unjoined), [Quarter { set: TileSet::Dungeon, mask: 15 }; 4]);
-    }
-
-    /// Grounds and tints of a world laid out by `world`, as the view would pass them with everything known.
-    fn world_cell(world: &dyn Fn(i32, i32) -> Terrain, pos: (i32, i32)) -> GroundCell {
-        let tint =
-            |x: i32, y: i32| (world(x, y) == Terrain::Water).then_some([20, 70, 90 + (x.rem_euclid(3) * 30) as u8]);
+    /// Grounds, tints and looks of a world laid out by `world`, as the view would pass them with everything known.
+    fn styled_cell(world: Styled, pos: (i32, i32)) -> GroundCell {
+        let at = |dx: i32, dy: i32| world(pos.0 + dx, pos.1 + dy);
         GroundCell {
             pos,
-            around: [-2, -1, 0, 1, 2].map(|dy| [-2, -1, 0, 1, 2].map(|dx| world(pos.0 + dx, pos.1 + dy))),
-            tints: [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| tint(pos.0 + dx, pos.1 + dy))),
+            around: [-2, -1, 0, 1, 2].map(|dy| [-2, -1, 0, 1, 2].map(|dx| at(dx, dy).0)),
+            tints: [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| tint_of(at(dx, dy).0, pos.0 + dx))),
+            styles: [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| at(dx, dy).1)),
         }
     }
 
-    fn sample_world(world: &dyn Fn(i32, i32) -> Terrain, cache: &ArtCache, p: (i64, i64)) -> [u8; 4] {
-        // Independent of any one cell: find the source cell of the warped point in the world itself.
-        let q = ground_point(cache.seed, p, |x, y| world(x as i32, y as i32));
-        let source = (q.0.div_euclid(32) as i32, q.1.div_euclid(32) as i32);
-        let around = [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| world(source.0 + dx, source.1 + dy)));
-        let local = (q.0.rem_euclid(32) as usize, q.1.rem_euclid(32) as usize);
-        let quarter = ground_quarters(around)[(local.1 / 16) * 2 + local.0 / 16];
-        let tint = world_cell(world, source).tints[1][1];
-        let surface = quarter.pure();
-        let mut pixel = transform_pixel(
-            ground_color(cache.seed, surface, p, cache.quarter_pixel(quarter, local)),
-            tint,
-            false,
-            false,
-        );
-        if let Some(terrain) = surface.filter(|&t| t != Terrain::Grass) {
-            for mark in ground_marks(cache.seed, p, 1) {
-                if let Some([r, g, b]) = mark_color(mark, terrain, p) {
-                    pixel = ground_color(cache.seed, surface, p, [r, g, b, 255]);
-                }
-            }
+    fn world_cell(world: &dyn Fn(i32, i32) -> Terrain, pos: (i32, i32)) -> GroundCell {
+        styled_cell(&|x, y| (world(x, y), Style::Moss), pos)
+    }
+
+    fn spots(world: Styled<'_>) -> impl Fn(i64, i64) -> Spot + '_ {
+        move |x, y| {
+            let (terrain, style) = world(x as i32, y as i32);
+            Spot { terrain, style, tint: tint_of(terrain, x as i32) }
         }
-        pixel
+    }
+
+    /// Independent of any one cell: paint world pixel `p` from the world itself.
+    fn sample_world(world: Styled, seed: u64, mood: Mood, p: (i64, i64)) -> [u8; 4] {
+        let deep = matches!(mood, Mood::Deep(..));
+        let spots = spots(world);
+        ground_pixel(seed, mood, p, &spots, &|p| terrain_at(seed, p, deep, &spots), &marks(seed, p, 1))
+    }
+
+    fn sample_tufts(world: Styled, seed: u64, mood: Mood, p: (i64, i64), frame: u8) -> [u8; 4] {
+        let spots = spots(world);
+        let terrain = |p| terrain_at(seed, p, false, &spots);
+        tuft_pixel(seed, mood, p, frame, 10, &spots, &terrain, &marks(seed, p, 1)).unwrap_or([0; 4])
     }
 
     fn mixed_world(x: i32, y: i32) -> Terrain {
@@ -1004,27 +1083,49 @@ mod tests {
             (1, 0) => Terrain::Sand,
             (2, _) | (3, 1) => Terrain::Dirt,
             (4, 3) => Terrain::Rock,
+            (1, 2) => Terrain::Wall,
+            (3, 3) => Terrain::Snow,
             _ => Terrain::Grass,
         }
     }
 
-    #[test]
-    fn neighboring_cells_agree_with_one_world_wide_sampling() {
+    fn mixed_styled(x: i32, y: i32) -> (Terrain, Style) {
+        (mixed_world(x, y), STYLES[(x.div_euclid(2) + y.div_euclid(3)).rem_euclid(3) as usize])
+    }
+
+    fn cave(x: i32, y: i32) -> (Terrain, Style) {
+        let open = (x.rem_euclid(7) < 5 && y.rem_euclid(6) < 4) || (x + y).rem_euclid(9) == 0;
+        let terrain = if (x, y) == (2, 1) {
+            Terrain::Water
+        } else if open {
+            Terrain::Floor
+        } else {
+            Terrain::Wall
+        };
+        (terrain, Style::Moss)
+    }
+
+    fn check_agreement(world: Styled, mood: Mood, cells: std::ops::Range<i32>) {
         let cache = ArtCache::new(7);
-        for cy in -2..3 {
-            for cx in -2..3 {
-                let image = cache.native(Source::Ground(world_cell(&mixed_world, (cx, cy))));
+        for cy in cells.clone() {
+            for cx in cells.clone() {
+                let image = cache.native_in(Source::Ground(styled_cell(world, (cx, cy))), mood);
                 for y in 0..32 {
                     for x in 0..32 {
                         let p = (i64::from(cx) * 32 + x, i64::from(cy) * 32 + y);
-                        assert_eq!(
-                            image.get_pixel(x as u32, y as u32).0,
-                            sample_world(&mixed_world, &cache, p),
-                            "{p:?}"
-                        );
+                        assert_eq!(image.get_pixel(x as u32, y as u32).0, sample_world(world, 7, mood, p), "{p:?}");
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn neighboring_cells_agree_with_one_world_wide_painting() {
+        check_agreement(&mixed_styled, Mood::default(), -2..3);
+        check_agreement(&mixed_styled, Mood::Surface(mood::Sky { clear: 0, mist: 6 }), -1..2);
+        for stone in [Stone::Limestone, Stone::Slate, Stone::Basalt] {
+            check_agreement(&cave, Mood::Deep(stone, Stone::Basalt), -1..2);
         }
     }
 
@@ -1042,70 +1143,50 @@ mod tests {
     }
 
     #[test]
-    fn built_ground_stays_straight_and_natural_ground_keeps_its_warp() {
+    fn built_ground_keeps_square_edges_and_natural_ground_rounds_off() {
         for terrain in [Terrain::Floor, Terrain::Wall, Terrain::Dirt] {
             for y in -32..32 {
                 for x in -32..32 {
-                    assert_eq!(ground_point(7, (x, y), |_, _| terrain), (x, y));
+                    assert_eq!(ground_point(7, (x, y), false, |_, _| terrain), (x, y));
                 }
             }
         }
-        for y in -32..32 {
-            for x in -32..32 {
-                let p = (x, y);
-                let (wx, wy) = warp(7, p);
-                assert_eq!(ground_point(7, p, |_, _| Terrain::Grass), (x + wx, y + wy));
+        // A town wall cell in a meadow owns exactly its square.
+        let walled = |x: i64, y: i64| Spot {
+            terrain: if (x, y) == (0, 0) { Terrain::Wall } else { Terrain::Grass },
+            style: Style::Moss,
+            tint: None,
+        };
+        for y in -32..64 {
+            for x in -32..64 {
+                let inside = (0..32).contains(&x) && (0..32).contains(&y);
+                assert_eq!(terrain_at(7, (x, y), false, &walled) == Terrain::Wall, inside, "{x} {y}");
             }
         }
-    }
-
-    #[test]
-    fn natural_marks_are_sparse_clustered_and_never_paint_built_ground_or_water() {
-        let marks = ground_marks(7, (-256, -256), 512);
-        assert!(!marks.is_empty());
-        for terrain in [Terrain::Water, Terrain::Dirt, Terrain::Floor, Terrain::Wall] {
-            assert!(marks.iter().all(|&mark| {
-                (-3..=3)
-                    .all(|y| (-3..=3).all(|x| mark_color(mark, terrain, (mark.pos.0 + x, mark.pos.1 + y)).is_none()))
-            }));
+        // A lone pond becomes a rounded blob: its center is water and its corners are meadow.
+        let pond = |x: i64, y: i64| Spot {
+            terrain: if (x, y) == (0, 0) { Terrain::Water } else { Terrain::Grass },
+            style: Style::Moss,
+            tint: None,
+        };
+        assert_eq!(terrain_at(7, (16, 16), false, &pond), Terrain::Water);
+        for corner in [(0, 0), (31, 0), (0, 31), (31, 31)] {
+            assert_eq!(terrain_at(7, corner, false, &pond), Terrain::Grass, "{corner:?}");
         }
-        for terrain in [Terrain::Grass, Terrain::Sand, Terrain::Rock] {
-            let painted = marks
-                .iter()
-                .map(|&mark| {
-                    (-3..=3)
-                        .map(|y| {
-                            (-3..=3)
-                                .filter(|&x| mark_color(mark, terrain, (mark.pos.0 + x, mark.pos.1 + y)).is_some())
-                                .count()
-                        })
-                        .sum::<usize>()
-                })
-                .sum::<usize>();
-            assert!(painted > 100 && painted < 512 * 512 / 20, "{terrain:?}: {painted}");
-        }
-        let counts: Vec<_> = (-4..4).map(|x| ground_marks(7, (x * 64, 0), 64).len()).collect();
-        assert!(counts.iter().max().unwrap() - counts.iter().min().unwrap() >= 3);
-    }
-
-    #[test]
-    fn pure_fields_and_masonry_match_world_sampling_across_negative_and_positive_edges() {
-        let cache = ArtCache::new(7);
-        for terrain in [Terrain::Grass, Terrain::Sand, Terrain::Rock, Terrain::Floor, Terrain::Wall] {
-            let world = |_: i32, _: i32| terrain;
-            for pos in [(-1, -1), (0, 0), (1, 0)] {
-                let image = cache.native(Source::Ground(world_cell(&world, pos)));
-                for y in 0..32 {
-                    for x in 0..32 {
-                        let p = (i64::from(pos.0) * 32 + x, i64::from(pos.1) * 32 + y);
-                        assert_eq!(
-                            image.get_pixel(x as u32, y as u32).0,
-                            sample_world(&world, &cache, p),
-                            "{terrain:?} {p:?}"
-                        );
-                    }
-                }
-            }
+        let wet = (0..32)
+            .flat_map(|y| (0..32).map(move |x| (x, y)))
+            .filter(|&p| terrain_at(7, p, false, &pond) == Terrain::Water);
+        let wet = wet.count();
+        assert!(wet > 200 && wet < 700, "{wet}");
+        // A straight coast stays near the cell edge.
+        let coast = |x: i64, _: i64| Spot {
+            terrain: if x < 0 { Terrain::Water } else { Terrain::Grass },
+            style: Style::Moss,
+            tint: None,
+        };
+        for y in -64..64 {
+            assert_eq!(terrain_at(7, (-12, y), false, &coast), Terrain::Water);
+            assert_eq!(terrain_at(7, (11, y), false, &coast), Terrain::Grass);
         }
     }
 
@@ -1122,11 +1203,41 @@ mod tests {
         assert_eq!(a, ArtCache::new(7).native(Source::Ground(world_cell(&grass, (0, 0)))), "deterministic");
     }
 
+    fn average(image: &RgbaImage) -> [u32; 3] {
+        let n = image.pixels().count() as u32;
+        [0, 1, 2].map(|i| image.pixels().map(|p| u32::from(p[i])).sum::<u32>() / n)
+    }
+
+    #[test]
+    fn looks_follow_the_biome_and_blend_across_borders() {
+        let cache = ArtCache::new(7);
+        let field = |style: Style| move |_: i32, _: i32| (Terrain::Grass, style);
+        let moss = average(&cache.native(Source::Ground(styled_cell(&field(Style::Moss), (0, 0)))));
+        let fable = average(&cache.native(Source::Ground(styled_cell(&field(Style::Fable), (0, 0)))));
+        let hearth = average(&cache.native(Source::Ground(styled_cell(&field(Style::Hearth), (0, 0)))));
+        assert!(fable[0] > moss[0] + 20 && hearth[2] > moss[2], "{moss:?} {fable:?} {hearth:?}");
+        // Halfway across a border between two looks, the color lies between them.
+        let border = |x: i32, _: i32| (Terrain::Grass, if x < 0 { Style::Moss } else { Style::Fable });
+        let spots = spots(&border);
+        let red = |x: i64| {
+            (0..64)
+                .map(|y| {
+                    u32::from(
+                        ground_pixel(7, Mood::default(), (x, y), &spots, &|p| terrain_at(7, p, false, &spots), &[])[0],
+                    )
+                })
+                .sum::<u32>()
+                / 64
+        };
+        let (west, edge, east) = (red(-40), red(0), red(40));
+        assert!(west < edge && edge < east, "{west} {edge} {east}");
+    }
+
     #[test]
     fn mirrored_objects_flip_left_to_right() {
         let cache = ArtCache::new(1);
-        let plain = cache.native(Source::Object { object: Object::Pine, mirrored: false });
-        let flipped = cache.native(Source::Object { object: Object::Pine, mirrored: true });
+        let plain = cache.native(Source::Object { object: Object::Pine, mirrored: false, style: Style::Moss });
+        let flipped = cache.native(Source::Object { object: Object::Pine, mirrored: true, style: Style::Moss });
         assert_eq!(image::imageops::flip_horizontal(&plain), flipped);
         let mirrored = (0..400).filter(|&x| terrain_art(Tile::Tree, &BIOMES[0], false, (x, 3)).mirrored).count();
         assert!(mirrored > 100 && mirrored < 300, "about half of trees are mirrored: {mirrored}");
@@ -1160,12 +1271,12 @@ mod tests {
     #[ignore]
     fn ground_render_cost() {
         use std::time::Instant;
-        type World = fn(i32, i32) -> Terrain;
+        type World = fn(i32, i32) -> (Terrain, Style);
         let worlds: [(&str, World, Mood); 4] = [
-            ("mixed", mixed_world, Mood::default()),
-            ("grass", |_, _| Terrain::Grass, Mood::default()),
-            ("mist", |_, _| Terrain::Grass, Mood::Surface(mood::Sky { clear: 0, mist: 8 })),
-            ("basalt", |_, _| Terrain::Floor, Mood::Deep(Stone::Basalt, Stone::Basalt)),
+            ("mixed", mixed_styled, Mood::default()),
+            ("grass", |_, _| (Terrain::Grass, Style::Moss), Mood::default()),
+            ("mist", |_, _| (Terrain::Grass, Style::Hearth), Mood::Surface(mood::Sky { clear: 0, mist: 8 })),
+            ("basalt", cave, Mood::Deep(Stone::Basalt, Stone::Slate)),
         ];
         for (name, world, mood) in worlds {
             let start = Instant::now();
@@ -1176,7 +1287,7 @@ mod tests {
             let draw = |cache: &mut ArtCache, offset, frame| {
                 for y in -radius..=radius {
                     for x in -radius..=radius {
-                        let cell = world_cell(&world, (x + offset, y));
+                        let cell = styled_cell(&world, (x + offset, y));
                         std::hint::black_box(cache.ground(cell, false, false));
                         std::hint::black_box(cache.tufts(cell, frame, false, false));
                         std::hint::black_box(cache.heat(cell, false));
@@ -1217,7 +1328,6 @@ mod tests {
     #[ignore]
     fn hero_contact_sheet() {
         use crate::hero::Calling;
-        use isle_core::{Armor, Bow, Weapon};
         let rows = [
             (Calling::Wanderer, [140, 104, 66], Weapon::ShortSword),
             (Calling::Warrior, [164, 48, 44], Weapon::LongSword),
@@ -1239,16 +1349,16 @@ mod tests {
         let sky = |clear, mist| Mood::Surface(mood::Sky { clear, mist });
         let deep = |stone| Mood::Deep(stone, stone);
         let grounds = [
-            (Terrain::Grass, sky(0, 0)),
-            (Terrain::Grass, sky(8, 0)),
-            (Terrain::Grass, sky(0, 8)),
-            (Terrain::Sand, sky(0, 0)),
-            (Terrain::Dirt, sky(0, 0)),
-            (Terrain::Rock, sky(0, 0)),
-            (Terrain::Water, sky(0, 0)),
-            (Terrain::Floor, deep(Stone::Limestone)),
-            (Terrain::Floor, deep(Stone::Slate)),
-            (Terrain::Floor, deep(Stone::Basalt)),
+            (Terrain::Grass, Style::Moss, sky(0, 0)),
+            (Terrain::Grass, Style::Fable, sky(8, 0)),
+            (Terrain::Grass, Style::Hearth, sky(0, 8)),
+            (Terrain::Sand, Style::Fable, sky(0, 0)),
+            (Terrain::Dirt, Style::Moss, sky(0, 0)),
+            (Terrain::Snow, Style::Hearth, sky(0, 0)),
+            (Terrain::Water, Style::Moss, sky(0, 0)),
+            (Terrain::Floor, Style::Moss, deep(Stone::Limestone)),
+            (Terrain::Floor, Style::Moss, deep(Stone::Slate)),
+            (Terrain::Floor, Style::Moss, deep(Stone::Basalt)),
         ];
         let cache = ArtCache::new(7);
         let columns = gear.len() + grounds.len();
@@ -1256,9 +1366,9 @@ mod tests {
         for (r, &(calling, accent, weapon)) in rows.iter().enumerate() {
             for c in 0..columns {
                 let (armor, bow, ring, trim) = gear[if c < gear.len() { c } else { r % gear.len() }];
-                let (terrain, mood) = grounds[c.saturating_sub(gear.len())];
-                let world = move |_: i32, _: i32| terrain;
-                let ground = world_cell(&world, (c as i32 * 3, r as i32 * 3));
+                let (terrain, style, mood) = grounds[c.saturating_sub(gear.len())];
+                let world = move |_: i32, _: i32| (terrain, style);
+                let ground = styled_cell(&world, (c as i32 * 3, r as i32 * 3));
                 let mut cell = cache.native_in(Source::Ground(ground), mood);
                 if mood.wind() > 0 {
                     let tufts = Source::Tufts { cell: ground, frame: 0, wind: mood.wind() };
@@ -1271,110 +1381,174 @@ mod tests {
                 image::imageops::replace(&mut out, &big, (c * 128) as i64, (r * 128) as i64);
             }
         }
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/isle-world-art/hero-contact.png");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        out.save(&path).unwrap();
+        save(&out, "hero-contact.png");
     }
 
-    /// Writes target/isle-world-art/noise-contact.png from the real renderer:
+    fn save(image: &RgbaImage, name: &str) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/isle-world-art").join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        image.save(&path).unwrap();
+        eprintln!("{}", path.display());
+    }
+
+    /// Paint a scene of `w`×`h` cells under `mood`, with tufts, heat, and `objects` on top.
+    fn scene(
+        cache: &ArtCache,
+        world: Styled,
+        mood: Mood,
+        (w, h): (i32, i32),
+        objects: &dyn Fn(i32, i32) -> Option<Object>,
+    ) -> RgbaImage {
+        let mut out = RgbaImage::new((w * 64) as u32, (h * 64) as u32);
+        for cy in 0..h {
+            for cx in 0..w {
+                let cell = styled_cell(world, (cx, cy));
+                let mut image = cache.native_in(Source::Ground(cell), mood);
+                for layer in [Source::Tufts { cell, frame: 2, wind: mood.wind() }, Source::Heat(cell)] {
+                    if !matches!(layer, Source::Tufts { wind: 0, .. }) {
+                        image::imageops::overlay(&mut image, &cache.native_in(layer, mood), 0, 0);
+                    }
+                }
+                if let Some(object) = objects(cx, cy) {
+                    let mirrored = mix((cx, cy)) & 32 != 0;
+                    let source = Source::Object { object, mirrored, style: world(cx, cy).1 };
+                    image::imageops::overlay(&mut image, &cache.native_in(source, mood), 0, 0);
+                }
+                let big = image::imageops::resize(&image, 64, 64, image::imageops::FilterType::Nearest);
+                image::imageops::replace(&mut out, &big, i64::from(cx * 64), i64::from(cy * 64));
+            }
+        }
+        out
+    }
+
+    /// Three biomes side by side, left to right temperate, warm, and cold, with coast, a road, and a walled
+    /// yard in each.
+    fn contact_world(x: i32, y: i32) -> (Terrain, Style) {
+        use Terrain::{Dirt, Grass, Rock, Sand, Snow, Wall, Water};
+        let style = match x {
+            ..=9 => Style::Moss,
+            10..=19 => Style::Fable,
+            _ => Style::Hearth,
+        };
+        let shore = 13 + ((x as f32 / 3.0).sin() * 1.4).round() as i32;
+        let local = x.rem_euclid(10);
+        let terrain = if y > shore {
+            Water
+        } else if y == shore {
+            Sand
+        } else if (2..6).contains(&local) && (2..5).contains(&y) {
+            if (3..5).contains(&local) && y == 3 || (local, y) == (3, 4) { Dirt } else { Wall }
+        } else if y == 8 || local == 3 && (5..8).contains(&y) {
+            Dirt
+        } else if style == Style::Fable && (y < 3 || local >= 7 && y < 7) {
+            Sand
+        } else if style == Style::Hearth && (y < 2 || local >= 7 && y < 5) {
+            Snow
+        } else if (local == 8 && (9..11).contains(&y)) || (x, y) == (5, 11) || (x, y) == (26, 6) {
+            Rock
+        } else if (local, y) == (1, 11) {
+            Water
+        } else {
+            Grass
+        };
+        (terrain, style)
+    }
+
+    fn contact_objects(x: i32, y: i32) -> Option<Object> {
+        let local = x.rem_euclid(10);
+        let style = contact_world(x, y).1;
+        match (local, y) {
+            (6..=9, 10..=11) | (0..=1, 5..=6) | (7, 2) => Some(tree_at((x, y), style)),
+            (3, 4) => Some(Object::Door),
+            (3, 3) => Some(Object::Counter),
+            (4, 3) => Some(Object::Altar),
+            (5, 6) => Some(Object::Boulder),
+            (6, 8) => Some(Object::StairsDown),
+            (0, 8) => Some(Object::StairsUp),
+            (2, 10) => Some(ALL_OBJECTS[8 + (x / 10) as usize]),
+            (4, 10) => Some(ALL_OBJECTS[11 + (x / 10) as usize]),
+            (6, 12) => Some(ALL_OBJECTS[14 + (x / 10).min(1) as usize]),
+            _ => None,
+        }
+    }
+
+    /// Writes target/isle-world-art/paint-contact.png from the real renderer:
     /// `cargo test -p isle contact_sheet -- --ignored`.
     #[test]
     #[ignore]
     fn contact_sheet() {
-        let (w, h) = (26, 16);
-        let world = contact_world;
         let cache = ArtCache::new(7);
-        let scale = 2;
-        let mut out = RgbaImage::new((w * 32 * scale) as u32, (h * 32 * scale) as u32);
-        for cy in 0..h {
-            for cx in 0..w {
-                let mut cell = cache.native(Source::Ground(world_cell(&world, (cx, cy))));
-                let art = terrain_art(Tile::Grass, &BIOMES[0], false, (cx, cy));
-                let object = match (cx, cy) {
-                    (6..=9, 11..=12) | (13, 5) | (15, 6) => Some(tree_at((cx, cy))),
-                    (16, 11) => Some(Object::Boulder),
-                    (22, 5) => Some(Object::StairsDown),
-                    (8, 9) => Some(Object::Coins),
-                    _ => None,
-                };
-                if let Some(object) = object {
-                    let icon =
-                        cache.native(Source::Object { object, mirrored: art.mirrored || mix((cx, cy)) & 32 != 0 });
-                    image::imageops::overlay(&mut cell, &icon, 0, 0);
-                }
-                let big = image::imageops::resize(&cell, 64, 64, image::imageops::FilterType::Nearest);
-                image::imageops::replace(&mut out, &big, i64::from(cx * 64), i64::from(cy * 64));
-            }
-        }
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/isle-world-art/noise-contact.png");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        out.save(&path).unwrap();
-        eprintln!("{}", path.display());
+        let out = scene(&cache, &contact_world, Mood::default(), (30, 16), &contact_objects);
+        save(&out, "paint-contact.png");
     }
 
-    fn contact_world(x: i32, y: i32) -> Terrain {
-        use Terrain::{Dirt, Floor, Grass, Rock, Sand, Wall, Water};
-        let (fx, fy) = (x as f32 - 11.0, y as f32 - 8.0);
-        let island = (fx * fx) / 90.0 + (fy * fy) / 34.0;
-        if (20..25).contains(&x) && (3..12).contains(&y) {
-            return if (21..24).contains(&x) && (4..11).contains(&y) || (y == 7 && x == 20) { Floor } else { Wall };
+    /// Writes target/isle-world-art/mood-contact.png: one scene under each sky, then a Deep floor in each stone.
+    /// `cargo test -p isle mood_contact_sheet -- --ignored`.
+    #[test]
+    #[ignore]
+    fn mood_contact_sheet() {
+        use mood::Sky;
+        let cache = ArtCache::new(7);
+        let (w, h) = (16, 16);
+        let deep = |x: i32, y: i32| {
+            let room = (2..9).contains(&x) && (2..9).contains(&y) || (10..15).contains(&x) && (4..14).contains(&y);
+            let open = room || y == 6 && (8..11).contains(&x);
+            let t = if (x, y) == (12, 10) || (x, y) == (13, 10) {
+                Terrain::Water
+            } else if open {
+                Terrain::Floor
+            } else {
+                Terrain::Wall
+            };
+            (t, Style::Moss)
+        };
+        let deep_objects = |x: i32, y: i32| match (x, y) {
+            (3, 3) => Some(Object::StairsUp),
+            (12, 12) => Some(Object::StairsDown),
+            (6, 6) | (11, 6) => Some(Object::Boulder),
+            (7, 3) => Some(Object::Altar),
+            _ => None,
+        };
+        let skies = [Sky::default(), Sky { clear: 8, mist: 0 }, Sky { clear: 0, mist: 8 }];
+        let stones = [Stone::Limestone, Stone::Slate, Stone::Basalt];
+        let mut out = RgbaImage::new((3 * w * 64) as u32, (2 * h * 64) as u32);
+        for (i, sky) in skies.into_iter().enumerate() {
+            let shifted = |x: i32, y: i32| contact_world(x + 4 + 10 * i as i32, y);
+            let objects = |x: i32, y: i32| contact_objects(x + 4 + 10 * i as i32, y);
+            let panel = scene(&cache, &shifted, Mood::Surface(sky), (w, h), &objects);
+            image::imageops::replace(&mut out, &panel, i64::from(i as i32 * w * 64), 0);
         }
-        if x >= 19 {
-            return Water;
+        for (i, stone) in stones.into_iter().enumerate() {
+            let panel = scene(&cache, &deep, Mood::Deep(stone, stone), (w, h), &deep_objects);
+            image::imageops::replace(&mut out, &panel, i64::from(i as i32 * w * 64), i64::from(h * 64));
         }
-        if island > 1.0 {
-            Water
-        } else if island > 0.72 {
-            Sand
-        } else if (fx + 4.0).powi(2) + (fy + 2.0).powi(2) < 7.0 || (x, y) == (14, 10) {
-            Rock
-        } else if y == 9 && (3..17).contains(&x) || x == 12 && (4..9).contains(&y) {
-            Dirt
-        } else {
-            Grass
-        }
-    }
-
-    /// The world-wide tuft layer at pixel `p`, found without any cell: transparent where no tuft reaches.
-    fn sample_tufts(world: &dyn Fn(i32, i32) -> Terrain, cache: &ArtCache, p: (i64, i64), frame: u8) -> [u8; 4] {
-        let q = ground_point(cache.seed, p, |x, y| world(x as i32, y as i32));
-        let source = (q.0.div_euclid(32) as i32, q.1.div_euclid(32) as i32);
-        let around = [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| world(source.0 + dx, source.1 + dy)));
-        let local = (q.0.rem_euclid(32) as usize, q.1.rem_euclid(32) as usize);
-        if ground_quarters(around)[(local.1 / 16) * 2 + local.0 / 16].pure() != Some(Terrain::Grass) {
-            return [0; 4];
-        }
-        let mut pixel = [0; 4];
-        for mark in ground_marks(cache.seed, p, 1) {
-            if let Some([r, g, b]) = tuft_color(mark, p, sway(cache.seed, mark, frame, 10)) {
-                pixel = ground_color(cache.seed, Some(Terrain::Grass), p, [r, g, b, 255]);
-            }
-        }
-        pixel
+        save(&out, "mood-contact.png");
     }
 
     #[test]
     fn tufts_sway_in_the_wind_stay_on_grass_and_agree_across_cell_edges() {
         let cache = ArtCache::new(7);
-        let tufts = |world: &dyn Fn(i32, i32) -> Terrain, pos, frame, wind| {
-            cache.native(Source::Tufts { cell: world_cell(world, pos), frame, wind })
+        let tufts = |world: Styled, pos, frame, wind| {
+            cache.native(Source::Tufts { cell: styled_cell(world, pos), frame, wind })
         };
-        let grass = |_: i32, _: i32| Terrain::Grass;
+        let grass = |_: i32, _: i32| (Terrain::Grass, Style::Moss);
         let windy: Vec<_> = (0..FRAMES).map(|f| tufts(&grass, (0, 0), f, 10)).collect();
         assert!(windy.iter().any(|f| *f != windy[0]), "wind moves the blades");
         assert!(windy.iter().all(|f| f.pixels().filter(|p| p[3] != 0).count() > 0));
         assert!((0..FRAMES).all(|f| tufts(&grass, (0, 0), f, 0) == tufts(&grass, (0, 0), 0, 0)), "still air");
-        let world: &dyn Fn(i32, i32) -> Terrain = &mixed_world;
         for frame in [0, 3] {
             for cy in -1..2 {
                 for cx in -1..2 {
-                    let image = tufts(world, (cx, cy), frame, 10);
+                    let image = tufts(&mixed_styled, (cx, cy), frame, 10);
                     for y in 0..32 {
                         for x in 0..32 {
                             let p = (i64::from(cx) * 32 + x, i64::from(cy) * 32 + y);
-                            assert_eq!(image.get_pixel(x as u32, y as u32).0, sample_tufts(world, &cache, p, frame));
+                            let expected = sample_tufts(&mixed_styled, 7, Mood::default(), p, frame);
+                            assert_eq!(image.get_pixel(x as u32, y as u32).0, expected, "{p:?}");
+                            if expected[3] != 0 {
+                                let spots = spots(&mixed_styled);
+                                assert_eq!(terrain_at(7, p, false, &spots), Terrain::Grass);
+                            }
                         }
                     }
                 }
@@ -1418,11 +1592,33 @@ mod tests {
             }
         }
         assert!(hot > 3 && hot < 140, "seams cross some cells, not all: {hot}");
+        let slate = Mood::Deep(Stone::Slate, Stone::Limestone);
         let mut cache = ArtCache::new(7);
-        cache.mood = Mood::Deep(Stone::Slate, Stone::Limestone);
+        cache.mood = slate;
         assert!(cache.heat(world_cell(&floor, (0, 0)), false).is_none());
         let wall = world_cell(&|_, _| Terrain::Wall, (0, 0));
         assert!(cache.native_in(Source::Heat(wall), basalt).pixels().all(|p| p[3] == 0));
+        let slate_floor = cache.native_in(Source::Ground(world_cell(&floor, (0, 0))), slate);
+        assert!(slate_floor.pixels().all(|p| p.0[..3] != mood::EMBER));
+    }
+
+    #[test]
+    fn the_deep_paints_in_its_stone() {
+        let cache = ArtCache::new(7);
+        let floor = world_cell(&|_, _| Terrain::Floor, (0, 0));
+        let looks: Vec<[u32; 3]> = [Stone::Limestone, Stone::Slate, Stone::Basalt]
+            .into_iter()
+            .map(|s| average(&cache.native_in(Source::Ground(floor), Mood::Deep(s, s))))
+            .collect();
+        let [lime, slate, basalt] = [looks[0], looks[1], looks[2]];
+        assert!(lime.iter().sum::<u32>() > basalt.iter().sum::<u32>() + 60, "{lime:?} {basalt:?}");
+        assert!(slate[2] > slate[0], "slate is blue: {slate:?}");
+        // Known walls stay brighter than the black of unknown cells.
+        let wall = cache.native_in(
+            Source::Ground(world_cell(&|_, _| Terrain::Wall, (0, 0))),
+            Mood::Deep(Stone::Basalt, Stone::Basalt),
+        );
+        assert!(wall.pixels().all(|p| p[0] > 20 || p[1] > 20 || p[2] > 20));
     }
 
     #[test]
@@ -1436,53 +1632,6 @@ mod tests {
         assert!(Arc::ptr_eq(&coins, &cache.item(Object::Coins)));
         let misty = cache.native_in(Source::Ground(cell), cache.mood);
         assert_ne!(misty, cache.native(Source::Ground(cell)));
-    }
-
-    /// Writes target/isle-world-art/mood-contact.png: one scene under each sky, then a Deep floor in each stone.
-    /// `cargo test -p isle mood_contact_sheet -- --ignored`.
-    #[test]
-    #[ignore]
-    fn mood_contact_sheet() {
-        use mood::Sky;
-        let cache = ArtCache::new(7);
-        let (w, h) = (19, 16);
-        let deep = |x: i32, y: i32| {
-            let room = (2..9).contains(&x) && (2..9).contains(&y) || (11..17).contains(&x) && (4..14).contains(&y);
-            if room || y == 6 && (8..12).contains(&x) { Terrain::Floor } else { Terrain::Wall }
-        };
-        let skies = [Sky::default(), Sky { clear: 8, mist: 0 }, Sky { clear: 0, mist: 8 }];
-        let stones = [Stone::Limestone, Stone::Slate, Stone::Basalt];
-        type Panel<'a> = (Mood, &'a dyn Fn(i32, i32) -> Terrain);
-        let panels: Vec<Panel> = skies
-            .iter()
-            .map(|&s| (Mood::Surface(s), &contact_world as &dyn Fn(i32, i32) -> Terrain))
-            .chain(stones.iter().map(|&s| (Mood::Deep(s, s), &deep as &dyn Fn(i32, i32) -> Terrain)))
-            .collect();
-        let mut out = RgbaImage::new((3 * w * 64) as u32, (2 * h * 64) as u32);
-        for (i, (mood, world)) in panels.into_iter().enumerate() {
-            for cy in 0..h {
-                for cx in 0..w {
-                    let cell = world_cell(world, (cx, cy));
-                    let mut image = cache.native_in(Source::Ground(cell), mood);
-                    for layer in [Source::Tufts { cell, frame: 2, wind: mood.wind() }, Source::Heat(cell)] {
-                        if !matches!(layer, Source::Tufts { wind: 0, .. }) {
-                            image::imageops::overlay(&mut image, &cache.native_in(layer, mood), 0, 0);
-                        }
-                    }
-                    if matches!(mood, Mood::Surface(_)) && matches!((cx, cy), (6..=9, 11..=12) | (13, 5) | (15, 6)) {
-                        let tree = Source::Object { object: tree_at((cx, cy)), mirrored: mix((cx, cy)) & 32 != 0 };
-                        image::imageops::overlay(&mut image, &cache.native_in(tree, mood), 0, 0);
-                    }
-                    let big = image::imageops::resize(&image, 64, 64, image::imageops::FilterType::Nearest);
-                    let (px, py) = ((i as i32 % 3) * w + cx, (i as i32 / 3) * h + cy);
-                    image::imageops::replace(&mut out, &big, i64::from(px * 64), i64::from(py * 64));
-                }
-            }
-        }
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/isle-world-art/mood-contact.png");
-        out.save(&path).unwrap();
-        eprintln!("{}", path.display());
     }
 
     #[test]
@@ -1534,34 +1683,48 @@ mod tests {
     }
 
     #[test]
-    fn terrain_selection_uses_biome_properties() {
-        let water = BIOMES.iter().find(|b| b.water).unwrap();
-        let cold = BIOMES.iter().find(|b| !b.water && b.passable && b.temperature.max <= 0.40).unwrap();
-        let fertile = BIOMES
-            .iter()
-            .find(|b| !b.water && b.passable && b.temperature.max > 0.40 && b.productivity >= 0.45)
-            .unwrap();
-        let dry = BIOMES
-            .iter()
-            .find(|b| !b.water && b.passable && b.temperature.max > 0.40 && b.productivity < 0.45)
-            .unwrap();
+    fn ground_and_look_follow_biome_traits() {
+        use Style::{Fable, Hearth, Moss};
+        use Terrain::{Grass, Rock, Sand, Snow, Water};
+        let expected = [
+            ("Deep water", Water, Moss),
+            ("Shallow water", Water, Moss),
+            ("Snow peaks", Snow, Hearth),
+            ("Mountains", Rock, Hearth),
+            ("Badlands", Rock, Fable),
+            ("Hills", Grass, Hearth),
+            ("Tundra", Snow, Hearth),
+            ("Beach", Sand, Moss),
+            ("Taiga", Grass, Hearth),
+            ("Swamp", Grass, Hearth),
+            ("Desert", Sand, Fable),
+            ("Savanna", Grass, Fable),
+            ("Jungle", Grass, Fable),
+            ("Forest", Grass, Moss),
+            ("Grassland", Grass, Moss),
+        ];
+        assert_eq!(expected.len(), BIOMES.len());
+        for (name, ground, style) in expected {
+            let biome = BIOMES.iter().find(|b| b.name == name).unwrap();
+            let art = terrain_art(Tile::Wild(BiomeId(0)), biome, false, (3, 4));
+            assert_eq!((art.ground, art.style), (ground, style), "{name}");
+        }
+        let fertile = BIOMES.iter().find(|b| b.name == "Forest").unwrap();
         let at = (3, 4);
-        assert_eq!(terrain_art(Tile::Wild(BiomeId(0)), water, false, at).ground, Terrain::Water);
-        assert_eq!(terrain_art(Tile::Wild(BiomeId(0)), cold, false, at).ground, Terrain::Rock);
-        assert_eq!(terrain_art(Tile::Wild(BiomeId(0)), fertile, false, at).ground, Terrain::Grass);
-        assert_eq!(terrain_art(Tile::Wild(BiomeId(0)), dry, false, at).ground, Terrain::Sand);
         let boulder = terrain_art(Tile::Rock, fertile, false, at);
         assert_eq!((boulder.ground, boulder.object), (Terrain::Grass, Some(Object::Boulder)));
         let tree = terrain_art(Tile::Tree, fertile, false, at);
         assert!(matches!(tree.object, Some(Object::Pine | Object::Oak)));
         assert_eq!(tree.ground, Terrain::Grass);
         assert_eq!(terrain_art(Tile::Floor, fertile, false, at).ground, Terrain::Dirt);
+        assert_eq!(terrain_art(Tile::Wall, fertile, false, at).ground, Terrain::Wall);
         let deep_floor = terrain_art(Tile::Floor, &isle_core::DEEP, true, at);
         assert_eq!((deep_floor.ground, deep_floor.tint), (Terrain::Floor, None));
         let stairs = terrain_art(Tile::StairsDown, &isle_core::DEEP, true, at);
         assert_eq!((stairs.ground, stairs.object), (Terrain::Floor, Some(Object::StairsDown)));
-        let woods: HashSet<_> = (0..64).map(|x| tree_at((x, 7))).collect();
-        assert_eq!(woods.len(), 2, "woods mix both tree shapes");
+        let pines = |style| (0..400).filter(|&x| tree_at((x, 7), style) == Object::Pine).count();
+        assert!(pines(Style::Hearth) > 300 && pines(Style::Fable) < 100, "conifers in the cold");
+        assert!((100..300).contains(&pines(Style::Moss)), "temperate woods mix both");
     }
 
     #[test]
