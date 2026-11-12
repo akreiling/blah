@@ -18,7 +18,7 @@ pub enum Tile {
     Floor,
     /// Open grass.
     Grass,
-    /// A tree: passable, but it blocks sight.
+    /// A tree: passable, and it thins sight by [`TREE_SIGHT`] cells rather than ending it.
     Tree,
     /// Water too deep to wade.
     Water,
@@ -50,8 +50,71 @@ impl Tile {
 
     /// Whether this cell hides what lies beyond it.
     pub const fn opaque(self) -> bool {
-        matches!(self, Tile::Wall | Tile::Tree | Tile::Rock)
+        matches!(self, Tile::Wall | Tile::Rock)
     }
+}
+
+/// Cells of sight each tree between a viewer and its target costs, so woods thin sight rather than end it.
+pub const TREE_SIGHT: i32 = 3;
+
+/// Whether `to` lies within a round `radius` of `from`: inside the circle of radius `radius + ½`, so sight
+/// reaches as far along a diagonal as along an axis instead of filling a square.
+fn within(from: Pos, to: Pos, radius: i32) -> bool {
+    let (dx, dy) = (i64::from(from.0 - to.0), i64::from(from.1 - to.1));
+    let r = i64::from(radius);
+    r >= 0 && dx * dx + dy * dy <= r * r + r
+}
+
+/// Sub-cell units per cell along a sight ray.
+const RAY: i64 = 8;
+/// Where sight rays aim inside a cell, in sub-cell units: its center, then four points toward its corners, so
+/// a target half behind a trunk can still be glimpsed past it.
+const AIMS: [(i64, i64); 5] = [(4, 4), (2, 2), (6, 2), (2, 6), (6, 6)];
+
+/// Whether `from` sees `to` within a round `radius` (see [`within`]) over the cells `tile` gives. Rays run from the center of
+/// each end to the aim points of the other; the target is seen if any ray crosses no wall or rock, and if the
+/// target stays within `radius` less [`TREE_SIGHT`] for each tree that ray crosses. The cells at either end
+/// never count. Both ends cast the same rays, so sight is mutual.
+fn sight(from: Pos, to: Pos, radius: i32, tile: impl Fn(Pos) -> Tile) -> bool {
+    if !within(from, to, radius) {
+        return false;
+    }
+    if distance(from, to) <= 1 {
+        return true;
+    }
+    let trees = (1..).take_while(|&k| within(from, to, radius - k * TREE_SIGHT)).count();
+    // Rays stay inside the box spanned by both cells, so each tile there is looked up at most once.
+    let (x0, y0) = (from.0.min(to.0), from.1.min(to.1));
+    let width = (from.0 - to.0).unsigned_abs() as usize + 1;
+    let mut seen: Vec<Option<Tile>> = vec![None; width * ((from.1 - to.1).unsigned_abs() as usize + 1)];
+    let mut at = |p: Pos| *seen[(p.1 - y0) as usize * width + (p.0 - x0) as usize].get_or_insert_with(|| tile(p));
+    let mut clear = |a: Pos, b: Pos, aim: (i64, i64)| {
+        let start = (i64::from(a.0) * RAY + RAY / 2, i64::from(a.1) * RAY + RAY / 2);
+        let end = (i64::from(b.0) * RAY + aim.0, i64::from(b.1) * RAY + aim.1);
+        let (dx, dy) = (end.0 - start.0, end.1 - start.1);
+        let steps = dx.abs().max(dy.abs());
+        let (mut last, mut crossed) = (a, 0);
+        for i in 1..steps {
+            let cell =
+                ((start.0 + dx * i / steps).div_euclid(RAY) as i32, (start.1 + dy * i / steps).div_euclid(RAY) as i32);
+            if cell == last || cell == a || cell == b {
+                continue;
+            }
+            last = cell;
+            match at(cell) {
+                t if t.opaque() => return false,
+                Tile::Tree => {
+                    crossed += 1;
+                    if crossed > trees {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+        true
+    };
+    AIMS.iter().any(|&aim| clear(from, to, aim) || clear(to, from, aim))
 }
 
 /// Which map a thing is on.
@@ -250,10 +313,10 @@ impl Place {
         }
     }
 
-    /// Whether `from` can see `to` within `radius` cells.
+    /// Whether `from` can see `to` within `radius` cells. See [`sight`]: walls and rocks block a ray, and
+    /// each tree it crosses costs [`TREE_SIGHT`] cells of the radius.
     pub fn sees(&self, from: Pos, to: Pos, radius: i32) -> bool {
-        distance(from, to) <= radius
-            && line(from, to).iter().skip(1).take_while(|&&p| p != to).all(|&p| !self.tile(p).opaque())
+        sight(from, to, radius, |p| self.tile(p))
     }
 }
 /// Steps between two cells when diagonal steps count as one.
@@ -292,6 +355,98 @@ mod tests {
         assert_eq!(line((0, 0), (3, 1)), vec![(0, 0), (1, 0), (2, 1), (3, 1)]);
         assert_eq!(line((2, 2), (2, 2)), vec![(2, 2)]);
         assert_eq!(distance((0, 0), (3, -5)), 5);
+    }
+
+    fn field(blocks: &[(Pos, Tile)]) -> impl Fn(Pos) -> Tile + '_ {
+        |p| blocks.iter().find(|(at, _)| *at == p).map_or(Tile::Grass, |&(_, t)| t)
+    }
+
+    #[test]
+    fn trees_thin_sight_while_walls_and_rocks_end_it() {
+        let open = field(&[]);
+        assert!(sight((0, 0), (8, 2), 8, &open) && !sight((0, 0), (9, 0), 8, &open));
+        // Round, not square: the corners of the old square are out of reach.
+        assert!(
+            sight((0, 0), (6, 5), 8, &open) && !sight((0, 0), (7, 6), 8, &open) && !sight((0, 0), (8, 8), 8, &open)
+        );
+        let tree = field(&[((1, 0), Tile::Tree)]);
+        assert!(sight((0, 0), (5, 0), 8, &tree), "past one tree, five cells away");
+        assert!(!sight((0, 0), (6, 0), 8, &tree));
+        let two = field(&[((1, 0), Tile::Tree), ((3, 0), Tile::Tree)]);
+        assert!(sight((0, 0), (2, 0), 8, &two) && !sight((0, 0), (4, 0), 8, &two));
+        for wall in [Tile::Wall, Tile::Rock] {
+            assert!(!sight((0, 0), (3, 0), 8, field(&[((1, 0), wall)])));
+        }
+        // You see the tree beside you, and a creature standing in a tree.
+        assert!(sight((0, 0), (1, 0), 8, &tree) && sight((0, 0), (1, 0), 1, &tree));
+        assert!(sight((-2, 0), (1, 0), 8, &tree));
+    }
+
+    #[test]
+    fn rays_glimpse_past_the_edge_of_a_trunk_but_not_a_wall_face() {
+        // Bresenham's one line from (0,0) to (6,1) runs through (2,0); other rays pass beside it.
+        assert!(line((0, 0), (6, 1)).contains(&(2, 0)));
+        assert!(sight((0, 0), (6, 1), 6, field(&[((2, 0), Tile::Tree)])), "a free ray costs nothing");
+        let face: Vec<_> = (-3..=3).map(|y| ((2, y), Tile::Wall)).collect();
+        assert!(!sight((0, 0), (6, 1), 8, field(&face)));
+    }
+
+    #[test]
+    fn sight_is_mutual_and_never_reaches_past_the_radius() {
+        let mut rng = Rng::keyed(7, b"sighttst", &[]);
+        for _ in 0..300 {
+            let blocks: Vec<(Pos, Tile)> = (0..14)
+                .map(|_| {
+                    let at = ((rng.unit() * 11.0) as i32 - 5, (rng.unit() * 11.0) as i32 - 5);
+                    (at, if rng.unit() < 0.7 { Tile::Tree } else { Tile::Wall })
+                })
+                .collect();
+            let tiles = field(&blocks);
+            let a = ((rng.unit() * 11.0) as i32 - 5, (rng.unit() * 11.0) as i32 - 5);
+            let b = ((rng.unit() * 11.0) as i32 - 5, (rng.unit() * 11.0) as i32 - 5);
+            assert_eq!(sight(a, b, 8, &tiles), sight(b, a, 8, &tiles), "{a:?} {b:?} {blocks:?}");
+            assert!(!sight(a, b, distance(a, b) - 1, &tiles));
+        }
+    }
+
+    #[test]
+    fn trees_on_the_real_surface_cost_sight() {
+        let game = crate::Game::new(7);
+        let level = game.level();
+        let me = game.player().pos;
+        let checked = (me.1 - 40..me.1 + 40)
+            .flat_map(|y| (me.0 - 40..me.0 + 40).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                level.tile((x, y)) == Tile::Tree
+                    && (-1..=6).all(|k| k == 0 || matches!(level.tile((x + k, y)), Tile::Wild(_) | Tile::Grass))
+                    && (-1..=6).all(|k| {
+                        [-1, 1].iter().all(|&dy| !matches!(level.tile((x + k, y + dy)), Tile::Wall | Tile::Rock))
+                    })
+            })
+            .inspect(|&(x, y)| {
+                assert!(level.sees((x - 1, y), (x + 4, y), 8), "{x},{y}");
+                assert!(!level.sees((x - 1, y), (x + 5, y), 8), "{x},{y}");
+            })
+            .count();
+        assert!(checked > 0, "seed 7 has open trees near the start");
+    }
+
+    /// Time one frame's sight in thick forest: every cell of the view and the ring around it.
+    /// `cargo test -p isle-core sight_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn sight_cost() {
+        let game = crate::Game::new(7);
+        let level = game.level();
+        let reach = crate::SIGHT + 2;
+        for me in [(-96, 359), (94, 39), game.player().pos] {
+            let start = std::time::Instant::now();
+            let seen = (-reach..=reach)
+                .flat_map(|dy| (-reach..=reach).map(move |dx| (me.0 + dx, me.1 + dy)))
+                .filter(|&p| level.sees(me, p, crate::SIGHT))
+                .count();
+            eprintln!("{me:?}: {seen} seen, {:?}", start.elapsed());
+        }
     }
 
     #[test]
