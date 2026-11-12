@@ -4,6 +4,7 @@
 //! The core is pure and deterministic. A seed and the same commands give the same island, and the whole
 //! [`Game`] serializes, dice included, so a saved game resumes exactly. The window supplies the clock.
 
+mod cinder;
 mod command;
 mod data;
 mod deep;
@@ -20,6 +21,7 @@ mod wildlife;
 #[cfg(test)]
 mod tests;
 
+pub use cinder::{CinderWatch, WatchPhase};
 pub use command::{Command, Dir, HELP, Instant, MAX_STEPS, Parsed, Target, parse};
 pub use data::{Armor, Bow, Item, Kind, SHOP, Spell, Stats, Weapon, sale_price};
 pub use deep::Deep;

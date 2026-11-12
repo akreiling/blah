@@ -41,6 +41,13 @@ hunter's token. Like other loot, they disappear outside current sight and mixed 
 Preview them with `mise exec -- cargo test -p isle relic_contact_sheet -- --ignored`
 (`target/isle-world-art/relic-contact.png`).
 
+Cinder Watch has a ruined tower with a burning window that goes cold after victory, plus distinct plated
+warden and bow-carrying sentry sprites. Target letters remain above the guards. The tower stays remembered,
+with an `!` warning badge before victory and `?` until its coffer is opened.
+Preview all four sprites on grass, sand, and snow with
+`mise exec -- cargo test -p isle cinder_contact_sheet -- --ignored`
+(`target/isle-world-art/cinder-contact.png`).
+
 The renderer uses only known terrain within two cells (looks within one), substituting the center's ground,
 tint, and look for unknown cells. Cached ground images are per position and neighborhood, evicted when
 unused, and rebuilt at display-scale changes. Preview three biomes with coasts, roads, walled yards,

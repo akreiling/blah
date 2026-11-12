@@ -141,6 +141,24 @@ Every shrine cache also holds a relic; cairns and camps have a one-in-four chanc
 Opening is permanent: waiting, leaving, dying, and reloading never refill it. A full sack leaves
 the remaining contents on the ground, where you can return for them. The site itself remains.
 
+### Cinder Watch
+
+The starting town gives a direction and distance to Cinder Watch, a ruined wilderness tower. Its seeded
+site needs a dry, reachable clearing outside towns; islands without a suitable nearby clearing have no
+Watch. Discovering it reveals a warning, not an ambush. Stand on the tower and use `challenge` (`chal`)
+when ready. Looking, gathering, and trying the barred coffer never start the encounter.
+
+An ash sentry shoots from range while a plated cinder warden closes in. The warden halves arrow damage,
+not Spark or melee damage. Prepare Shield before challenging, and bring recovery supplies; the guards
+act during spell preparation and healing. Herbs and potions work normally.
+
+Retreat, death, and reload preserve surviving guards, wounds, and their finite practice lessons. Guards
+cannot enter or attack into towns, follow you into the Deep, or respawn. Defeat both original guards to
+unlock the charred coffer, then `get all`/`,` at the tower for an ember charm, bogmint, and 120 gold.
+Full-sack leftovers follow the ordinary cache rules. The tower's brazier goes cold permanently.
+Its badge changes from `!` to `?` when cleared, then disappears when claimed
+(`W!`, `W?`, and `W.` in the text map).
+
 ### Herbs and field recovery
 
 Seeded herb patches grow on open wilderness ground, never inside towns, in water, or in the Deep.
@@ -316,6 +334,8 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
   exact recovery, no practice gains, map markers, and permanent harvest state across reloads.
 - `python3 crates/isle/scripts/relics.py` walks from town until a natural cache yields a relic, checks
   full-sack leftovers, visible trade-offs, one-slot equipment, exposed rounds, no-refill removal, and reloads.
+- `python3 crates/isle/scripts/cinder.py` walks to the natural Watch, reads its warning, prepares and
+  fights its guards, reloads partial progress, and checks the permanent reward and quiet tower.
 - `python3 crates/isle/scripts/wildlife.py` checks evolved population, reload, the IN SIGHT panel,
   and shooting an actual spawned individual by its regional name.
 - `python3 crates/isle/scripts/towns.py` visits two generated towns, exercises their services, and checks

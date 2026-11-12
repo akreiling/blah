@@ -139,6 +139,8 @@ pub enum Command {
     Sell(String),
     /// Ask the temple to heal you.
     Heal,
+    /// Wake the guards of Cinder Watch while standing at its tower.
+    Challenge,
     /// Stand ready: pass the round, striking back at anything hunting you from the next cell.
     Wait,
 }
@@ -188,6 +190,7 @@ enum Verb {
     Buy,
     Sell,
     Heal,
+    Challenge,
     Wait,
     Look,
     Inventory,
@@ -197,13 +200,14 @@ enum Verb {
 }
 
 /// Verbs with the shortest prefix each accepts. Earlier entries win, so `we` is wear and `w` is west.
-const VERBS: [(&str, usize, Verb); 30] = [
+const VERBS: [(&str, usize, Verb); 31] = [
     ("attack", 1, Verb::Attack),
     ("fight", 1, Verb::Attack),
     ("kill", 1, Verb::Attack),
     ("nock", 2, Verb::Nock),
     ("shoot", 2, Verb::Shoot),
     ("chant", 2, Verb::Chant),
+    ("challenge", 4, Verb::Challenge),
     ("cast", 2, Verb::Cast),
     ("hide", 2, Verb::Hide),
     ("get", 1, Verb::Get),
@@ -284,6 +288,7 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
         Verb::Buy => Command::Buy(need("buy")?),
         Verb::Sell => Command::Sell(need("sell")?),
         Verb::Heal => Command::Heal,
+        Verb::Challenge => Command::Challenge,
         Verb::Wait => Command::Wait,
         Verb::Look => return Ok(Parsed::Instant(Instant::Look)),
         Verb::Inventory => return Ok(Parsed::Instant(Instant::Inventory)),
@@ -318,7 +323,7 @@ pub const HELP: [&str; 10] = [
     "Fight: attack <who>, nock then shoot <who>. Who is a letter (shoot a) or a name (sh 2 orc).",
     "Magic: chant <spell>, then cast [who]. Spells: spark, shield, heal, stun. Metal adds 2 Focus except shield.",
     "Hide: hide, then strike or shoot from hiding for extra damage. Anyone can hide and chant.",
-    "Things: get <item>|all, drop, wield, wear, remove <relic>, quaff, use <herb>, inventory, look.",
+    "Things: get <item>|all, drop, wield, wear, remove <relic>, quaff, use <herb>, inventory, look. Challenge wakes Cinder Watch.",
     "Town: buy <item>, sell <item>, list (in the shop); heal (in the temple).",
     "Growth: useful practice improves powers; kills raise adventuring rank. Skills lists practice. Rest recovers.",
     "Chain rounds with ;  (nock; shoot a). A chain stops if you are hurt or something new appears.",

@@ -554,7 +554,7 @@ impl IsleView {
         for s in sighted.iter().take(if sighted.iter().any(|s| s.creature.wild.is_some()) { 3 } else { 6 }) {
             let c = s.creature;
             let stats = c.stats();
-            if c.phenotype().is_some() {
+            if c.phenotype().is_some() || c.kind == Kind::CinderWarden {
                 list = list
                     .child(
                         div()
@@ -563,7 +563,7 @@ impl IsleView {
                             .text_color(rgb(creature_color(c.kind, c.hunting)))
                             .child(format!("{} {}", s.label, stats.name)),
                     )
-                    .children(wild_sight_lines(p, c).into_iter().map(|line| {
+                    .children(detail_sight_lines(p, c).into_iter().map(|line| {
                         div().min_h(px(LINE)).flex_none().text_size(px(12.0)).text_color(rgb(DIM)).child(line)
                     }));
                 continue;
@@ -631,9 +631,9 @@ impl IsleView {
                 panel.push("Nothing stirs.".into());
             }
             for s in sighted.iter().take(if sighted.iter().any(|s| s.creature.wild.is_some()) { 3 } else { 6 }) {
-                if s.creature.phenotype().is_some() {
+                if s.creature.phenotype().is_some() || s.creature.kind == Kind::CinderWarden {
                     panel.push(format!("{} {}", s.label, s.creature.stats().name));
-                    panel.extend(wild_sight_lines(p, s.creature));
+                    panel.extend(detail_sight_lines(p, s.creature));
                 } else {
                     panel.push(format!("{} {} {}", s.label, s.creature.stats().name, sight_notes(p, s.creature)));
                 }
@@ -726,6 +726,16 @@ fn cell(game: &Game, pos: Pos, labels: &[(Pos, char)]) -> (String, u32, Option<u
     }
     if let Some(site) = game.landmark_at(pos) {
         let color = if visible { HEADING } else { dimmed(HEADING) };
+        if site.kind == LandmarkKind::CinderWatch {
+            let glyph = if site.opened {
+                "W."
+            } else if game.cinder_watch().is_some_and(|watch| watch.phase == isle_core::WatchPhase::Cleared) {
+                "W?"
+            } else {
+                "W!"
+            };
+            return (glyph.into(), color, back);
+        }
         return (if site.opened { "&." } else { "&?" }.into(), color, back);
     }
     if game.herb_at(pos).is_some_and(|patch| !patch.picked) {
@@ -839,8 +849,14 @@ fn sight_notes(p: &Player, c: &Creature) -> String {
 }
 
 /// Shared by the visual panel and text inspection, so cues cannot drift between them.
-fn wild_sight_lines(p: &Player, c: &Creature) -> Vec<String> {
-    let mut lines = vec![format!("  {} · {}", sight_notes(p, c), c.phenotype().unwrap().temperament.word())];
+fn detail_sight_lines(p: &Player, c: &Creature) -> Vec<String> {
+    let mut lines = vec![format!("  {}", sight_notes(p, c))];
+    if let Some(phenotype) = c.phenotype() {
+        lines[0].push_str(&format!(" · {}", phenotype.temperament.word()));
+    }
+    if c.kind == Kind::CinderWarden {
+        lines.push("  arrows halved · Spark ignores plating".into());
+    }
     let traits = c.cave_traits();
     if traits.tremorsense {
         lines.push("  tremorsense · quiet steps help".into());
@@ -860,6 +876,8 @@ fn initial(kind: Kind) -> char {
         Kind::Orc => 'o',
         Kind::Skeleton => 's',
         Kind::Troll => 'T',
+        Kind::CinderWarden => 'C',
+        Kind::AshSentry => 'a',
         Kind::Wild => '*',
     }
 }
@@ -930,6 +948,9 @@ fn map_cell_art_in<'a>(
             LandmarkKind::Cairn => Object::Cairn,
             LandmarkKind::Camp => Object::Camp,
             LandmarkKind::Shrine => Object::Shrine,
+            LandmarkKind::CinderWatch => Object::Watchtower {
+                cleared: game.cinder_watch().is_some_and(|watch| watch.phase == isle_core::WatchPhase::Cleared),
+            },
         });
     }
     if let Some(patch) = game.herb_at(pos).filter(|patch| !patch.picked) {
@@ -1066,6 +1087,10 @@ fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache, step: u8, ela
                 marker = match object {
                     Object::StairsUp => Some("<"),
                     Object::StairsDown => Some(">"),
+                    Object::Watchtower { cleared: false } => Some("!"),
+                    Object::Watchtower { cleared: true } if game.landmark_at(pos).is_some_and(|site| !site.opened) => {
+                        Some("?")
+                    }
                     Object::Cairn | Object::Camp | Object::Shrine
                         if game.landmark_at(pos).is_some_and(|site| !site.opened) =>
                     {
@@ -1104,7 +1129,29 @@ fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache, step: u8, ela
                     }
                 }
                 Some(MapActor::Creature { creature, label }) => {
-                    mark = creature_glyph(mark, creature, label);
+                    if let Some(object) = match creature.kind {
+                        Kind::CinderWarden => Some(Object::CinderWarden),
+                        Kind::AshSentry => Some(Object::AshSentry),
+                        _ => None,
+                    } {
+                        scene = scene.child(tall(art.item(object)));
+                        mark = mark.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .w(px(12.0))
+                                .h(px(14.0))
+                                .bg(rgb(SCREEN))
+                                .text_color(rgb(creature_color(creature.kind, creature.hunting)))
+                                .text_size(px(12.0))
+                                .line_height(px(14.0))
+                                .font_weight(FontWeight::BOLD)
+                                .child(label.to_string()),
+                        );
+                    } else {
+                        mark = creature_glyph(mark, creature, label);
+                    }
                 }
                 Some(MapActor::Item(object)) => {
                     scene = scene.child(tall(art.item(object)));
@@ -1614,6 +1661,36 @@ mod tests {
     }
 
     #[test]
+    fn cinder_watch_changes_its_known_map_marker_and_scenery_after_clearing_and_claiming() {
+        let mut game = made(7);
+        let pos = serde_json::to_value(&game).unwrap()["cinder_watch"]["pos"].clone();
+        let pos: Pos = serde_json::from_value(pos).unwrap();
+        assert!(map_cell_art(&game, pos, &[]).is_none());
+        let mut save = serde_json::to_value(&game).unwrap();
+        save["player"]["pos"] = serde_json::json!((pos.0 + 1, pos.1));
+        game = serde_json::from_value(save).unwrap();
+        game.instant(Instant::Look);
+        assert_eq!(cell(&game, pos, &[]).0, "W!");
+        assert_eq!(map_cell_art(&game, pos, &[]).unwrap().terrain.object, Some(Object::Watchtower { cleared: false }));
+        let mut save = serde_json::to_value(&game).unwrap();
+        save["cinder_watch"]["phase"] = serde_json::json!("Cleared");
+        let cleared: Game = serde_json::from_value(save.clone()).unwrap();
+        assert_eq!(cell(&cleared, pos, &[]).0, "W?");
+        assert_eq!(
+            map_cell_art(&cleared, pos, &[]).unwrap().terrain.object,
+            Some(Object::Watchtower { cleared: true })
+        );
+        let index = game.landmarks().iter().position(|site| site.pos == pos).unwrap();
+        save["landmarks"][index]["opened"] = serde_json::json!(true);
+        let claimed: Game = serde_json::from_value(save.clone()).unwrap();
+        assert_eq!(cell(&claimed, pos, &[]).0, "W.");
+        save["player"]["pos"] = serde_json::json!((pos.0 + 30, pos.1));
+        let memory: Game = serde_json::from_value(save).unwrap();
+        assert_eq!(cell(&memory, pos, &[]).0, "W.");
+        assert!(map_cell_art(&memory, pos, &[]).unwrap().remembered);
+    }
+
+    #[test]
     fn warped_neighborhood_uses_only_known_ground_and_tints() {
         let game = made(7);
         let me = game.player().pos;
@@ -1775,19 +1852,19 @@ mod tests {
     fn cave_cues_explain_traits_and_light_matches_visible_cells_and_player_status() {
         let glowing = cave_encounter(0.95);
         let c = &glowing.creatures()[0];
-        assert!(wild_sight_lines(glowing.player(), c).iter().any(|l| l.contains("luminous · spoils nearby hiding")));
+        assert!(detail_sight_lines(glowing.player(), c).iter().any(|l| l.contains("luminous · spoils nearby hiding")));
         assert_eq!(states_text(&glowing).as_deref(), Some("lit · no hiding"));
         assert_eq!(cell(&glowing, glowing.player().pos, &[]).2, Some(CAVE_LIGHT));
         assert_eq!(cell(&glowing, c.pos, &[(c.pos, 'A')]).2, Some(CAVE_LIGHT));
         assert!(map_cell_art(&glowing, c.pos, &[(c.pos, 'A')]).unwrap().lit);
         let listener = cave_encounter(0.5);
         let c = &listener.creatures()[0];
-        assert!(wild_sight_lines(listener.player(), c).iter().any(|l| l.contains("tremorsense · quiet steps help")));
+        assert!(detail_sight_lines(listener.player(), c).iter().any(|l| l.contains("tremorsense · quiet steps help")));
         assert_eq!(states_text(&listener), None);
         assert_eq!(cell(&listener, listener.player().pos, &[]).2, None);
         assert!(!map_cell_art(&listener, c.pos, &[(c.pos, 'A')]).unwrap().lit);
         for game in [&glowing, &listener] {
-            for line in wild_sight_lines(game.player(), &game.creatures()[0]) {
+            for line in detail_sight_lines(game.player(), &game.creatures()[0]) {
                 assert!(line.chars().count() <= 40, "trait cues fit the panel at 12pt");
             }
         }

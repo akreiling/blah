@@ -44,7 +44,7 @@ def landmarks():
         with Isle(save=path) as isle:
             reply = isle.request("state", game=True, map="cells")
             for _ in range(300):
-                if reply["game"]["landmarks"]:
+                if any(site["kind"] != "CinderWatch" for site in reply["game"]["landmarks"]):
                     break
                 cells, routes = paths(reply["map"], reply["game"]["player"]["pos"])
                 frontier = [at for at in routes if not cells[at]["remembered"]]
@@ -53,7 +53,7 @@ def landmarks():
                 reply = isle.batch(routes[target][0], game=True, map="cells", interrupt=False)
             else:
                 raise AssertionError("walking from town did not discover a site")
-            site = reply["game"]["landmarks"][0]
+            site = next(site for site in reply["game"]["landmarks"] if site["kind"] != "CinderWatch")
             assert not site["opened"]
             assert any("You discover" in line["text"] for line in reply["game"]["log"])
             reply = isle.request("state", game=True, map="rows")
@@ -72,7 +72,7 @@ def landmarks():
             assert before["landmarks"] == untouched["landmarks"]
             gold = before["player"]["gold"]
             reply = isle.batch(",", game=True)
-            assert reply["game"]["landmarks"][0]["opened"]
+            assert next(s for s in reply["game"]["landmarks"] if s["pos"] == site["pos"])["opened"]
             assert reply["game"]["player"]["gold"] > gold
             assert any("You open the cache" in line["text"] for line in reply["news"])
             claimed = reply["game"]["player"]

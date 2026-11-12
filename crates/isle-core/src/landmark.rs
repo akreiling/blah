@@ -18,6 +18,8 @@ pub enum LandmarkKind {
     Camp,
     /// The broken pillars of a small wayside shrine.
     Shrine,
+    /// A one-time guarded destination near the starting town.
+    CinderWatch,
 }
 
 impl LandmarkKind {
@@ -27,6 +29,7 @@ impl LandmarkKind {
             Self::Cairn => "weathered cairn",
             Self::Camp => "abandoned camp",
             Self::Shrine => "ruined shrine",
+            Self::CinderWatch => "Cinder Watch",
         }
     }
 
@@ -36,6 +39,7 @@ impl LandmarkKind {
             Self::Cairn => "Loose stones shelter a traveler's cache.",
             Self::Camp => "A waxed bundle lies beside the cold fire.",
             Self::Shrine => "A small coffer rests beneath the broken altar.",
+            Self::CinderWatch => "A charred coffer lies beneath the ruined watchtower.",
         }
     }
 }
@@ -71,6 +75,9 @@ impl Landmark {
     }
 
     pub(crate) fn contents(self, seed: u64) -> Vec<Item> {
+        if self.kind == LandmarkKind::CinderWatch {
+            return vec![Item::Relic(crate::Relic::EmberCharm), Item::Herb(crate::Herb::Bogmint), Item::Gold(120)];
+        }
         let key = blah_core::Rng::keyed(seed, b"isl-loot", &[self.pos.0 as u64, self.pos.1 as u64]).next_u64();
         let mut rng = Rng::new(key);
         let mut items = treasure(90 + rng.below(91), 100, &mut rng);

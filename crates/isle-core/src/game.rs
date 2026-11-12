@@ -16,6 +16,7 @@ use crate::relic::Relic;
 use crate::rng::Rng;
 use crate::town::{Town, Towns};
 use crate::wildlife::{LifeCache, Wildlife};
+use crate::{CinderWatch, WatchPhase};
 
 /// Cells a character or creature sees.
 pub const SIGHT: i32 = 6;
@@ -478,6 +479,12 @@ pub struct Game {
     /// Only discovered patches, with permanent harvest state.
     #[serde(default)]
     herbs: Vec<HerbPatch>,
+    /// The single watchtower and original guard identities; unknown until seen.
+    #[serde(default)]
+    cinder_watch: Option<CinderWatch>,
+    /// Cache unsuccessful placement too, including when upgrading an older save.
+    #[serde(default)]
+    watch_searched: bool,
     /// At most three accepted player steps from the current/most recently resolved round.
     #[serde(default)]
     footsteps: Vec<Footstep>,
@@ -513,6 +520,8 @@ impl Game {
             explored: BTreeMap::new(),
             landmarks: Vec::new(),
             herbs: Vec::new(),
+            cinder_watch: None,
+            watch_searched: false,
             footsteps: Vec::new(),
             log: Vec::new(),
             log_total: 0,
@@ -568,6 +577,13 @@ impl Game {
     /// A discovered site on the character's current map; never reveals an unseen site.
     pub fn landmark_at(&self, pos: Pos) -> Option<&Landmark> {
         (self.player.at == LevelId::Surface).then(|| self.landmarks.iter().find(|site| site.pos == pos)).flatten()
+    }
+
+    /// The discovered watchtower, never an undiscovered destination or one on another map.
+    pub fn cinder_watch(&self) -> Option<&CinderWatch> {
+        self.cinder_watch.as_ref().filter(|watch| {
+            self.landmark_at(watch.pos).is_some_and(|site| site.kind == crate::LandmarkKind::CinderWatch)
+        })
     }
 
     /// Discovered herb patches, including those already picked.
@@ -689,9 +705,9 @@ impl Game {
                 );
                 self.say(Tone::Gain, line);
                 self.say(Tone::Info, format!("You stand in {}.", self.towns.home.name()));
+                self.update_seen();
                 self.town_directions();
                 self.say(Tone::System, "Type help for the commands. Each command you enter takes one round.");
-                self.update_seen();
             }
             Phase::Play => {}
         }
@@ -882,6 +898,7 @@ impl Game {
             Command::Buy(what) => self.buy(&what),
             Command::Sell(what) => self.sell(&what),
             Command::Heal => self.temple_heal(),
+            Command::Challenge => self.challenge_watch(),
             Command::Wait => self.stand_ready(),
         }
     }
@@ -955,13 +972,33 @@ impl Game {
                 let way = Dir::from_delta(at.0 - me.0, at.1 - me.1).map_or("here", Dir::short);
                 self.say(Tone::Info, format!("{service}: {} {way}.", distance(me, at)));
             }
+            if town == self.towns.home
+                && let Some(watch) = &self.cinder_watch
+            {
+                let me = self.player.pos;
+                let way = Dir::from_delta(watch.pos.0 - me.0, watch.pos.1 - me.1).map_or("here", Dir::short);
+                self.say(
+                    Tone::Info,
+                    format!(
+                        "Rumor: Cinder Watch lies {} {way}. Read its warning before challenging its guards.",
+                        distance(me, watch.pos)
+                    ),
+                );
+            }
         }
     }
 
     fn describe_landmark(&mut self) {
         if let Some(site) = self.landmark_at(self.player.pos) {
-            let detail = if site.opened { "The cache is empty." } else { site.kind.description() };
-            let instruction = if site.opened { "" } else { " Use get all to open it." };
+            let guarded = site.kind == crate::LandmarkKind::CinderWatch;
+            let detail = if site.opened {
+                if guarded { "The cache is empty; the tower stands quiet." } else { "The cache is empty." }
+            } else if guarded {
+                self.cinder_watch().expect("discovered tower").description()
+            } else {
+                site.kind.description()
+            };
+            let instruction = if site.opened || guarded { "" } else { " Use get all to open it." };
             self.say(Tone::Info, format!("{}: {detail}{instruction}", site.kind.name()));
         }
         if let Some(patch) = self.herb_at(self.player.pos).filter(|patch| !patch.picked) {
@@ -986,7 +1023,13 @@ impl Game {
                     "{}: {} {way} ({}).",
                     site.kind.name(),
                     distance(me, site.pos),
-                    if site.opened { "empty cache" } else { "unopened cache" }
+                    if site.opened {
+                        "empty cache"
+                    } else if site.kind == crate::LandmarkKind::CinderWatch {
+                        self.cinder_watch().expect("discovered tower").description()
+                    } else {
+                        "unopened cache"
+                    }
                 )
             })
             .collect();
@@ -1325,6 +1368,12 @@ impl Game {
             return;
         }
         let dead = self.creatures.remove(index);
+        if self.cinder_watch.as_mut().is_some_and(|watch| watch.defeated(dead.id)) {
+            self.say(
+                Tone::Gain,
+                "Cinder Watch falls silent. Its charred coffer is unlocked; the guards will not return.",
+            );
+        }
         self.prune_injury_sources();
         let stats = dead.stats();
         self.say(Tone::Kill, format!("The {} dies! (+{} experience)", stats.name, stats.xp));
@@ -1438,7 +1487,8 @@ impl Game {
         let leash = if creature.at == LevelId::Surface { WILD_LEASH } else { DEEP_LEASH };
         if creature.at != self.player.at
             || distance(target, creature.home) > leash + 1
-            || (creature.phenotype().is_some() && self.level().safe(target))
+            || ((creature.phenotype().is_some() || matches!(creature.kind, Kind::CinderWarden | Kind::AshSentry))
+                && self.level().safe(target))
         {
             return false;
         }
@@ -1671,16 +1721,24 @@ impl Game {
     fn get(&mut self, what: &str) {
         self.discover_wilderness();
         let (at, pos) = (self.player.at, self.player.pos);
+        let mut locked = false;
         if what == "all" && self.landmark_at(pos).is_some_and(|site| !site.opened) {
             let index = self.landmarks.iter().position(|site| site.pos == pos).expect("site underfoot");
             let site = self.landmarks[index];
-            self.landmarks[index].opened = true;
-            for item in site.contents(self.seed) {
-                self.drop_at(at, pos, item);
+            if site.kind == crate::LandmarkKind::CinderWatch
+                && self.cinder_watch().is_none_or(|watch| watch.phase != WatchPhase::Cleared)
+            {
+                self.say(Tone::Info, "Cinder Watch's coffer is barred. Defeat both guards before claiming it; use challenge here when ready.");
+                locked = true;
+            } else {
+                self.landmarks[index].opened = true;
+                for item in site.contents(self.seed) {
+                    self.drop_at(at, pos, item);
+                }
+                self.say(Tone::Gain, format!("You open the cache at the {}.", site.kind.name()));
             }
-            self.say(Tone::Gain, format!("You open the cache at the {}.", site.kind.name()));
         }
-        let gathered = self.gather_herb(what);
+        let gathered = self.gather_herb(what) || locked;
         let Some(index) = self.piles.iter().position(|p| p.at == at && p.pos == pos) else {
             if !gathered {
                 self.say(Tone::Info, "There is nothing here.");
@@ -1991,6 +2049,67 @@ impl Game {
 
     // ----- Creatures -----
 
+    fn challenge_watch(&mut self) {
+        self.discover_wilderness();
+        let Some(watch) = self.cinder_watch().filter(|watch| watch.pos == self.player.pos).cloned() else {
+            self.say(
+                Tone::Info,
+                "Stand at Cinder Watch to challenge its guards. Look gives directions to known sites.",
+            );
+            return;
+        };
+        if watch.phase != WatchPhase::Dormant {
+            self.say(
+                Tone::Info,
+                if watch.phase == WatchPhase::Cleared {
+                    "Cinder Watch is quiet. Its guards will not return."
+                } else {
+                    "The original guards already hold Cinder Watch; another challenge cannot replace them."
+                },
+            );
+            return;
+        }
+        let positions = watch.guard_positions();
+        if positions.iter().any(|&pos| self.creature_at(pos).is_some()) {
+            self.say(Tone::Info, "Something occupies a guard post. Clear the approach before challenging the Watch.");
+            return;
+        }
+        let kinds = [Kind::CinderWarden, Kind::AshSentry];
+        let guards = std::array::from_fn(|i| Some(self.place_fixed(kinds[i], positions[i])));
+        let watch = self.cinder_watch.as_mut().expect("placed tower");
+        watch.guards = guards;
+        watch.phase = WatchPhase::Active;
+        self.say(Tone::System, "You challenge Cinder Watch. The cinder warden and ash sentry step from the ruins!");
+    }
+
+    fn place_fixed(&mut self, kind: Kind, pos: Pos) -> u32 {
+        let id = self.next_id;
+        self.next_id += 1;
+        let hp = kind.stats().hp;
+        self.creatures.push(Creature {
+            id,
+            kind,
+            wild: None,
+            energy: 0,
+            at: self.player.at,
+            pos,
+            hp,
+            home: pos,
+            hunting: false,
+            last_seen: None,
+            lost: 0,
+            listening: false,
+            stunned: 0,
+            learning_damage_left: hp,
+            vitality_lessons_left: hp,
+            stealth_lessons_left: 12,
+            utility_lessons_left: 12,
+            revealed_by_attack: false,
+            spawn: None,
+        });
+        id
+    }
+
     fn populate_surface(&mut self) {
         if self.player.at != LevelId::Surface || self.round < self.wild_ready {
             return;
@@ -2061,6 +2180,12 @@ impl Game {
                 return;
             }
             let Some(index) = self.creatures.iter().position(|c| c.id == id) else { continue };
+            if matches!(self.creatures[index].kind, Kind::CinderWarden | Kind::AshSentry)
+                && (distance(self.player.pos, self.creatures[index].home) > WILD_LEASH + SIGHT
+                    || self.level().safe(self.player.pos))
+            {
+                continue;
+            }
             if self.creatures[index].stunned > 0 {
                 self.creatures[index].stunned -= 1;
                 continue;
@@ -2264,6 +2389,7 @@ impl Game {
             },
         );
         access
+            && (!matches!(self.creatures[index].kind, Kind::CinderWarden | Kind::AshSentry) || !level.safe(pos))
             && level.zone(pos) == Zone::Open
             && pos != self.player.pos
             && !matches!(level.tile(pos), Tile::StairsDown | Tile::StairsUp)
@@ -2443,6 +2569,12 @@ impl Game {
 
     fn discover_wilderness(&mut self) {
         if self.player.at == LevelId::Surface {
+            if !self.watch_searched {
+                let home = self.towns.home.start();
+                let level = Place::new(LevelId::Surface, self.terrain, self.towns.nearby(self.terrain, home), home);
+                self.cinder_watch = CinderWatch::locate(self.seed, home, &level);
+                self.watch_searched = true;
+            }
             let level = self.level();
             let me = self.player.pos;
             for sy in (me.1 - SIGHT).div_euclid(SECTOR)..=(me.1 + SIGHT).div_euclid(SECTOR) {
@@ -2477,6 +2609,17 @@ impl Game {
                     }
                 }
             }
+            if let Some(watch) = &self.cinder_watch
+                && level.sees(me, watch.pos, SIGHT)
+                && !self.landmarks.iter().any(|site| site.pos == watch.pos)
+            {
+                let pos = watch.pos;
+                self.landmarks.push(Landmark { pos, kind: crate::LandmarkKind::CinderWatch, opened: false });
+                let (chunk, word, bit) = memory_cell(pos);
+                self.explored.entry(chunk.0).or_default().entry(chunk.1).or_default()[word] |= bit;
+                self.say(Tone::Gain, "You discover Cinder Watch, a ruined tower with a guarded coffer.");
+                self.say(Tone::Info, self.cinder_watch.as_ref().expect("tower").description());
+            }
         }
     }
 }
@@ -2493,32 +2636,7 @@ impl Game {
 
     /// Places a fresh creature of `kind` at `pos` on the character's map, outside any spawn point.
     pub(crate) fn place(&mut self, kind: Kind, pos: Pos) -> u32 {
-        let id = self.next_id;
-        self.next_id += 1;
-        let at = self.player.at;
-        let hp = kind.stats().hp;
-        self.creatures.push(Creature {
-            id,
-            kind,
-            wild: None,
-            energy: 0,
-            at,
-            pos,
-            hp,
-            home: pos,
-            hunting: false,
-            last_seen: None,
-            lost: 0,
-            listening: false,
-            stunned: 0,
-            learning_damage_left: hp,
-            vitality_lessons_left: hp,
-            stealth_lessons_left: 12,
-            utility_lessons_left: 12,
-            revealed_by_attack: false,
-            spawn: None,
-        });
-        id
+        self.place_fixed(kind, pos)
     }
 
     pub(crate) fn clear_creatures(&mut self) {
@@ -2526,6 +2644,319 @@ impl Game {
         self.wild_ready = u64::MAX;
         self.spawns.clear();
         self.deeps.clear();
+    }
+}
+
+#[cfg(test)]
+mod cinder_tests {
+    use super::*;
+    use crate::{LandmarkKind, Parsed, parse};
+    use std::collections::{HashSet, VecDeque};
+
+    fn made(seed: u64) -> Game {
+        let mut game = Game::new(seed);
+        game.answer("Wren");
+        game.clear_creatures();
+        game
+    }
+
+    fn visit() -> Game {
+        let mut game = made(7);
+        game.player.pos = game.cinder_watch.as_ref().expect("seed 7 has a tower").pos;
+        game.instant(Instant::Look);
+        game
+    }
+
+    fn active() -> Game {
+        let mut game = visit();
+        game.round(Some(Command::Challenge));
+        for guard in &mut game.creatures {
+            guard.stunned = 100;
+        }
+        game
+    }
+
+    fn kill(game: &mut Game, id: u32) {
+        let index = game.creatures.iter().position(|c| c.id == id).unwrap();
+        game.wound(index, game.creatures[index].hp, Practice::Blades, 0);
+    }
+
+    #[test]
+    fn cinder_placement_is_seeded_dry_nonoverlapping_and_reachable_without_rewriting_land() {
+        let mut found = 0;
+        for seed in 0..16 {
+            let game = made(seed);
+            let Some(watch) = &game.cinder_watch else { continue };
+            found += 1;
+            let level = game.level();
+            let home = game.towns.home.start();
+            assert_eq!(CinderWatch::locate(seed, home, &level).as_ref(), Some(watch));
+            assert!(distance(home, watch.pos) >= 24);
+            for at in watch.guard_positions().into_iter().chain([watch.pos]) {
+                assert!(!level.safe(at));
+                assert!(matches!(level.tile(at), Tile::Wild(id) if id.biome().passable && !id.biome().water));
+                assert_eq!(level.tile(at), game.terrain.tile(at));
+            }
+            let site = Landmark::generate(seed, (watch.pos.0.div_euclid(32), watch.pos.1.div_euclid(32)), &level);
+            let herb = HerbPatch::generate(seed, (watch.pos.0.div_euclid(16), watch.pos.1.div_euclid(16)), &level);
+            assert!(site.is_none_or(|site| site.pos != watch.pos));
+            assert!(herb.is_none_or(|patch| patch.pos != watch.pos));
+            let mut seen = HashSet::from([home]);
+            let mut queue = VecDeque::from([(home, 0)]);
+            let mut route = None;
+            while let Some((pos, steps)) = queue.pop_front() {
+                if pos == watch.pos {
+                    route = Some(steps);
+                    break;
+                }
+                if steps == 64 {
+                    continue;
+                }
+                for (dx, dy) in [(1, 0), (-1, 0), (0, -1), (0, 1)] {
+                    let next = (pos.0 + dx, pos.1 + dy);
+                    if seen.insert(next) && level.tile(next).walkable() && !level.ground(next).water {
+                        queue.push_back((next, steps + 1));
+                    }
+                }
+            }
+            assert!(route.is_some(), "an independent cardinal search reaches the tower within 64 steps");
+        }
+        assert!(found >= 12, "the destination is available across ordinary islands");
+    }
+
+    #[test]
+    fn cinder_discovery_warns_during_movement_but_never_starts_from_information_or_pickup() {
+        let mut game = made(7);
+        let pos = game.cinder_watch.as_ref().unwrap().pos;
+        assert!(game.cinder_watch().is_none());
+        assert!(!game.remembers(pos));
+        assert!(game.log.iter().any(|line| line.text.starts_with("Rumor: Cinder Watch")));
+        let rng = game.rng.clone();
+        let round = game.round;
+        game.instant(Instant::Look);
+        assert_eq!((game.round, &game.rng), (round, &rng));
+        game.round(Some(Command::Challenge));
+        assert!(game.creatures.is_empty(), "a challenge away from the tower cannot wake guards");
+        game.player.pos = (pos.0, pos.1 - 2);
+        game.round(Some(Command::Move(vec![Dir::S, Dir::S, Dir::S])));
+        assert_eq!(game.cinder_watch().unwrap().phase, WatchPhase::Dormant);
+        assert!(game.log.iter().any(|line| line.text.contains("Bring recovery supplies")));
+        assert!(game.remembers(pos));
+        game.player.pos = pos;
+        game.round(Some(Command::Drop("potion".into())));
+        game.round(Some(Command::Get("all".into())));
+        assert!(game.player.sack.contains(&Item::Potion), "a barred coffer does not hide ordinary dropped items");
+        assert!(!game.landmark_at(pos).unwrap().opened);
+        assert!(game.creatures.is_empty());
+        game.player.at = LevelId::Deep(game.towns.home, 1);
+        assert!(game.cinder_watch().is_none());
+        game.round(Some(Command::Challenge));
+        assert!(game.creatures.is_empty());
+    }
+
+    #[test]
+    fn cinder_challenge_is_atomic_when_occupied_and_never_replaces_the_original_guards() {
+        let mut game = visit();
+        let post = game.cinder_watch().unwrap().guard_positions()[0];
+        game.place(Kind::Rat, post);
+        game.round(Some(Command::Challenge));
+        assert_eq!(game.cinder_watch().unwrap().phase, WatchPhase::Dormant);
+        assert_eq!(game.creatures.len(), 1);
+        game.creatures.clear();
+        game.round(Some(Command::Challenge));
+        let ids = game.cinder_watch().unwrap().guards;
+        assert_eq!(game.creatures.len(), 2);
+        assert_eq!(game.creatures[0].kind, Kind::CinderWarden);
+        assert_eq!(game.creatures[1].kind, Kind::AshSentry);
+        for guard in &mut game.creatures {
+            guard.stunned = 100;
+        }
+        game.round(Some(Command::Challenge));
+        assert_eq!(game.cinder_watch().unwrap().guards, ids);
+        kill(&mut game, ids[0].unwrap());
+        game.round(Some(Command::Challenge));
+        assert_eq!(game.cinder_watch().unwrap().guards, [None, ids[1]]);
+        assert_eq!(game.creatures.len(), 1);
+    }
+
+    #[test]
+    fn cinder_cache_requires_both_original_kills_and_full_sack_leftovers_never_refill() {
+        let mut game = active();
+        let pos = game.player.pos;
+        let ids = game.cinder_watch().unwrap().guards;
+        game.round(Some(Command::Get("all".into())));
+        assert!(!game.landmark_at(pos).unwrap().opened);
+        kill(&mut game, ids[0].unwrap());
+        let other = game.place(Kind::Rat, (pos.0 + 1, pos.1));
+        kill(&mut game, other);
+        game.round(Some(Command::Get("all".into())));
+        assert_eq!(game.cinder_watch().unwrap().phase, WatchPhase::Active);
+        assert!(!game.landmark_at(pos).unwrap().opened);
+        kill(&mut game, ids[1].unwrap());
+        assert_eq!(game.cinder_watch().unwrap().phase, WatchPhase::Cleared);
+        assert!(game.log.iter().any(|line| line.text.starts_with("Cinder Watch falls silent")));
+        game.player.sack = vec![Item::Potion; SACK];
+        let gold = game.player.gold;
+        let rng = game.rng.clone();
+        game.round(Some(Command::Get("all".into())));
+        assert_eq!(game.player.gold, gold + 120);
+        assert_eq!(game.rng, rng);
+        assert!(game.landmark_at(pos).unwrap().opened);
+        assert_eq!(
+            game.pile_at(pos).unwrap().items,
+            vec![Item::Relic(Relic::EmberCharm), Item::Herb(crate::Herb::Bogmint)]
+        );
+        let mut resumed: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        assert_eq!(resumed, game);
+        resumed.round(Some(Command::Get("all".into())));
+        assert_eq!(resumed.pile_at(pos), game.pile_at(pos));
+        resumed.round(Some(Command::Quaff));
+        resumed.round(Some(Command::Get("all".into())));
+        assert!(resumed.player.sack.contains(&Item::Relic(Relic::EmberCharm)));
+        resumed.round(Some(Command::Quaff));
+        resumed.round(Some(Command::Get("all".into())));
+        assert!(resumed.pile_at(pos).is_none());
+        let claimed = resumed.player.clone();
+        resumed.round(Some(Command::Challenge));
+        resumed.round(Some(Command::Get("all".into())));
+        assert_eq!(resumed.player, claimed);
+        assert!(resumed.creatures.is_empty());
+    }
+
+    #[test]
+    fn cinder_partial_progress_and_finite_lessons_survive_retreat_death_and_reload() {
+        let mut game = active();
+        let ids = game.cinder_watch().unwrap().guards;
+        kill(&mut game, ids[1].unwrap());
+        game.wound(0, 3, Practice::Blades, 0);
+        let before = game.creatures[0].clone();
+        let pos = game.player.pos;
+        game.player.pos = game.towns.home.start();
+        let rng = game.rng.clone();
+        for _ in 0..100 {
+            game.round(Some(Command::Rest));
+        }
+        assert_eq!(game.creatures[0], before);
+        assert_eq!(game.rng, rng, "distant guards do not keep rolling dice off-screen");
+        game.die();
+        let mut game: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        assert_eq!(game.cinder_watch.as_ref().unwrap().phase, WatchPhase::Active);
+        assert_eq!(game.creatures[0].hp, before.hp);
+        assert_eq!(game.creatures[0].learning_damage_left, before.learning_damage_left);
+        assert_eq!(game.creatures[0].utility_lessons_left, before.utility_lessons_left);
+        game.player.pos = pos;
+        game.round(Some(Command::Challenge));
+        assert_eq!(game.creatures.len(), 1);
+        kill(&mut game, ids[0].unwrap());
+        game.die();
+        game.player.pos = pos;
+        game.round(Some(Command::Challenge));
+        assert_eq!(game.cinder_watch().unwrap().phase, WatchPhase::Cleared);
+        assert!(game.creatures.is_empty());
+    }
+
+    #[test]
+    fn cinder_guards_cannot_enter_or_attack_a_town_or_follow_into_the_deep() {
+        let mut game = active();
+        let safe = game.towns.home.start();
+        game.creatures[0].pos = (safe.0 + 1, safe.1);
+        game.creatures[0].home = game.creatures[0].pos;
+        game.creatures[0].stunned = 0;
+        game.player.pos = safe;
+        assert!(!game.open_for_creature(0, (safe.0 + 2, safe.1)));
+        assert!(!game.creature_can_see(0, safe));
+        let health = game.player.hp;
+        game.round(Some(Command::Get("nothing".into())));
+        assert_eq!(game.player.hp, health);
+        let guards = game.creatures.clone();
+        game.player.at = LevelId::Deep(game.towns.home, 1);
+        game.round(Some(Command::Rest));
+        assert_eq!(game.creatures, guards);
+    }
+
+    #[test]
+    fn cinder_warden_really_halves_arrows_but_not_spark() {
+        let mut game = active();
+        game.player.dex = 10;
+        game.player.int = 10;
+        game.player.nocked = true;
+        let seed = (0..1000).find(|&seed| Rng::new(seed).d20() == 20).unwrap();
+        game.rng = Rng::new(seed);
+        let mut dice = game.rng.clone();
+        assert_eq!(dice.d20(), 20);
+        let arrow = (dice.range(1, 6) / 2).max(1);
+        let id = game.creatures[0].id;
+        let before = game.creatures[0].hp;
+        game.round(Some(Command::Shoot(Some(Target::Named { nth: 1, name: "cinder warden".into() }))));
+        assert_eq!(game.creatures.iter().find(|c| c.id == id).unwrap().hp, before - arrow);
+        game.player.chanted = Some(Spell::Spark);
+        game.rng = Rng::new(seed);
+        let mut dice = game.rng.clone();
+        dice.d20();
+        let spark = dice.range(2, 8);
+        game.round(Some(Command::Cast(Some(Target::Named { nth: 1, name: "cinder warden".into() }))));
+        assert_eq!(game.creatures.iter().find(|c| c.id == id).unwrap().hp, before - arrow - spark);
+    }
+
+    #[test]
+    fn cinder_old_saves_place_once_without_spending_rounds_or_combat_dice() {
+        let game = made(7);
+        let expected = game.cinder_watch.clone();
+        let mut save = serde_json::to_value(&game).unwrap();
+        save.as_object_mut().unwrap().remove("cinder_watch");
+        save.as_object_mut().unwrap().remove("watch_searched");
+        let mut old: Game = serde_json::from_value(save).unwrap();
+        let (round, rng) = (old.round, old.rng.clone());
+        old.instant(Instant::Look);
+        assert_eq!(old.cinder_watch, expected);
+        assert_eq!((old.round, &old.rng), (round, &rng));
+        old.cinder_watch = None;
+        old.instant(Instant::Look);
+        assert!(old.cinder_watch.is_none(), "an unsuccessful cached placement is not tried every look");
+        assert_eq!(parse("challenge"), Ok(Parsed::Round(Command::Challenge)));
+        assert_eq!(parse("chal"), Ok(Parsed::Round(Command::Challenge)));
+        assert_eq!(parse("ch shield"), Ok(Parsed::Round(Command::Chant(Spell::Shield))));
+        assert_eq!(game.landmarks.iter().filter(|site| site.kind == LandmarkKind::CinderWatch).count(), 0);
+    }
+
+    #[test]
+    fn cinder_seed7_fresh_wanderer_can_win_with_a_prepared_ward_and_the_starting_potion() {
+        let mut game = visit();
+        let run = |game: &mut Game, line: &str| {
+            let Parsed::Round(command) = parse(line).unwrap() else { panic!("round command") };
+            game.round(Some(command));
+        };
+        for line in ["chant shield", "cast", "chant spark", "challenge"] {
+            run(&mut game, line);
+        }
+        for _ in 0..80 {
+            if game.cinder_watch().unwrap().phase == WatchPhase::Cleared {
+                break;
+            }
+            assert_eq!(game.player.deaths, 0, "{:?}", game.log);
+            let target =
+                if game.creatures.iter().any(|c| c.kind == Kind::AshSentry) { "ash sentry" } else { "cinder warden" };
+            if game.player.hp <= game.player.max_hp - 8 && game.player.sack.contains(&Item::Potion) {
+                run(&mut game, "quaff");
+            } else if game.player.chanted.is_some() {
+                run(&mut game, &format!("cast {target}"));
+            } else if game.player.shield <= 2 && game.player.focus >= 4 {
+                run(&mut game, "chant shield");
+            } else if let Some(enemy) = game.creatures.iter().find(|c| distance(c.pos, game.player.pos) <= 1) {
+                let name = enemy.stats().name;
+                run(&mut game, &format!("attack {name}"));
+            } else if game.player.focus >= 3 {
+                run(&mut game, "chant spark");
+            } else {
+                let next = game.creatures[0].pos;
+                let dir = Dir::from_delta(next.0 - game.player.pos.0, next.1 - game.player.pos.1).unwrap();
+                game.round(Some(Command::Move(vec![dir])));
+            }
+        }
+        assert_eq!(game.player.deaths, 0, "{:?}", game.log);
+        assert_eq!(game.cinder_watch().unwrap().phase, WatchPhase::Cleared, "{:?}", game.log);
+        assert!(game.player.hp > 0);
+        assert!(!game.player.sack.contains(&Item::Potion), "recovery supplies mattered");
     }
 }
 

@@ -539,6 +539,53 @@ pub fn object(object: Object, p: &Palette, snowy: bool, hot: bool, size: u8) -> 
             d.line(&[(15, 13), (15, 6)], p.gold, 2);
             d.ellipse((13, 2, 18, 7), solid(p.glow), ink);
         }
+        Object::Watchtower { cleared } => {
+            d.shadow(p);
+            d.poly(&[(5, 24), (26, 24), (29, 30), (3, 30)], p.rock, ink);
+            d.rect(8, -3, 24, 26, p.ink);
+            d.rect(9, -2, 23, 25, p.stone);
+            for y in [3, 10, 17, 24] {
+                d.line(&[(9, y), (23, y)], p.rock, 1);
+            }
+            for (x, y) in [(12, -2), (19, 4), (12, 11), (20, 18)] {
+                d.line(&[(x, y), (x, y + 5)], p.rock, 1);
+            }
+            for (x, top) in [(7, -6), (14, -4), (21, -8)] {
+                d.rect(x, top, x + 4, 0, p.ink);
+                d.rect(x + 1, top + 1, x + 3, -1, p.rock);
+            }
+            d.rect(14, 5, 17, 11, p.ink);
+            d.poly(&[(12, 26), (12, 20), (16, 16), (20, 20), (20, 26)], p.ink, None);
+            d.line(&[(11, 26), (21, 26)], p.steel, 1);
+            if cleared {
+                d.rect(14, 6, 17, 8, p.steel);
+                d.line(&[(15, 7), (15, 12)], p.glow, 1);
+            } else {
+                d.poly(&[(14, 8), (15, 1), (17, 5), (19, 3), (19, 9)], p.red, None);
+                d.line(&[(16, 5), (17, 8)], p.glow, 1);
+            }
+        }
+        Object::CinderWarden | Object::AshSentry => {
+            let warden = object == Object::CinderWarden;
+            d.shadow(p);
+            d.line(&[(12, 23), (11, 29)], p.ink, 3);
+            d.line(&[(19, 23), (20, 29)], p.ink, 3);
+            d.poly(&[(10, 12), (20, 12), (24, 25), (7, 25)], if warden { p.red } else { p.bark }, ink);
+            d.rect(11, 12, 20, 21, if warden { p.steel } else { p.rock });
+            d.ellipse((11, 3, 20, 12), solid(if warden { p.steel } else { p.bark }), ink);
+            d.rect(12, 7, 19, 9, p.ink);
+            d.rect(14, 8, 17, 8, p.glow);
+            if warden {
+                d.line(&[(16, 0), (16, 4)], p.red, 3);
+                d.poly(&[(3, 13), (10, 13), (10, 22), (6, 26), (3, 22)], p.steel, ink);
+                d.line(&[(25, 7), (25, 28)], p.bark, 2);
+                d.poly(&[(25, 2), (28, 8), (23, 8)], p.steel, ink);
+            } else {
+                d.line(&[(24, 9), (28, 13), (29, 19), (27, 25), (24, 28)], p.bark, 2);
+                d.line(&[(24, 9), (24, 28)], p.steel, 1);
+                d.line(&[(19, 17), (31, 17)], p.gold, 1);
+            }
+        }
         Object::Cairn => {
             d.shadow(p);
             for (x, y, w) in [(4, 22, 12), (16, 22, 12), (7, 16, 11), (17, 17, 8), (11, 10, 10), (13, 6, 6)] {

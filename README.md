@@ -3,7 +3,8 @@
 A solo, turn-based island adventure inspired by *Island of Kesmai*, with generated towns,
 endless Deeps, procedural terrain, and genome-shaped creatures. Practice earns power.
 Explore cairns, abandoned camps, and ruined shrines for one-time caches. Gather biome-specific herbs
-for exposed field recovery, and find relics with visible benefits and costs. The world waits while you type.
+for exposed field recovery, and find relics with visible benefits and costs. Challenge the two guards of
+Cinder Watch for a lasting victory and a one-time reward. The world waits while you type.
 
 ## Play
 

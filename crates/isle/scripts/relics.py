@@ -30,7 +30,7 @@ def relics():
             for _ in range(1500):
                 cells, routes = paths(reply["map"], reply["game"]["player"]["pos"])
                 sites = [site for site in reply["game"]["landmarks"]
-                         if not site["opened"] and tuple(site["pos"]) in routes]
+                         if site["kind"] != "CinderWatch" and not site["opened"] and tuple(site["pos"]) in routes]
                 if sites:
                     site = min(sites, key=lambda site: len(routes[tuple(site["pos"])]))
                     reply = isle.batch(*routes[tuple(site["pos"])], ",", game=True,

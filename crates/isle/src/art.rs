@@ -94,6 +94,11 @@ pub enum Object {
     Cairn,
     Camp,
     Shrine,
+    Watchtower {
+        cleared: bool,
+    },
+    CinderWarden,
+    AshSentry,
     Herb(isle_core::Herb),
     Relic(isle_core::Relic),
     Coins,
@@ -113,7 +118,7 @@ impl Object {
 }
 
 #[cfg(test)]
-pub const ALL_OBJECTS: [Object; 28] = [
+pub const ALL_OBJECTS: [Object; 32] = [
     Object::Pine,
     Object::Oak,
     Object::Acacia,
@@ -128,6 +133,10 @@ pub const ALL_OBJECTS: [Object; 28] = [
     Object::Cairn,
     Object::Camp,
     Object::Shrine,
+    Object::Watchtower { cleared: false },
+    Object::Watchtower { cleared: true },
+    Object::CinderWarden,
+    Object::AshSentry,
     Object::Herb(isle_core::Herb::Woundleaf),
     Object::Herb(isle_core::Herb::Bogmint),
     Object::Herb(isle_core::Herb::Sunroot),
@@ -2071,6 +2080,31 @@ mod tests {
         };
         let image = scene(&cache, &world, Mood::Surface(mood::Sky { clear: 4, mist: 0 }), (12, 7), &objects);
         save(&image, "relic-contact.png");
+    }
+
+    /// Preview the occupied and quiet tower with its two guards.
+    #[test]
+    #[ignore]
+    fn cinder_contact_sheet() {
+        let cache = ArtCache::new(7);
+        let world = |x: i32, _: i32| match x / 4 {
+            0 => (Terrain::Grass, Style::Moss),
+            1 => (Terrain::Sand, Style::Fable),
+            _ => (Terrain::Snow, Style::Hearth),
+        };
+        let objects = |x: i32, y: i32| {
+            (x.rem_euclid(4) == 1)
+                .then_some(match y {
+                    1 => Some(Object::Watchtower { cleared: false }),
+                    3 => Some(Object::Watchtower { cleared: true }),
+                    5 => Some(Object::CinderWarden),
+                    7 => Some(Object::AshSentry),
+                    _ => None,
+                })
+                .flatten()
+        };
+        let image = scene(&cache, &world, Mood::Surface(mood::Sky { clear: 4, mist: 0 }), (12, 9), &objects);
+        save(&image, "cinder-contact.png");
     }
 
     /// Paint a scene of `w`×`h` cells under `mood`, with tufts, heat, and `objects` on top.

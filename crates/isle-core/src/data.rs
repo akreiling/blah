@@ -314,6 +314,10 @@ pub enum Kind {
     Skeleton,
     /// A pit troll, kept as a fixed-table fixture.
     Troll,
+    /// Cinder Watch's armored, one-time keeper.
+    CinderWarden,
+    /// Cinder Watch's one-time bow guard.
+    AshSentry,
     /// An individual drawn from a region's evolved life.
     Wild,
 }
@@ -399,6 +403,26 @@ impl Kind {
                 xp: 400,
                 gold: (80, 120),
                 regen: 2,
+                ..base
+            },
+            Kind::CinderWarden => Stats {
+                name: "cinder warden".into(),
+                hp: 20,
+                ac: 12,
+                hit: 3,
+                damage: (2, 5),
+                xp: 55,
+                arrow_proof: true,
+                ..base
+            },
+            Kind::AshSentry => Stats {
+                name: "ash sentry".into(),
+                hp: 9,
+                ac: 11,
+                hit: 2,
+                damage: (1, 3),
+                shot: Some((5, (1, 3))),
+                xp: 25,
                 ..base
             },
             Kind::Wild => Stats { name: "creature".into(), ..base },
