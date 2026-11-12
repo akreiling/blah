@@ -11,11 +11,85 @@ pub enum Relic {
     Stillstone,
     /// Truer arrows at the cost of finding cover.
     HuntersToken,
+    /// Spellfire and returning Focus bought with the wearer's blood.
+    ExileHeart,
+    /// Depth 1: a steadier hand, an unsteady bow.
+    IronrootBead,
+    /// Depth 2: cover bought with exposed flesh.
+    Mothglass,
+    /// Depth 3: arrowheads instead of spellfire.
+    FlintEye,
+    /// Depth 4: a deeper reserve, a lighter blow.
+    HollowBell,
+    /// Depth 5: aggression without protection.
+    RedTooth,
+    /// Depth 6: mending instead of burning.
+    PaleKnot,
+    /// Depth 7: concentrated fire from a smaller reserve.
+    StormLens,
+    /// Depth 8: prevention instead of recovery.
+    GraveSeal,
+    /// Depth 9: protection that betrays your hiding place.
+    NightCrown,
+    /// Depth 10: endurance at the expense of Focus.
+    Deepheart,
+}
+
+#[derive(Default)]
+pub(crate) struct RelicEffects {
+    pub health: i32,
+    pub focus: i32,
+    pub armor: i32,
+    pub melee_damage: i32,
+    pub arrow_damage: i32,
+    pub archery: i32,
+    pub hiding: i32,
+    pub healing: i32,
+    pub spark: i32,
+    pub ward: i32,
 }
 
 impl Relic {
     /// Every relic in the first wilderness set.
     pub const ALL: [Self; 3] = [Self::EmberCharm, Self::Stillstone, Self::HuntersToken];
+
+    /// Guaranteed first-conquest prizes, ordered by depth. These never appear in surface caches.
+    pub const CONQUEST: [Self; 10] = [
+        Self::IronrootBead,
+        Self::Mothglass,
+        Self::FlintEye,
+        Self::HollowBell,
+        Self::RedTooth,
+        Self::PaleKnot,
+        Self::StormLens,
+        Self::GraveSeal,
+        Self::NightCrown,
+        Self::Deepheart,
+    ];
+
+    /// The first ten floors each have their own prize; later content is not part of this set.
+    pub fn conquest_reward(depth: u32) -> Option<Self> {
+        depth.checked_sub(1).and_then(|index| Self::CONQUEST.get(index as usize)).copied()
+    }
+
+    pub(crate) fn effects(self) -> RelicEffects {
+        match self {
+            Self::EmberCharm => RelicEffects { spark: 2, healing: -3, ..Default::default() },
+            Self::Stillstone => RelicEffects { ward: 2, focus: -4, ..Default::default() },
+            Self::HuntersToken => RelicEffects { archery: 2, hiding: -15, ..Default::default() },
+            Self::ExileHeart => RelicEffects { spark: 6, ..Default::default() },
+            Self::IronrootBead => RelicEffects { melee_damage: 1, archery: -1, ..Default::default() },
+            Self::Mothglass => RelicEffects { hiding: 15, armor: -1, ..Default::default() },
+            Self::FlintEye => RelicEffects { arrow_damage: 2, spark: -2, ..Default::default() },
+            Self::HollowBell => RelicEffects { focus: 4, melee_damage: -2, ..Default::default() },
+            Self::RedTooth => RelicEffects { melee_damage: 3, armor: -2, ..Default::default() },
+            Self::PaleKnot => RelicEffects { healing: 4, spark: -2, ..Default::default() },
+            Self::StormLens => RelicEffects { spark: 4, focus: -4, ..Default::default() },
+            Self::GraveSeal => RelicEffects { ward: 3, healing: -3, ..Default::default() },
+            Self::NightCrown => RelicEffects { armor: 2, hiding: -15, ..Default::default() },
+            Self::Deepheart => RelicEffects { health: 8, focus: -6, ..Default::default() },
+        }
+    }
 
     /// Its name in the log and commands.
     pub const fn name(self) -> &'static str {
@@ -23,6 +97,17 @@ impl Relic {
             Self::EmberCharm => "ember charm",
             Self::Stillstone => "stillstone",
             Self::HuntersToken => "hunter's token",
+            Self::ExileHeart => "exile's heart",
+            Self::IronrootBead => "ironroot bead",
+            Self::Mothglass => "mothglass",
+            Self::FlintEye => "flint eye",
+            Self::HollowBell => "hollow bell",
+            Self::RedTooth => "red tooth",
+            Self::PaleKnot => "pale knot",
+            Self::StormLens => "storm lens",
+            Self::GraveSeal => "grave seal",
+            Self::NightCrown => "night crown",
+            Self::Deepheart => "deepheart",
         }
     }
 
@@ -32,6 +117,19 @@ impl Relic {
             Self::EmberCharm => "+2 Spark damage; -3 Heal recovery (minimum 1)",
             Self::Stillstone => "+2 active ward protection; -4 maximum Focus",
             Self::HuntersToken => "+2 archery accuracy; -15 percentage points to hiding attempts",
+            Self::ExileHeart => {
+                "+6 Spark damage; passive Focus recovery doubled; each cast costs 2 Health (cannot kill you)"
+            }
+            Self::IronrootBead => "+1 melee damage; -1 archery accuracy",
+            Self::Mothglass => "+15 percentage points to hiding attempts (maximum 100%); -1 armor class",
+            Self::FlintEye => "+2 arrow damage; -2 Spark damage (minimum 1)",
+            Self::HollowBell => "+4 maximum Focus; -2 melee damage (minimum 1)",
+            Self::RedTooth => "+3 melee damage; -2 armor class",
+            Self::PaleKnot => "+4 Heal recovery; -2 Spark damage (minimum 1)",
+            Self::StormLens => "+4 Spark damage; -4 maximum Focus",
+            Self::GraveSeal => "+3 active ward protection; -3 Heal recovery (minimum 1)",
+            Self::NightCrown => "+2 armor class; -15 percentage points to hiding attempts",
+            Self::Deepheart => "+8 maximum Health; -6 maximum Focus",
         }
     }
 
@@ -40,6 +138,17 @@ impl Relic {
             Self::EmberCharm => "ember charm relic",
             Self::Stillstone => "stillstone stone relic",
             Self::HuntersToken => "hunter's hunter token relic",
+            Self::ExileHeart => "exile's exile heart relic",
+            Self::IronrootBead => "ironroot bead relic",
+            Self::Mothglass => "mothglass glass relic",
+            Self::FlintEye => "flint eye relic",
+            Self::HollowBell => "hollow bell relic",
+            Self::RedTooth => "red tooth relic",
+            Self::PaleKnot => "pale knot relic",
+            Self::StormLens => "storm lens relic",
+            Self::GraveSeal => "grave seal relic",
+            Self::NightCrown => "night crown relic",
+            Self::Deepheart => "deepheart relic",
         }
     }
 }

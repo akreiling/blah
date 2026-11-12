@@ -12,6 +12,7 @@ mod game;
 mod herb;
 mod landmark;
 mod map;
+mod mythic;
 mod practice;
 mod relic;
 mod rng;
@@ -30,6 +31,7 @@ pub use game::{Creature, Game, Line, Phase, Pile, Player, SACK, SIGHT, Sighted, 
 pub use herb::{Herb, HerbPatch};
 pub use landmark::{Landmark, LandmarkKind};
 pub use map::{LevelId, Place, Pos, Terrain, Tile, Zone, distance, line};
+pub use mythic::{Covenant, CovenantTrial};
 pub use practice::{Practice, Practices};
 pub use relic::Relic;
 pub use technique::{Readied, TECHNIQUE_RANK, Technique};

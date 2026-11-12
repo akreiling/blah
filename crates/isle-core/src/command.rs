@@ -139,7 +139,7 @@ pub enum Command {
     Sell(String),
     /// Ask the temple to heal you.
     Heal,
-    /// Wake the guards of Cinder Watch while standing at its tower.
+    /// Wake the original guardians while standing at a guarded wilderness site.
     Challenge,
     /// Stand ready: pass the round, striking back at anything hunting you from the next cell.
     Wait,
@@ -323,7 +323,7 @@ pub const HELP: [&str; 11] = [
     "Fight: attack <who>, nock then shoot <who>. Who is a letter (shoot a) or a name (sh 2 orc).",
     "Magic: chant <spell>, then cast [who]. Spells: spark, shield, heal, stun. Metal adds 2 Focus except shield.",
     "Hide: hide, then strike or shoot from hiding for extra damage. Anyone can hide and chant.",
-    "Things: get <item>|all, drop, wield, wear, remove <relic>, quaff, use <herb>, inventory, look. Challenge wakes Cinder Watch.",
+    "Things: get <item>|all, drop, wield, wear, remove <relic>, quaff, use <herb>, inventory, look. Challenge wakes a site's guardians.",
     "Town: buy <item>, sell <item>, list (in the shop); heal (in the temple).",
     "Growth: useful practice improves powers; kills raise adventuring rank. Skills lists practice. Rest recovers.",
     "Skilled weapons fire techniques on their own: feint, parry, stagger, sweep, steady shot. Skills explains them.",

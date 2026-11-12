@@ -94,6 +94,8 @@ const STEEL_DARK: [u8; 3] = [118, 124, 136];
 const LEATHER: [u8; 3] = [122, 80, 46];
 const CHAIN: [[u8; 3]; 2] = [[152, 158, 168], [108, 114, 126]];
 const PLATE: [[u8; 3]; 3] = [[198, 206, 216], [240, 243, 248], [128, 136, 150]];
+const ASHEN: [[u8; 3]; 3] = [[38, 35, 40], [92, 85, 87], [61, 56, 62]];
+const EMBER: [u8; 3] = [255, 98, 34];
 
 fn darker(c: [u8; 3]) -> [u8; 3] {
     c.map(|v| (u16::from(v) * 70 / 100) as u8)
@@ -176,6 +178,7 @@ pub fn draw(look: Look) -> RgbaImage {
         Some(Armor::Leather) => LEATHER,
         Some(Armor::Chainmail) => CHAIN[0],
         Some(Armor::Plate) => PLATE[0],
+        Some(Armor::AshenCarapace) => ASHEN[0],
     };
     c.rect(11, 13, 20, 20, body);
     c.rect(9, 14, 10, 19, body);
@@ -201,6 +204,12 @@ pub fn draw(look: Look) -> RgbaImage {
             c.rect(9, 14, 10, 14, PLATE[1]);
             c.rect(21, 14, 22, 14, PLATE[1]);
         }
+        Some(Armor::AshenCarapace) => {
+            c.rect(9, 13, 12, 14, ASHEN[1]);
+            c.rect(19, 13, 22, 14, ASHEN[1]);
+            c.rect(10, 15, 11, 17, ASHEN[2]);
+            c.rect(20, 15, 21, 17, ASHEN[2]);
+        }
         None => {}
     }
     if look.calling == Calling::Warrior && look.armor.is_some() {
@@ -209,6 +218,13 @@ pub fn draw(look: Look) -> RgbaImage {
     if look.calling == Calling::Cleric {
         c.rect(15, 14, 16, 18, GOLD);
         c.rect(14, 15, 17, 15, GOLD);
+    }
+    if look.armor == Some(Armor::AshenCarapace) {
+        c.rect(14, 15, 14, 15, EMBER);
+        c.rect(15, 16, 15, 17, EMBER);
+        c.rect(14, 18, 14, 18, EMBER);
+        c.rect(15, 19, 17, 19, EMBER);
+        c.dot(18, 16, [255, 176, 72]);
     }
     c.rect(11, 20, 20, 20, BELT);
     c.rect(15, 20, 16, 20, GOLD);
@@ -224,7 +240,8 @@ pub fn draw(look: Look) -> RgbaImage {
     c.rect(13, 5, 18, 5, SKIN);
     c.dot(14, 9, EYES);
     c.dot(17, 9, EYES);
-    let helmed = look.calling == Calling::Warrior && matches!(look.armor, Some(Armor::Chainmail | Armor::Plate));
+    let helmed = look.calling == Calling::Warrior
+        && matches!(look.armor, Some(Armor::Chainmail | Armor::Plate | Armor::AshenCarapace));
     match look.calling {
         Calling::Rogue => {
             c.rect(11, 3, 20, 6, cloth);
@@ -259,11 +276,17 @@ pub fn draw(look: Look) -> RgbaImage {
             c.rect(15, 6, 16, 6, cloth);
         }
         Calling::Warrior if helmed => {
-            let (steel, light) =
-                if look.armor == Some(Armor::Plate) { (PLATE[0], PLATE[1]) } else { (CHAIN[0], STEEL) };
+            let (steel, light) = match look.armor {
+                Some(Armor::Plate) => (PLATE[0], PLATE[1]),
+                Some(Armor::AshenCarapace) => (ASHEN[0], ASHEN[1]),
+                _ => (CHAIN[0], STEEL),
+            };
             c.rect(12, 3, 19, 7, steel);
             c.rect(13, 3, 18, 3, light);
             c.rect(15, 8, 16, 9, steel);
+            if look.armor == Some(Armor::AshenCarapace) {
+                c.rect(14, 7, 17, 7, EMBER);
+            }
         }
         _ => {
             c.rect(12, 4, 19, 6, HAIR);
@@ -285,6 +308,30 @@ pub fn draw(look: Look) -> RgbaImage {
             c.rect(24, tip + 1, 24, 18, STEEL_DARK);
             c.rect(21, 19, 26, 19, GOLD);
             c.rect(23, 20, 24, 22, WOOD);
+        }
+        Weapon::Oathfang => {
+            for (x, y) in [
+                (24, 4),
+                (24, 5),
+                (25, 6),
+                (25, 7),
+                (25, 8),
+                (24, 9),
+                (24, 10),
+                (23, 11),
+                (22, 12),
+                (22, 13),
+                (21, 14),
+                (20, 15),
+                (20, 16),
+            ] {
+                c.rect(x - 1, y, x, y, [35, 30, 36]);
+            }
+            for (x, y) in [(24, 5), (24, 7), (24, 8), (23, 10), (22, 12), (21, 13), (20, 15)] {
+                c.dot(x, y, EMBER);
+            }
+            c.rect(19, 16, 24, 16, GOLD);
+            c.rect(22, 17, 23, 19, WOOD);
         }
         Weapon::Mace => {
             c.rect(23, 12, 23, 22, WOOD);
@@ -412,10 +459,10 @@ mod tests {
             let look = Look::of(&player(&[(practice, 1_000)], |_| {}));
             variants.push(draw(Look { weapon: base.weapon, bow: None, armor: None, ring: false, ..look }));
         }
-        for weapon in [Weapon::Dagger, Weapon::LongSword, Weapon::Mace, Weapon::Staff] {
+        for weapon in [Weapon::Dagger, Weapon::LongSword, Weapon::Mace, Weapon::Staff, Weapon::Oathfang] {
             variants.push(draw(Look { weapon, ..base }));
         }
-        for armor in [Armor::Leather, Armor::Chainmail, Armor::Plate] {
+        for armor in [Armor::Leather, Armor::Chainmail, Armor::Plate, Armor::AshenCarapace] {
             variants.push(draw(Look { armor: Some(armor), ..base }));
         }
         for bow in [Bow::Shortbow, Bow::Longbow] {

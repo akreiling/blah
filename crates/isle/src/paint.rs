@@ -199,6 +199,10 @@ pub fn mix(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
 }
 
 const WHITE: [u8; 3] = [255, 255, 255];
+const ASH: [u8; 3] = [46, 42, 48];
+const EMBER: [u8; 3] = [255, 94, 34];
+const HEART: [u8; 3] = [224, 72, 62];
+const WELL_GLOW: [u8; 3] = [124, 220, 190];
 
 /// A 32-wide transparent drawing surface, with [`HEAD`] rows above the cell at negative y. Like the studies'
 /// drawing calls, shapes replace pixels rather than compositing, so a shadow drawn first stays translucent
@@ -622,6 +626,34 @@ pub fn object(object: Object, p: &Palette, snowy: bool, hot: bool, size: u8) -> 
             d.rect(15, 25, 22, 28, p.bark);
             d.rect(18, 25, 19, 27, p.gold);
         }
+        Object::AshenForge => {
+            d.shadow(p);
+            d.poly(&[(3, 24), (28, 23), (30, 29), (2, 29)], p.ink, None);
+            d.poly(&[(5, 19), (7, 12), (12, 8), (21, 8), (26, 14), (27, 23), (23, 27), (8, 26)], ASH, ink);
+            d.rect(8, 16, 24, 23, p.rock);
+            d.rect(10, 17, 22, 24, p.ink);
+            d.ellipse((12, 17, 20, 24), solid([34, 20, 20]), ink);
+            d.poly(&[(14, 23), (15, 19), (17, 17), (17, 20), (19, 22), (17, 25)], EMBER, None);
+            d.line(&[(9, 15), (12, 12), (17, 12), (20, 14)], p.stone, 1);
+            d.line(&[(7, 20), (9, 18), (9, 16)], EMBER, 1);
+            d.line(&[(23, 14), (25, 17), (24, 19)], EMBER, 1);
+            d.rect(12, 25, 18, 27, p.steel);
+            d.rect(14, 24, 16, 25, p.gold);
+        }
+        Object::WellOfNames => {
+            d.shadow(p);
+            d.ellipse((4, 15, 27, 30), solid(p.ink), ink);
+            d.ellipse((6, 12, 25, 26), solid(p.rock), ink);
+            d.ellipse((9, 13, 22, 22), solid(ASH), Some(p.ink));
+            d.ellipse((10, 13, 21, 20), [0, 0, 0, 0], Some(mix(ASH, p.stone, 0.45)));
+            d.rect(7, 21, 24, 25, p.stone);
+            d.line(&[(8, 21), (13, 23), (18, 22), (23, 24)], p.ink, 2);
+            d.rect(9, 19, 10, 20, WELL_GLOW);
+            d.rect(14, 16, 15, 18, WELL_GLOW);
+            d.rect(18, 11, 19, 13, WELL_GLOW);
+            d.line(&[(10, 18), (11, 16), (11, 14)], mix(WELL_GLOW, WHITE, 0.25), 1);
+            d.line(&[(21, 16), (22, 14), (21, 12)], mix(WELL_GLOW, WHITE, 0.25), 1);
+        }
         Object::Herb(herb) => {
             let bloom = match herb {
                 isle_core::Herb::Woundleaf => [236, 220, 184],
@@ -670,6 +702,13 @@ pub fn object(object: Object, p: &Palette, snowy: bool, hot: bool, size: u8) -> 
             d.line(&[(8, 18), (17, 25)], p.gold, 2);
             d.line(&[(11, 23), (7, 28)], p.bark, 2);
         }
+        Object::Oathfang => {
+            d.line(&[(23, 4), (25, 7), (25, 11), (23, 15), (19, 19), (15, 22)], p.ink, 5);
+            d.line(&[(23, 4), (24, 7), (24, 10), (22, 14), (19, 17)], ASH, 3);
+            d.line(&[(23, 5), (23, 9), (21, 13), (18, 16)], EMBER, 1);
+            d.line(&[(10, 19), (18, 25)], p.gold, 2);
+            d.line(&[(13, 23), (9, 28)], p.bark, 2);
+        }
         Object::Bow => {
             let arc: Vec<(i32, i32)> = (0..=24)
                 .map(|t| {
@@ -690,6 +729,19 @@ pub fn object(object: Object, p: &Palette, snowy: bool, hot: bool, size: u8) -> 
             );
             d.poly(&[(11, 13), (16, 15), (16, 24), (12, 24)], mix(p.steel, WHITE, 0.3), None);
             d.line(&[(10, 24), (22, 24)], p.bark, 1);
+        }
+        Object::AshenCarapace => {
+            d.poly(
+                &[(10, 8), (13, 11), (18, 11), (22, 8), (27, 13), (23, 17), (22, 26), (10, 26), (9, 17), (5, 13)],
+                ASH,
+                ink,
+            );
+            d.poly(&[(11, 12), (15, 14), (15, 23), (12, 24)], [90, 82, 84], None);
+            d.line(&[(8, 13), (11, 15), (10, 18)], p.stone, 1);
+            d.line(&[(24, 13), (21, 15), (22, 18)], p.stone, 1);
+            d.line(&[(14, 13), (16, 16), (14, 18), (17, 21), (16, 24)], EMBER, 1);
+            d.rect(17, 15, 18, 17, EMBER);
+            d.line(&[(10, 24), (22, 24)], p.ink, 1);
         }
         Object::Ring => {
             d.ellipse((8, 12, 23, 27), solid(p.gold), ink);
@@ -716,6 +768,37 @@ pub fn object(object: Object, p: &Palette, snowy: bool, hot: bool, size: u8) -> 
                 d.line(&[(12, 24), (21, 13)], p.ink, 2);
                 d.poly(&[(17, 13), (23, 11), (22, 17)], p.steel, ink);
                 d.line(&[(10, 20), (15, 24)], p.bark, 2);
+            }
+            isle_core::Relic::ExileHeart => {
+                d.shadow(p);
+                d.poly(
+                    &[(16, 26), (7, 18), (6, 12), (9, 8), (13, 8), (16, 12), (19, 8), (23, 8), (26, 12), (25, 18)],
+                    HEART,
+                    ink,
+                );
+                d.poly(&[(16, 23), (10, 17), (9, 12), (12, 10), (16, 15), (20, 10), (23, 12), (22, 17)], p.red, None);
+                d.line(&[(7, 5), (7, 15), (11, 22), (16, 28), (21, 22), (25, 15), (25, 5)], p.gold, 2);
+                d.line(&[(11, 7), (11, 17), (16, 24)], p.steel, 1);
+                d.line(&[(21, 7), (21, 17), (16, 24)], p.steel, 1);
+                d.line(&[(8, 10), (24, 10)], p.gold, 1);
+                d.line(&[(8, 17), (24, 17)], p.gold, 1);
+                d.line(&[(16, 15), (15, 18), (17, 20)], p.glow, 2);
+            }
+            relic => {
+                let depth = isle_core::Relic::CONQUEST.iter().position(|&prize| prize == relic).unwrap() + 1;
+                let colors = [p.bark, p.glow, p.steel, p.gold, p.red, p.steel, p.glow, p.stone, p.gold, p.red];
+                let color = colors[depth - 1];
+                d.line(&[(10, 5), (12, 12), (20, 12), (22, 5)], p.steel, 1);
+                let shoulder = 6 + (depth % 3) as i32;
+                d.poly(&[(16, 10), (26 - shoulder, 13), (25, 21), (16, 29), (7, 21), (shoulder + 6, 13)], color, ink);
+                d.poly(&[(16, 13), (21, 20), (16, 26), (11, 20)], p.ink, None);
+                // A distinct four-stroke rune identifies the floor even without color.
+                for bit in 0..4 {
+                    if depth & (1 << bit) != 0 {
+                        let y = 16 + bit * 2;
+                        d.line(&[(14, y), (18, y)], p.glow, 1);
+                    }
+                }
             }
         },
         Object::Treasure => {
@@ -744,6 +827,33 @@ mod tests {
                 let visible = image.pixels().filter(|p| p[3] == 255).count();
                 assert!(visible > 40 && visible < 900, "{object:?} {style:?}: {visible}");
                 assert!(image.pixels().any(|p| p.0[..3] == surface(style).ink), "{object:?} has an ink outline");
+            }
+        }
+    }
+
+    #[test]
+    fn mythic_equipment_and_sites_have_distinct_silhouettes() {
+        for (mythic, ordinary) in [
+            (Object::Oathfang, Object::Weapon),
+            (Object::AshenCarapace, Object::Armor),
+            (Object::Relic(isle_core::Relic::ExileHeart), Object::Relic(isle_core::Relic::EmberCharm)),
+            (Object::AshenForge, Object::Shrine),
+            (Object::WellOfNames, Object::Cairn),
+        ] {
+            assert_ne!(super::object(mythic, &MOSS, false, false, 1), super::object(ordinary, &MOSS, false, false, 1));
+        }
+    }
+
+    #[test]
+    fn conquest_relics_have_distinct_visible_art() {
+        let images: Vec<_> = isle_core::Relic::CONQUEST
+            .into_iter()
+            .map(|relic| super::object(Object::Relic(relic), &MOSS, false, false, 1))
+            .collect();
+        for (index, image) in images.iter().enumerate() {
+            assert!(image.pixels().filter(|pixel| pixel[3] == 255).count() > 40);
+            for other in &images[..index] {
+                assert_ne!(image, other);
             }
         }
     }

@@ -16,7 +16,7 @@ use crate::relic::Relic;
 use crate::rng::Rng;
 use crate::town::{Town, Towns};
 use crate::wildlife::{LifeCache, Wildlife};
-use crate::{CinderWatch, Readied, TECHNIQUE_RANK, Technique, WatchPhase};
+use crate::{CinderWatch, Covenant, Readied, TECHNIQUE_RANK, Technique, WatchPhase};
 
 /// Cells a character or creature sees.
 pub const SIGHT: i32 = 6;
@@ -188,6 +188,30 @@ pub const fn modifier(stat: i32) -> i32 {
 }
 
 impl Player {
+    fn relic_effects(&self) -> crate::relic::RelicEffects {
+        self.relic.map(Relic::effects).unwrap_or_default()
+    }
+
+    /// Demigod power is lent by the entire worn covenant, never by mere ownership.
+    pub fn is_demigod(&self) -> bool {
+        self.weapon == Weapon::Oathfang
+            && self.armor == Some(Armor::AshenCarapace)
+            && self.relic == Some(Relic::ExileHeart)
+    }
+
+    fn refresh_health_capacity(&mut self) {
+        self.max_hp = self.baseline_max_hp()
+            + 4 * rank_steps(self.practice.get(Practice::Vitality).rank())
+            + self.relic_effects().health
+            + if self.is_demigod() { 20 } else { 0 };
+        // Equipment grants room for Health, never healing, even through repeated swaps.
+        self.hp = self.hp.min(self.max_hp);
+    }
+
+    fn field_healing(&self, health: i32) -> i32 {
+        if self.armor == Some(Armor::AshenCarapace) { (health / 2).max(1) } else { health }
+    }
+
     fn roll(name: String, rng: &mut Rng) -> Player {
         let mut stat = || {
             let mut dice = [rng.range(1, 6), rng.range(1, 6), rng.range(1, 6), rng.range(1, 6)];
@@ -234,7 +258,10 @@ impl Player {
 
     /// What an attack roll must reach to hit you.
     pub fn ac(&self) -> i32 {
-        10 + modifier(self.dex) + self.armor.map_or(0, Armor::protection) + if self.ring { 2 } else { 0 }
+        10 + modifier(self.dex)
+            + self.armor.map_or(0, Armor::protection)
+            + if self.ring { 2 } else { 0 }
+            + self.relic_effects().armor
     }
 
     fn melee_bonus(&self) -> i32 {
@@ -244,14 +271,11 @@ impl Player {
     }
 
     fn missile_bonus(&self) -> i32 {
-        modifier(self.dex)
-            + rank_steps(self.practice.get(Practice::Archery).rank())
-            + if self.relic == Some(Relic::HuntersToken) { 2 } else { 0 }
+        modifier(self.dex) + rank_steps(self.practice.get(Practice::Archery).rank()) + self.relic_effects().archery
     }
 
     fn refresh_focus_capacity(&mut self) {
-        self.max_focus = self.practice.get(Practice::Focus).focus_capacity()
-            - if self.relic == Some(Relic::Stillstone) { 4 } else { 0 };
+        self.max_focus = self.practice.get(Practice::Focus).focus_capacity() + self.relic_effects().focus;
         self.focus = self.focus.min(self.max_focus);
     }
 
@@ -262,7 +286,7 @@ impl Player {
         }
         (if missile { 6 } else { 3 })
             + rank_steps(self.practice.get(Practice::Warding).rank())
-            + if self.relic == Some(Relic::Stillstone) { 2 } else { 0 }
+            + self.relic_effects().ward
     }
 
     /// Percentage chance of a hiding attempt before adjacent watchers and cave light refuse it.
@@ -270,7 +294,7 @@ impl Player {
         let base = (60 + modifier(self.dex) * 5 + 5 * rank_steps(self.practice.get(Practice::Stealth).rank())
             - watchers * 15)
             .clamp(0, 100);
-        (base - if self.relic == Some(Relic::HuntersToken) { 15 } else { 0 }).max(0)
+        (base + self.relic_effects().hiding).clamp(0, 100)
     }
 
     fn baseline_max_hp(&self) -> i32 {
@@ -355,6 +379,9 @@ pub struct Creature {
     /// Rounds it stays stunned.
     #[serde(default)]
     pub stunned: u32,
+    /// A landed Spark prevents the colossus from regenerating for this many turns.
+    #[serde(default)]
+    seared: u32,
     /// Remaining useful damage this individual can teach across physical and magical attacks.
     #[serde(default)]
     learning_damage_left: i32,
@@ -486,6 +513,9 @@ pub struct Game {
     spawns: Vec<SpawnState>,
     /// Cells ever seen on each floor of a Deep visited.
     deeps: Vec<DeepMemory>,
+    /// Floors whose original or respawned den keeper the character has defeated, never erased by death.
+    #[serde(default)]
+    conquests: Vec<LevelId>,
     /// On the surface, 16×16 chunks of remembered cells, including negative coordinates.
     explored: BTreeMap<i32, BTreeMap<i32, [u64; 4]>>,
     /// Only sites actually seen; opened caches never replenish.
@@ -500,6 +530,9 @@ pub struct Game {
     /// Cache unsuccessful placement too, including when upgrading an older save.
     #[serde(default)]
     watch_searched: bool,
+    /// The Exile's covenant, including failed keeper kills and original trial guardians.
+    #[serde(default)]
+    covenant: Covenant,
     /// At most three accepted player steps from the current/most recently resolved round.
     #[serde(default)]
     footsteps: Vec<Footstep>,
@@ -532,11 +565,13 @@ impl Game {
             piles: Vec::new(),
             spawns: Vec::new(),
             deeps: Vec::new(),
+            conquests: Vec::new(),
             explored: BTreeMap::new(),
             landmarks: Vec::new(),
             herbs: Vec::new(),
             cinder_watch: None,
             watch_searched: false,
+            covenant: Covenant::default(),
             footsteps: Vec::new(),
             log: Vec::new(),
             log_total: 0,
@@ -567,6 +602,16 @@ impl Game {
     /// The character.
     pub fn player(&self) -> &Player {
         &self.player
+    }
+
+    /// Permanent floor victories, specific to both town and depth.
+    pub fn conquests(&self) -> &[LevelId] {
+        &self.conquests
+    }
+
+    /// Visiting, looting, and killing ordinary floor creatures do not count as conquest.
+    pub fn conquered(&self, at: LevelId) -> bool {
+        self.conquests.contains(&at)
     }
 
     /// The map the character is on.
@@ -604,6 +649,11 @@ impl Game {
     /// Discovered herb patches, including those already picked.
     pub fn herbs(&self) -> &[HerbPatch] {
         &self.herbs
+    }
+
+    /// Remembered covenant progress and destinations, awakened by picking up Oathfang.
+    pub fn covenant(&self) -> &Covenant {
+        &self.covenant
     }
 
     /// A discovered patch on the current map. Picked patches retain their harvest record.
@@ -760,7 +810,7 @@ impl Game {
                     Some(relic) => format!("Worn relic: {} — {}.", relic.name(), relic.description()),
                     None => "Worn relic: none. You may wear one relic at a time.".into(),
                 });
-                for relic in Relic::ALL {
+                for relic in Relic::ALL.into_iter().chain(Relic::CONQUEST).chain([Relic::ExileHeart]) {
                     if p.sack.contains(&Item::Relic(relic)) {
                         lines.push(format!("{} — {}.", relic.name(), relic.description()));
                     }
@@ -768,6 +818,8 @@ impl Game {
                 for line in lines {
                     self.say(Tone::Info, line);
                 }
+                self.covenant_status();
+                self.conquest_status();
             }
             Instant::List => {
                 if self.zone() != Zone::Shop {
@@ -805,8 +857,10 @@ impl Game {
                     _ => "",
                 };
                 self.say(Tone::Info, format!("You are in {place}.{underfoot}"));
+                self.floor_conquest_status();
                 self.town_directions();
                 self.landmark_directions();
+                self.covenant_directions();
                 if let Some(pile) = self.pile_at(self.player.pos) {
                     let items: Vec<String> = pile.items.iter().map(|i| i.name()).collect();
                     self.say(Tone::Info, format!("On the ground: {}.", items.join(", ")));
@@ -834,7 +888,12 @@ impl Game {
             Practice::Dagger | Practice::Blades | Practice::Blunt | Practice::Staff | Practice::Archery => {
                 let technique = Technique::of(practice).expect("every weapon family has a technique");
                 let known = if skill.rank() >= TECHNIQUE_RANK {
-                    format!("{} ({} Focus): {}", technique.name(), technique.cost(), technique.description())
+                    format!(
+                        "{} ({} Focus): {}",
+                        technique.name(),
+                        technique.cost() + if self.player.weapon == Weapon::Oathfang { 1 } else { 0 },
+                        technique.description()
+                    )
                 } else {
                     format!("{} at {}", technique.name(), TECHNIQUE_RANK.name())
                 };
@@ -922,7 +981,11 @@ impl Game {
             Command::Buy(what) => self.buy(&what),
             Command::Sell(what) => self.sell(&what),
             Command::Heal => self.temple_heal(),
-            Command::Challenge => self.challenge_watch(),
+            Command::Challenge => {
+                if !self.challenge_covenant() {
+                    self.challenge_watch();
+                }
+            }
             Command::Wait => self.stand_ready(readied),
         }
     }
@@ -1021,9 +1084,12 @@ impl Game {
 
     fn describe_landmark(&mut self) {
         if let Some(site) = self.landmark_at(self.player.pos) {
-            let guarded = site.kind == crate::LandmarkKind::CinderWatch;
+            let trial = self.covenant.trials.iter().find(|trial| trial.pos == site.pos);
+            let guarded = site.kind == crate::LandmarkKind::CinderWatch || trial.is_some();
             let detail = if site.opened {
                 if guarded { "The cache is empty; the tower stands quiet." } else { "The cache is empty." }
+            } else if let Some(trial) = trial {
+                trial.description()
             } else if guarded {
                 self.cinder_watch().expect("discovered tower").description()
             } else {
@@ -1185,7 +1251,7 @@ impl Game {
         let practice = Practice::weapon(self.player.weapon);
         let weapon_skill = self.player.practice.get(practice);
         let stealth_skill = self.player.practice.get(Practice::Stealth);
-        let ac = self.creatures[index].stats().ac;
+        let ac = self.creatures[index].stats().ac - if self.player.is_demigod() { 4 } else { 0 };
         let natural = self.rng.d20();
         let roll = natural + self.player.melee_bonus() + to_hit + if ambush || feinted { 4 } else { 0 };
         if roll < ac && natural != 20 {
@@ -1198,7 +1264,12 @@ impl Game {
             return false;
         }
         let (lo, hi) = self.player.weapon.damage();
-        let mut damage = (self.rng.range(lo, hi) + modifier(self.player.str) + weapon_skill.bonus() + extra).max(1);
+        let mut damage = (self.rng.range(lo, hi)
+            + modifier(self.player.str)
+            + weapon_skill.bonus()
+            + extra
+            + self.player.relic_effects().melee_damage)
+            .max(1);
         if ambush {
             if opening {
                 damage += stealth_skill.bonus();
@@ -1235,7 +1306,7 @@ impl Game {
     /// Fires `technique` against the creature at `index` when it is known, affordable, and worth it,
     /// paying its Focus. Foes too weak to teach practice are not worth it.
     fn use_technique(&mut self, technique: Technique, index: usize) -> bool {
-        let cost = technique.cost();
+        let cost = technique.cost() + if self.player.weapon == Weapon::Oathfang { 1 } else { 0 };
         if !self.knows(technique) || self.player.focus < cost || self.threat(index, technique.practice()) < 10 {
             return false;
         }
@@ -1309,7 +1380,7 @@ impl Game {
         let natural = self.rng.d20();
         let roll = natural + self.player.missile_bonus() + if ambush { 4 } else { 0 } - if close { 4 } else { 0 }
             + if steady { 2 } else { 0 };
-        if roll < stats.ac && natural != 20 {
+        if roll < stats.ac - if self.player.is_demigod() { 4 } else { 0 } && natural != 20 {
             self.say(Tone::Miss, format!("Your arrow misses the {}.", stats.name));
             if self.rng.chance(75) {
                 self.drop_at(self.player.at, to, Item::Arrows(1));
@@ -1318,16 +1389,19 @@ impl Game {
             return;
         }
         let (lo, hi) = bow.damage();
-        let mut damage =
-            (self.rng.range(lo, hi) + modifier(self.player.dex).max(0) + archery.bonus() + if steady { 2 } else { 0 })
-                .max(1);
+        let mut damage = (self.rng.range(lo, hi)
+            + modifier(self.player.dex).max(0)
+            + archery.bonus()
+            + if steady { 2 } else { 0 }
+            + self.player.relic_effects().arrow_damage)
+            .max(1);
         if ambush {
             if opening {
                 damage += stealth.bonus();
             }
             damage *= 2;
         }
-        if stats.arrow_proof {
+        if stats.arrow_proof && !self.player.is_demigod() {
             damage = (damage / 2).max(1);
         }
         let how = if ambush {
@@ -1363,15 +1437,20 @@ impl Game {
             self.say(Tone::Info, format!("You lack the Focus for {} ({cost} needed).", spell.name()));
             return;
         }
+        if self.player.relic == Some(Relic::ExileHeart) && self.player.hp <= 2 {
+            self.say(Tone::Info, "The exile's heart demands 2 Health. You have too little blood to cast safely.");
+            return;
+        }
         if !spell.aimed() {
+            self.pay_heart();
             self.player.focus -= cost;
             self.player.chanted = None;
             if spell == Spell::Heal {
                 let skill = self.player.practice.get(Practice::Restoration);
                 let before = self.player.hp;
-                let healing = (self.rng.range(4, 12) + 2 * rank_steps(skill.rank())
-                    - if self.player.relic == Some(Relic::EmberCharm) { 3 } else { 0 })
-                .max(1);
+                let healing =
+                    (self.rng.range(4, 12) + 2 * rank_steps(skill.rank()) + self.player.relic_effects().healing).max(1);
+                let healing = self.player.field_healing(healing);
                 self.player.hp = (self.player.hp + healing).min(self.player.max_hp);
                 let healed = self.player.hp - before;
                 self.say(Tone::Gain, format!("Warmth knits your wounds. (+{healed} health)"));
@@ -1391,6 +1470,7 @@ impl Game {
         if !self.in_line(index, SIGHT) {
             return;
         }
+        self.pay_heart();
         self.player.focus -= cost;
         self.player.chanted = None;
         let revealed = std::mem::take(&mut self.player.hidden);
@@ -1402,7 +1482,7 @@ impl Game {
         let discipline = Practice::spell(spell);
         let rank_accuracy = rank_steps(self.player.practice.get(discipline).rank());
         let roll = natural + modifier(self.player.int) + 2 + rank_accuracy;
-        if roll < stats.ac && natural != 20 {
+        if roll < stats.ac - if self.player.is_demigod() { 4 } else { 0 } && natural != 20 {
             let text = match spell {
                 Spell::Stun => format!("The {} shrugs off your stun.", stats.name),
                 _ => format!("Your spark crackles past the {}.", stats.name),
@@ -1432,8 +1512,12 @@ impl Game {
         let damage = (self.rng.range(2, 8)
             + modifier(self.player.int).max(0)
             + skill.bonus()
-            + if self.player.relic == Some(Relic::EmberCharm) { 2 } else { 0 })
-        .max(1);
+            + self.player.relic_effects().spark)
+            .max(1);
+        if self.creatures[index].kind == Kind::AshColossus {
+            self.creatures[index].seared = 3;
+            self.say(Tone::Hit, "The colossus's wounds seal in the spellfire. Its regeneration stops for three turns.");
+        }
         self.say(Tone::Hit, format!("A spark leaps from your hand and burns the {} for {damage}!", stats.name));
         self.wound(index, damage, Practice::Evocation, cost);
     }
@@ -1469,6 +1553,15 @@ impl Game {
         let threat = self.threat(index, discipline);
         let useful = self.creatures[index].spend_damage(damage);
         self.creatures[index].hp -= damage;
+        if self.player.weapon == Weapon::Oathfang && discipline == Practice::Blades && useful > 0 && threat >= 10 {
+            let healing = self.player.field_healing((useful as i32 / 3).max(1));
+            let restored = healing.min((self.player.max_hp - self.player.hp).max(0));
+            self.player.hp += restored;
+            self.consume_injuries(restored);
+            if restored > 0 {
+                self.say(Tone::Gain, format!("Oathfang drinks the struggle and returns {restored} Health."));
+            }
+        }
         if useful > 0 && threat >= 10 {
             // Success steadies the mind, but a sweep cannot pay for itself with extra targets.
             if self.player.focus_success_round != Some(self.round) {
@@ -1492,6 +1585,14 @@ impl Game {
                 "Cinder Watch falls silent. Its charred coffer is unlocked; the guards will not return.",
             );
         }
+        let cleared: Vec<_> =
+            self.covenant.trials.iter_mut().filter_map(|trial| trial.defeated(dead.id).then_some(trial.kind)).collect();
+        for kind in cleared {
+            self.say(
+                Tone::Gain,
+                format!("{} falls silent. Its covenant piece is unbound; the guardians will not return.", kind.name()),
+            );
+        }
         self.prune_injury_sources();
         let stats = dead.stats();
         self.say(Tone::Kill, format!("The {} dies! (+{} experience)", stats.name, stats.xp));
@@ -1510,6 +1611,34 @@ impl Game {
         for item in self.loot(dead.kind, den, stats.xp) {
             self.drop_at(dead.at, dead.pos, item);
         }
+        if den
+            && let LevelId::Deep(town, depth) = dead.at
+            && !self.conquered(dead.at)
+        {
+            self.conquests.push(dead.at);
+            self.say(
+                Tone::Gain,
+                format!("You conquer {} Deep, depth {depth}! This victory survives death.", town.name()),
+            );
+            if let Some(relic) = Relic::conquest_reward(depth) {
+                self.drop_at(dead.at, dead.pos, Item::Relic(relic));
+                self.say(
+                    Tone::Gain,
+                    format!(
+                        "Your first-conquest prize lies in the den: {} — {}. Use get to claim it.",
+                        relic.name(),
+                        relic.description()
+                    ),
+                );
+            }
+        }
+        if den && matches!(dead.at, LevelId::Deep(_, 10)) && self.covenant.roll(self.seed) {
+            self.drop_at(dead.at, dead.pos, Item::Weapon(Weapon::Oathfang));
+            self.say(
+                Tone::Gain,
+                "A black blade opens its ember eye among the bones: Oathfang. Pick it up to hear the Exile's call.",
+            );
+        }
         self.gain_xp(stats.xp);
     }
 
@@ -1517,7 +1646,7 @@ impl Game {
         let Some(rank) = self.player.practice.learn(discipline, evidence, threat) else { return };
         match discipline {
             Practice::Vitality => {
-                self.player.max_hp = self.player.baseline_max_hp() + 4 * rank_steps(rank);
+                self.player.refresh_health_capacity();
             }
             Practice::Focus => {
                 self.player.refresh_focus_capacity();
@@ -1605,8 +1734,7 @@ impl Game {
         let leash = if creature.at == LevelId::Surface { WILD_LEASH } else { DEEP_LEASH };
         if creature.at != self.player.at
             || distance(target, creature.home) > leash + 1
-            || ((creature.phenotype().is_some() || matches!(creature.kind, Kind::CinderWarden | Kind::AshSentry))
-                && self.level().safe(target))
+            || ((creature.phenotype().is_some() || creature.kind.guarded()) && self.level().safe(target))
         {
             return false;
         }
@@ -1848,6 +1976,9 @@ impl Game {
             {
                 self.say(Tone::Info, "Cinder Watch's coffer is barred. Defeat both guards before claiming it; use challenge here when ready.");
                 locked = true;
+            } else if self.covenant.trials.iter().any(|trial| trial.pos == pos && trial.phase != WatchPhase::Cleared) {
+                self.say(Tone::Info, "The covenant piece is bound to its trial. Read the warning with look; use challenge here when ready.");
+                locked = true;
             } else {
                 self.landmarks[index].opened = true;
                 for item in site.contents(self.seed) {
@@ -1900,6 +2031,10 @@ impl Game {
         if !taken.is_empty() {
             self.say(Tone::Gain, format!("You pick up {}.", taken.join(", ")));
         }
+        if !self.covenant.awakened && self.player.sack.contains(&Item::Weapon(Weapon::Oathfang)) {
+            self.covenant.awakened = true;
+            self.awaken_covenant();
+        }
     }
 
     fn drop_item(&mut self, what: &str) {
@@ -1920,6 +2055,7 @@ impl Game {
     }
 
     fn wield(&mut self, what: &str) {
+        let was_demigod = self.player.is_demigod();
         let Some(i) = self.player.sack.iter().position(|i| i.matches(what)) else {
             self.say(Tone::Info, format!("You carry no {what} in your sack."));
             return;
@@ -1940,9 +2076,11 @@ impl Game {
             }
             other => self.say(Tone::Info, format!("You can't wield {}.", other.name())),
         }
+        self.covenant_equipment_changed(was_demigod);
     }
 
     fn wear(&mut self, what: &str) {
+        let was_demigod = self.player.is_demigod();
         let Some(i) = self.player.sack.iter().position(|i| i.matches(what)) else {
             self.say(Tone::Info, format!("You carry no {what} in your sack."));
             return;
@@ -1956,6 +2094,7 @@ impl Game {
                     }
                 }
                 self.player.refresh_focus_capacity();
+                self.player.refresh_health_capacity();
                 self.say(Tone::Gain, format!("You wear the {}. {}.", relic.name(), relic.description()));
             }
             Item::Armor(a) => {
@@ -1972,9 +2111,11 @@ impl Game {
             }
             other => self.say(Tone::Info, format!("You can't wear {}.", other.name())),
         }
+        self.covenant_equipment_changed(was_demigod);
     }
 
     fn remove_relic(&mut self, what: &str) {
+        let was_demigod = self.player.is_demigod();
         let Some(relic) = self.player.relic.filter(|&relic| Item::Relic(relic).matches(what)) else {
             self.say(Tone::Info, format!("You wear no {what}."));
             return;
@@ -1986,7 +2127,9 @@ impl Game {
         self.player.relic = None;
         self.player.sack.push(Item::Relic(relic));
         self.player.refresh_focus_capacity();
+        self.player.refresh_health_capacity();
         self.say(Tone::Info, format!("You remove the {}. Its benefit and cost end.", relic.name()));
+        self.covenant_equipment_changed(was_demigod);
     }
 
     fn quaff(&mut self) {
@@ -1995,7 +2138,8 @@ impl Game {
             return;
         };
         self.player.sack.remove(i);
-        let healed = self.rng.range(10, 16);
+        let rolled = self.rng.range(10, 16);
+        let healed = self.player.field_healing(rolled).min(self.player.max_hp - self.player.hp).max(0);
         self.player.hp = (self.player.hp + healed).min(self.player.max_hp);
         self.consume_injuries(healed);
         self.say(Tone::Gain, format!("You drink the potion. (+{healed} health)"));
@@ -2030,7 +2174,8 @@ impl Game {
             return;
         };
         let (health, focus) = herb.recovery();
-        let health = (self.player.max_hp - self.player.hp).clamp(0, health);
+        let recovery = if health > 0 { self.player.field_healing(health) } else { 0 };
+        let health = (self.player.max_hp - self.player.hp).clamp(0, recovery);
         let focus = (self.player.max_focus - self.player.focus).clamp(0, focus);
         if health == 0 && focus == 0 {
             self.say(Tone::Info, format!("The {} would not help you now; you keep it.", herb.name()));
@@ -2051,7 +2196,7 @@ impl Game {
         }
         let (health, focus) = {
             let p = &mut self.player;
-            let health = (p.max_hp - p.hp).min(2);
+            let health = (p.max_hp - p.hp).min(p.field_healing(2));
             let focus = (p.max_focus - p.focus).min(6);
             p.hp += health;
             p.focus += focus;
@@ -2098,6 +2243,46 @@ impl Game {
             LevelId::Surface => format!("You climb back into the daylight of {}.", self.level().name_at(arrive)),
         };
         self.say(Tone::Info, text);
+        self.floor_conquest_status();
+    }
+
+    fn floor_conquest_status(&mut self) {
+        if let LevelId::Deep(_, depth) = self.player.at {
+            if self.conquered(self.player.at) {
+                self.say(
+                    Tone::Info,
+                    format!("Depth {depth}: conquered. Its keepers still return; the first-conquest prize does not."),
+                );
+            } else if let Some(relic) = Relic::conquest_reward(depth) {
+                self.say(
+                    Tone::Info,
+                    format!(
+                        "Depth {depth}: unconquered. Defeat its den keeper for {} — {}. The stairs remain open.",
+                        relic.name(),
+                        relic.description()
+                    ),
+                );
+            } else {
+                self.say(Tone::Info, format!("Depth {depth}: unconquered. The stairs remain open."));
+            }
+        }
+    }
+
+    fn conquest_status(&mut self) {
+        if self.conquests.is_empty() {
+            self.say(
+                Tone::Info,
+                "Deep conquests: none. Defeat a floor's den keeper to earn its permanent conquest mark.",
+            );
+            return;
+        }
+        let mut floors = self.conquests.clone();
+        floors.sort();
+        for at in floors {
+            if let LevelId::Deep(town, depth) = at {
+                self.say(Tone::Info, format!("Conquered: {} Deep, depth {depth}.", town.name()));
+            }
+        }
     }
     fn buy(&mut self, what: &str) {
         if self.zone() != Zone::Shop {
@@ -2137,6 +2322,10 @@ impl Game {
             self.say(Tone::Info, format!("You carry no {what} in your sack."));
             return;
         };
+        if self.player.sack[i].mythic() {
+            self.say(Tone::Info, "The outfitter steps back. \"That covenant is not mine to buy.\"");
+            return;
+        }
         let item = self.player.sack.remove(i);
         let price = sale_price(item);
         self.player.gold += price;
@@ -2166,6 +2355,145 @@ impl Game {
     }
 
     // ----- Creatures -----
+
+    fn pay_heart(&mut self) {
+        if self.player.relic == Some(Relic::ExileHeart) {
+            self.player.hp -= 2;
+            // Blood voluntarily spent is not a Restoration lesson.
+            self.say(Tone::Hurt, "The exile's heart beats once. You pay 2 Health for the spell.");
+        }
+    }
+
+    fn covenant_equipment_changed(&mut self, was_demigod: bool) {
+        if was_demigod != self.player.is_demigod() {
+            self.player.refresh_health_capacity();
+            if self.player.is_demigod() {
+                self.say(Tone::Gain, "Blade, shell, and heart answer as one. You become a demigod: +20 maximum Health, attacks pierce 4 armor, and arrows ignore plating. The power lasts only while all three are equipped.");
+            } else {
+                self.say(
+                    Tone::Info,
+                    "The covenant falls silent. Your borrowed demigod power leaves with the broken set.",
+                );
+            }
+        }
+    }
+
+    fn awaken_covenant(&mut self) {
+        let home = self.towns.home.start();
+        // Cover the bounded search with real town placements, including unseen settlements.
+        for dy in [-192, 0, 192] {
+            for dx in [-192, 0, 192] {
+                self.towns.ensure(self.seed, self.terrain, (home.0 + dx, home.1 + dy));
+            }
+        }
+        self.covenant.trials =
+            Covenant::locate(self.seed, home, self.cinder_watch.as_ref().map(|watch| watch.pos), |pos| {
+                Place::new(LevelId::Surface, self.terrain, self.towns.nearby(self.terrain, pos), pos)
+            });
+        self.say(Tone::System, "Oathfang speaks without a voice: \"They buried my body in the furnace and my name beneath the water. Bring blade, shell, and heart together. Borrow what the gods refused me.\"");
+        self.say(
+            Tone::Info,
+            "You remember the call even if you put down the blade. Look and inventory recall your covenant trail.",
+        );
+        self.covenant_directions();
+    }
+
+    fn covenant_status(&mut self) {
+        if self.player.weapon == Weapon::Oathfang || self.player.sack.contains(&Item::Weapon(Weapon::Oathfang)) {
+            self.say(Tone::Info, "Oathfang: 7–15 damage, +2 accuracy; returns one third of useful melee damage as Health against dangerous foes; techniques cost +1 Focus. Spent or harmless foes cannot feed it.");
+        }
+        if self.player.armor == Some(Armor::AshenCarapace)
+            || self.player.sack.contains(&Item::Armor(Armor::AshenCarapace))
+        {
+            self.say(Tone::Info, "Ashen carapace: 9 armor; halves all field Health recovery (minimum 1), including Oathfang. Temple healing is unchanged.");
+        }
+        if self.covenant.awakened {
+            let worn = usize::from(self.player.weapon == Weapon::Oathfang)
+                + usize::from(self.player.armor == Some(Armor::AshenCarapace))
+                + usize::from(self.player.relic == Some(Relic::ExileHeart));
+            self.say(
+                Tone::Info,
+                format!(
+                    "Exile's covenant: {worn}/3 equipped. {}",
+                    if self.player.is_demigod() {
+                        "Demigod: +20 maximum Health, attacks pierce 4 armor; arrows ignore plating."
+                    } else {
+                        "All three must be equipped for demigod power; ownership alone is not enough."
+                    }
+                ),
+            );
+            self.covenant_directions();
+        }
+    }
+
+    fn covenant_directions(&mut self) {
+        if !self.covenant.awakened {
+            return;
+        }
+        if self.player.at != LevelId::Surface {
+            self.say(Tone::Info, "The covenant calls toward the surface: the Ashen Forge and the Well of Names. Return to daylight; look will recall their bearings.");
+            return;
+        }
+        let me = self.player.pos;
+        let lines: Vec<_> = self
+            .covenant
+            .trials
+            .iter()
+            .map(|trial| {
+                let way = Dir::from_delta(trial.pos.0 - me.0, trial.pos.1 - me.1).map_or("here", Dir::short);
+                let claimed = self.landmarks.iter().any(|site| site.pos == trial.pos && site.opened);
+                format!(
+                    "Oathfang's call: {} lies {} {way} ({}).",
+                    trial.kind.name(),
+                    distance(me, trial.pos),
+                    if claimed {
+                        "piece released"
+                    } else {
+                        match trial.phase {
+                            WatchPhase::Dormant => "trial sleeping; read its warning before challenge",
+                            WatchPhase::Active => "original guardians remain",
+                            WatchPhase::Cleared => "piece unbound; get all at the site",
+                        }
+                    }
+                )
+            })
+            .collect();
+        for line in lines {
+            self.say(Tone::Info, line);
+        }
+    }
+
+    /// Returns whether the command addressed a covenant trial rather than Cinder Watch.
+    fn challenge_covenant(&mut self) -> bool {
+        self.discover_wilderness();
+        if self.player.at != LevelId::Surface {
+            return false;
+        }
+        let Some(index) = self.covenant.trials.iter().position(|trial| trial.pos == self.player.pos) else {
+            return false;
+        };
+        let trial = self.covenant.trials[index].clone();
+        if trial.phase != WatchPhase::Dormant {
+            self.say(Tone::Info, trial.description());
+            return true;
+        }
+        let posts = trial.guards_to_place();
+        if posts.iter().any(|&(_, pos)| self.creature_at(pos).is_some()) {
+            self.say(
+                Tone::Info,
+                "Something occupies a guardian's post. Clear the approach before challenging the trial.",
+            );
+            return true;
+        }
+        let mut guards = [None; 2];
+        for (i, (kind, pos)) in posts.into_iter().enumerate() {
+            guards[i] = Some(self.place_fixed(kind, pos));
+        }
+        self.covenant.trials[index].guards = guards;
+        self.covenant.trials[index].phase = WatchPhase::Active;
+        self.say(Tone::System, format!("You challenge the {}. The Exile's guardians wake!", trial.kind.name()));
+        true
+    }
 
     fn challenge_watch(&mut self) {
         self.discover_wilderness();
@@ -2218,6 +2546,7 @@ impl Game {
             lost: 0,
             listening: false,
             stunned: 0,
+            seared: 0,
             learning_damage_left: hp,
             vitality_lessons_left: hp,
             stealth_lessons_left: 12,
@@ -2278,6 +2607,7 @@ impl Game {
                 lost: 0,
                 listening: false,
                 stunned: 0,
+                seared: 0,
                 learning_damage_left: hp,
                 vitality_lessons_left: hp,
                 stealth_lessons_left: 12,
@@ -2298,7 +2628,7 @@ impl Game {
                 return;
             }
             let Some(index) = self.creatures.iter().position(|c| c.id == id) else { continue };
-            if matches!(self.creatures[index].kind, Kind::CinderWarden | Kind::AshSentry)
+            if self.creatures[index].kind.guarded()
                 && (distance(self.player.pos, self.creatures[index].home) > WILD_LEASH + SIGHT
                     || self.level().safe(self.player.pos))
             {
@@ -2411,7 +2741,9 @@ impl Game {
                 c.listening = false;
             }
         }
-        if stats.regen > 0 {
+        let seared = self.creatures[index].seared > 0;
+        self.creatures[index].seared = self.creatures[index].seared.saturating_sub(1);
+        if stats.regen > 0 && !seared {
             let c = &mut self.creatures[index];
             c.hp = (c.hp + stats.regen).min(stats.hp);
         }
@@ -2493,6 +2825,13 @@ impl Game {
         let capacity = self.creatures[index].stats().hp;
         let taken = damage.min(self.player.hp.max(0));
         self.player.hp -= damage;
+        if self.creatures[index].kind == Kind::HollowCantor {
+            let stolen = self.player.focus.min(2);
+            self.player.focus -= stolen;
+            if stolen > 0 {
+                self.say(Tone::Hurt, format!("The hollow cantor steals {stolen} Focus with your forgotten name."));
+            }
+        }
         self.prune_injury_sources();
         self.player.record_injury(creature_id, restoration_threat, capacity, taken);
         if threat >= 10 {
@@ -2519,7 +2858,7 @@ impl Game {
             },
         );
         access
-            && (!matches!(self.creatures[index].kind, Kind::CinderWarden | Kind::AshSentry) || !level.safe(pos))
+            && (!self.creatures[index].kind.guarded() || !level.safe(pos))
             && level.zone(pos) == Zone::Open
             && pos != self.player.pos
             && !matches!(level.tile(pos), Tile::StairsDown | Tile::StairsUp)
@@ -2581,7 +2920,7 @@ impl Game {
     fn recover(&mut self) {
         let p = &mut self.player;
         if self.round.is_multiple_of(FOCUS_TICK) {
-            p.focus = (p.focus + 1).min(p.max_focus);
+            p.focus = (p.focus + if p.relic == Some(Relic::ExileHeart) { 2 } else { 1 }).min(p.max_focus);
         }
         if p.shield > 0 {
             p.shield -= 1;
@@ -2671,6 +3010,7 @@ impl Game {
             lost: 0,
             listening: false,
             stunned: 0,
+            seared: 0,
             learning_damage_left: hp,
             vitality_lessons_left: hp,
             stealth_lessons_left: 12,
@@ -2756,6 +3096,22 @@ impl Game {
                 self.say(Tone::Gain, "You discover Cinder Watch, a ruined tower with a guarded coffer.");
                 self.say(Tone::Info, self.cinder_watch.as_ref().expect("tower").description());
             }
+            let found: Vec<_> = self
+                .covenant
+                .trials
+                .iter()
+                .filter(|trial| {
+                    level.sees(me, trial.pos, SIGHT) && !self.landmarks.iter().any(|site| site.pos == trial.pos)
+                })
+                .cloned()
+                .collect();
+            for trial in found {
+                self.landmarks.push(Landmark { pos: trial.pos, kind: trial.kind, opened: false });
+                let (chunk, word, bit) = memory_cell(trial.pos);
+                self.explored.entry(chunk.0).or_default().entry(chunk.1).or_default()[word] |= bit;
+                self.say(Tone::Gain, format!("You discover {}. The covenant stirs.", trial.kind.name()));
+                self.say(Tone::Info, trial.description());
+            }
         }
     }
 }
@@ -2763,6 +3119,14 @@ fn memory_cell((x, y): Pos) -> (Pos, usize, u64) {
     let index = (y.rem_euclid(16) * 16 + x.rem_euclid(16)) as usize;
     ((x.div_euclid(16), y.div_euclid(16)), index / 64, 1_u64 << (index % 64))
 }
+
+#[cfg(test)]
+#[path = "mythic_tests.rs"]
+mod mythic_tests;
+
+#[cfg(test)]
+#[path = "conquest_tests.rs"]
+mod conquest_tests;
 
 #[cfg(test)]
 impl Game {
@@ -3212,6 +3576,223 @@ mod technique_tests {
         assert!(!game.player.parried && game.player.readied.is_none());
     }
 }
+
+#[cfg(test)]
+mod depth_curve_tests {
+    use super::*;
+    use std::collections::{BTreeMap, VecDeque};
+
+    const RANKS: [&str; 5] = ["Novice", "Practiced", "Skilled", "Adept", "Expert"];
+    const EVIDENCE: [u32; 5] = [0, 1_000, 4_000, 12_000, 30_000];
+    const WORLD_SEEDS: u64 = 64;
+    const SPAWN_ROUNDS: [u64; 4] = [0, 17, 43, 97];
+    const TRIALS_PER_RANK_AND_FLOOR: usize = WORLD_SEEDS as usize * SPAWN_ROUNDS.len();
+
+    #[derive(Clone, Copy, Debug, Default)]
+    struct DuelResult {
+        trials: usize,
+        wins: usize,
+        deaths: usize,
+        stalled: usize,
+        health_lost_on_wins: i64,
+    }
+
+    fn approach_or_attack(game: &Game, foe_id: u32) -> Command {
+        let foe = game.creatures.iter().find(|creature| creature.id == foe_id).expect("the foe is alive");
+        let start = game.player.pos;
+        if distance(start, foe.pos) <= 1 {
+            return Command::Attack(None);
+        }
+
+        let mut queue = VecDeque::from([start]);
+        let mut first_step = BTreeMap::from([(start, None)]);
+        while let Some(pos) = queue.pop_front() {
+            for dir in [Dir::N, Dir::S, Dir::E, Dir::W, Dir::Ne, Dir::Nw, Dir::Se, Dir::Sw] {
+                let (dx, dy) = dir.delta();
+                let next = (pos.0 + dx, pos.1 + dy);
+                if first_step.contains_key(&next)
+                    || !game.level().tile(next).walkable()
+                    || game.creature_at(next).is_some()
+                {
+                    continue;
+                }
+                let first = first_step[&pos].unwrap_or(dir);
+                if distance(next, foe.pos) <= 1 {
+                    return Command::Move(vec![first]);
+                }
+                first_step.insert(next, Some(first));
+                queue.push_back(next);
+            }
+        }
+        Command::Wait
+    }
+
+    /// Surveys actual strongest den spawns across fixed worlds; it is an encounter curve, not a floor-clear simulation.
+    #[test]
+    fn measure_depth_curve_against_real_den_spawns() {
+        let mut results = [[DuelResult::default(); 10]; 5];
+        let mut foe_stats: [Vec<Stats>; 10] = std::array::from_fn(|_| Vec::new());
+        let mut max_health = [0; 5];
+
+        for seed in 1..=WORLD_SEEDS {
+            for depth in 1..=10 {
+                let mut base = Game::new(seed);
+                base.answer("Wren");
+                let town = base.towns.home;
+                let deep = Deep::new(town, depth);
+                base.player.at = deep.level();
+                base.player.pos = deep.stairs();
+                base.open_deep(deep);
+
+                let den_spawn = base
+                    .spawns
+                    .iter()
+                    .position(|spawn| spawn.at == deep.level() && spawn.den)
+                    .expect("each floor has one den");
+                let den_spawn_index = base.spawns[den_spawn].index;
+                let den_pos = deep.spawns()[den_spawn_index].0;
+                let player_pos = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+                    .into_iter()
+                    .map(|(dx, dy)| (den_pos.0 + dx, den_pos.1 + dy))
+                    .find(|&pos| deep.tile(pos).walkable() && !deep.landing(pos))
+                    .expect("a den has an adjacent floor cell outside its landing");
+
+                for spawn in &mut base.spawns {
+                    spawn.occupant = None;
+                    spawn.ready = if spawn.at == deep.level() && spawn.index == den_spawn_index { 0 } else { u64::MAX };
+                }
+
+                for (draw, birth_round) in SPAWN_ROUNDS.into_iter().enumerate() {
+                    base.creatures.clear();
+                    base.spawns[den_spawn].occupant = None;
+                    base.round = birth_round;
+                    base.spawn(den_spawn, den_pos);
+                    base.round = 0;
+                    base.player.pos = player_pos;
+                    base.rng = Rng::new(seed.wrapping_mul(0x9e37_79b9) ^ u64::from(depth) << 32 ^ draw as u64);
+
+                    assert_eq!(base.creatures.len(), 1, "one actual den creature per duel");
+                    let foe_id = base.creatures[0].id;
+                    let stats = base.creatures[0].stats();
+                    assert_eq!(base.creatures[0].kind, Kind::Wild);
+                    assert_eq!(base.creatures[0].spawn, Some(den_spawn));
+                    assert_eq!(base.creatures[0].wild.as_ref().unwrap().depth(), depth);
+                    foe_stats[(depth - 1) as usize].push(stats);
+
+                    for rank in 0..RANKS.len() {
+                        let mut game = base.clone();
+                        game.player.str = 14;
+                        game.player.dex = 14;
+                        game.player.con = 14;
+                        game.player.max_hp = game.player.baseline_max_hp();
+                        game.player.weapon = if rank == 0 { Weapon::ShortSword } else { Weapon::LongSword };
+                        game.player.armor = Some(match rank {
+                            0 | 1 => Armor::Leather,
+                            2 => Armor::Chainmail,
+                            _ => Armor::Plate,
+                        });
+                        game.player.ring = rank == 4;
+
+                        if EVIDENCE[rank] > 0 {
+                            game.learn_practice(Practice::Blades, EVIDENCE[rank], 100);
+                            game.learn_practice(Practice::Vitality, EVIDENCE[rank], 100);
+                        }
+                        assert_eq!(
+                            game.player.practice.get(Practice::Blades).rank(),
+                            [
+                                blah_core::Rank::Novice,
+                                blah_core::Rank::Practiced,
+                                blah_core::Rank::Skilled,
+                                blah_core::Rank::Adept,
+                                blah_core::Rank::Expert
+                            ][rank]
+                        );
+                        assert_eq!(game.player.max_hp, 26 + 4 * rank as i32);
+                        assert_eq!((game.player.focus, game.player.max_focus), (24, 24));
+                        game.player.hp = game.player.max_hp;
+                        let starting_hp = game.player.hp;
+                        max_health[rank] = starting_hp;
+
+                        for _ in 0..160 {
+                            if game.player.deaths > 0 || !game.creatures.iter().any(|creature| creature.id == foe_id) {
+                                break;
+                            }
+                            let action = approach_or_attack(&game, foe_id);
+                            game.round(Some(action));
+                        }
+
+                        let result = &mut results[rank][(depth - 1) as usize];
+                        result.trials += 1;
+                        if game.player.deaths > 0 {
+                            result.deaths += 1;
+                        } else if !game.creatures.iter().any(|creature| creature.id == foe_id) {
+                            result.wins += 1;
+                            result.health_lost_on_wins += i64::from(starting_hp - game.player.hp);
+                        } else {
+                            result.stalled += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("Real spawned den foes ({WORLD_SEEDS} world seeds × {} spawn rounds):", SPAWN_ROUNDS.len());
+        for (depth, foes) in foe_stats.iter().enumerate() {
+            assert_eq!(foes.len(), TRIALS_PER_RANK_AND_FLOOR);
+            let mean = |f: fn(&Stats) -> i32| foes.iter().map(f).sum::<i32>() as f64 / foes.len() as f64;
+            println!(
+                "  depth {:>2}: HP {:.1} ({}–{}), AC {:.1}, hit {:.1}, damage {:.1}–{:.1}",
+                depth + 1,
+                mean(|s| s.hp),
+                foes.iter().map(|s| s.hp).min().unwrap(),
+                foes.iter().map(|s| s.hp).max().unwrap(),
+                mean(|s| s.ac),
+                mean(|s| s.hit),
+                mean(|s| s.damage.0),
+                mean(|s| s.damage.1),
+            );
+        }
+        println!("Win % (wins/deaths) / mean Health lost among wins, from {TRIALS_PER_RANK_AND_FLOOR} duels:");
+        println!("rank      | {}", (1..=10).map(|depth| format!("D{depth:02}")).collect::<Vec<_>>().join(" | "));
+        for rank in 0..RANKS.len() {
+            let cells = results[rank]
+                .iter()
+                .map(|result| {
+                    let win_rate = result.wins as f64 * 100.0 / TRIALS_PER_RANK_AND_FLOOR as f64;
+                    if result.wins == 0 {
+                        format!("{win_rate:.1}% ({}/{}); —", result.wins, result.deaths)
+                    } else {
+                        format!(
+                            "{win_rate:.1}% ({}/{}); {:.1}",
+                            result.wins,
+                            result.deaths,
+                            result.health_lost_on_wins as f64 / result.wins as f64
+                        )
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            println!("{:<9} | {cells}", RANKS[rank]);
+            for result in results[rank] {
+                assert_eq!(result.trials, TRIALS_PER_RANK_AND_FLOOR);
+                assert_eq!(result.stalled, 0, "a duel should resolve within the round limit");
+                assert_eq!(result.wins + result.deaths, result.trials);
+            }
+        }
+
+        let expert_at_ten = results[4][9];
+        let mean_loss = if expert_at_ten.wins == 0 {
+            f64::NAN
+        } else {
+            expert_at_ten.health_lost_on_wins as f64 / expert_at_ten.wins as f64
+        };
+        println!(
+            "Expert at depth 10: {}/{} wins, {} deaths, {:.1} Health lost per win ({} max Health)",
+            expert_at_ten.wins, TRIALS_PER_RANK_AND_FLOOR, expert_at_ten.deaths, mean_loss, max_health[4]
+        );
+    }
+}
+
 #[cfg(test)]
 mod cinder_tests {
     use super::*;

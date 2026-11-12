@@ -59,7 +59,7 @@ impl Technique {
     pub(crate) const fn suits(self, weapon: Weapon) -> bool {
         match self {
             Self::Feint => matches!(weapon, Weapon::Dagger),
-            Self::Parry => matches!(weapon, Weapon::ShortSword | Weapon::LongSword),
+            Self::Parry => matches!(weapon, Weapon::ShortSword | Weapon::LongSword | Weapon::Oathfang),
             Self::Stagger => matches!(weapon, Weapon::Mace),
             Self::Sweep => matches!(weapon, Weapon::Staff),
             Self::SteadyShot => true,

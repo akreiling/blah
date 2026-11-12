@@ -17,6 +17,8 @@ pub enum Weapon {
     Mace,
     /// A walking stick.
     Staff,
+    /// The first piece of the Exile's covenant.
+    Oathfang,
 }
 
 impl Weapon {
@@ -28,6 +30,7 @@ impl Weapon {
             Weapon::LongSword => "long sword",
             Weapon::Mace => "mace",
             Weapon::Staff => "staff",
+            Weapon::Oathfang => "oathfang",
         }
     }
 
@@ -39,13 +42,14 @@ impl Weapon {
             Weapon::LongSword => (3, 10),
             Weapon::Mace => (2, 8),
             Weapon::Staff => (1, 6),
+            Weapon::Oathfang => (7, 15),
         }
     }
 
     /// Bonus to hit.
     pub const fn accuracy(self) -> i32 {
         match self {
-            Weapon::Dagger => 2,
+            Weapon::Dagger | Weapon::Oathfang => 2,
             Weapon::ShortSword => 1,
             Weapon::LongSword | Weapon::Staff => 0,
             Weapon::Mace => -1,
@@ -97,6 +101,8 @@ pub enum Armor {
     Chainmail,
     /// Heavy and slow to buy.
     Plate,
+    /// A furnace-born shell, powerful but hostile to field healing.
+    AshenCarapace,
 }
 
 impl Armor {
@@ -106,6 +112,7 @@ impl Armor {
             Armor::Leather => "leather armor",
             Armor::Chainmail => "chainmail",
             Armor::Plate => "plate armor",
+            Armor::AshenCarapace => "ashen carapace",
         }
     }
 
@@ -120,6 +127,7 @@ impl Armor {
             Armor::Leather => 2,
             Armor::Chainmail => 4,
             Armor::Plate => 6,
+            Armor::AshenCarapace => 9,
         }
     }
 }
@@ -180,6 +188,7 @@ impl Item {
                 Armor::Leather => "leather armor",
                 Armor::Chainmail => "chainmail chain mail armor",
                 Armor::Plate => "plate armor",
+                Armor::AshenCarapace => "ashen carapace armor",
             },
             Item::Potion => "healing potion",
             Item::Ring => "ring of warding",
@@ -193,6 +202,14 @@ impl Item {
         let words: Vec<&str> = self.words().split(' ').collect();
         let mut typed = query.split_whitespace().peekable();
         typed.peek().is_some() && typed.all(|t| words.iter().any(|w| w.starts_with(t)))
+    }
+
+    /// Covenant pieces cannot be sold, but can be left in persistent ground piles.
+    pub const fn mythic(self) -> bool {
+        matches!(
+            self,
+            Item::Weapon(Weapon::Oathfang) | Item::Armor(Armor::AshenCarapace) | Item::Relic(crate::Relic::ExileHeart)
+        )
     }
 }
 
@@ -318,6 +335,10 @@ pub enum Kind {
     CinderWarden,
     /// Cinder Watch's one-time bow guard.
     AshSentry,
+    /// Regenerating keeper of the Ashen Forge; Spark seals its wounds.
+    AshColossus,
+    /// A Well of Names guardian whose landed blows steal Focus.
+    HollowCantor,
     /// An individual drawn from a region's evolved life.
     Wild,
 }
@@ -348,6 +369,10 @@ pub struct Stats {
 }
 
 impl Kind {
+    pub(crate) const fn guarded(self) -> bool {
+        matches!(self, Self::CinderWarden | Self::AshSentry | Self::AshColossus | Self::HollowCantor)
+    }
+
     /// Its numbers.
     pub fn stats(self) -> Stats {
         let base = Stats {
@@ -423,6 +448,27 @@ impl Kind {
                 damage: (1, 3),
                 shot: Some((5, (1, 3))),
                 xp: 25,
+                ..base
+            },
+            Kind::AshColossus => Stats {
+                name: "ash colossus".into(),
+                hp: 100,
+                ac: 17,
+                hit: 8,
+                damage: (6, 13),
+                xp: 650,
+                regen: 4,
+                arrow_proof: true,
+                ..base
+            },
+            Kind::HollowCantor => Stats {
+                name: "hollow cantor".into(),
+                hp: 64,
+                ac: 17,
+                hit: 10,
+                damage: (4, 10),
+                shot: Some((5, (4, 10))),
+                xp: 350,
                 ..base
             },
             Kind::Wild => Stats { name: "creature".into(), ..base },

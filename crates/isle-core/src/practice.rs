@@ -73,7 +73,7 @@ impl Practice {
     pub const fn weapon(weapon: Weapon) -> Practice {
         match weapon {
             Weapon::Dagger => Practice::Dagger,
-            Weapon::ShortSword | Weapon::LongSword => Practice::Blades,
+            Weapon::ShortSword | Weapon::LongSword | Weapon::Oathfang => Practice::Blades,
             Weapon::Mace => Practice::Blunt,
             Weapon::Staff => Practice::Staff,
         }

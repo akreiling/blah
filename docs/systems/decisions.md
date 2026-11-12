@@ -32,6 +32,12 @@ Do not treat the committed direction as optional because a prototype rule is dif
 - [x] Starting a new character is a meaningful way to explore a different developmental direction.
 - [x] Advancement comes from adventuring and practice, never elapsed real-world time.
 - [x] Long-term development can produce godlike power.
+- [x] Isle's first demigod step requires a weapon, armor, and relic set, all three equipped together.
+- [x] Its first piece comes from the existing respawning depth-10 den keeper: 2% initially, a quadratic
+  rise after each failed eligible kill, 99% after 20 misses, never a guaranteed individual drop.
+- [x] The first piece guides the player toward two hidden wilderness sites with trials.
+- [x] Both *Island of Kesmai* and the *Death Dealer* books' Gath of Baal inspire this long arc.
+- [x] Post-demigod progression needs further discussion; this set does not settle its enemies or equipment.
 - [x] Endgame growth refines a particular power rather than granting universal mastery.
 - [x] Foes can also possess extraordinary power.
 - [x] Ordinary foes remain ordinary enough to demonstrate the player's advancement.
@@ -65,6 +71,9 @@ The checked items above record design decisions only. They do not indicate imple
 14. Disciplines organize practice and rules. They do not introduce extra class levels or generic point pools.
 15. Composition legality comes from typed component contracts and shared interaction laws, not exact
     recipe membership. Player-facing structured composition is in scope; arbitrary code is not.
+16. The Exile's covenant prototypes the agreed equipment hunt with Oathfang, the ashen carapace, and
+    the exile's heart. Names, combat values, blood costs, and trial counterplay are authored prototype
+    choices, not immutable balance commitments. See [Isle](../ISLE.md#the-exiles-covenant) for rules and measurements.
 
 ## Superseded ideas
 

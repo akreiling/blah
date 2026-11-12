@@ -97,6 +97,8 @@ pub enum Object {
     Watchtower {
         cleared: bool,
     },
+    AshenForge,
+    WellOfNames,
     CinderWarden,
     AshSentry,
     Herb(isle_core::Herb),
@@ -105,8 +107,10 @@ pub enum Object {
     Arrows,
     Potion,
     Weapon,
+    Oathfang,
     Bow,
     Armor,
+    AshenCarapace,
     Ring,
     Treasure,
 }
@@ -118,7 +122,7 @@ impl Object {
 }
 
 #[cfg(test)]
-pub const ALL_OBJECTS: [Object; 32] = [
+pub const ALL_OBJECTS: [Object; 47] = [
     Object::Pine,
     Object::Oak,
     Object::Acacia,
@@ -135,6 +139,8 @@ pub const ALL_OBJECTS: [Object; 32] = [
     Object::Shrine,
     Object::Watchtower { cleared: false },
     Object::Watchtower { cleared: true },
+    Object::AshenForge,
+    Object::WellOfNames,
     Object::CinderWarden,
     Object::AshSentry,
     Object::Herb(isle_core::Herb::Woundleaf),
@@ -143,12 +149,25 @@ pub const ALL_OBJECTS: [Object; 32] = [
     Object::Relic(isle_core::Relic::EmberCharm),
     Object::Relic(isle_core::Relic::Stillstone),
     Object::Relic(isle_core::Relic::HuntersToken),
+    Object::Relic(isle_core::Relic::ExileHeart),
+    Object::Relic(isle_core::Relic::IronrootBead),
+    Object::Relic(isle_core::Relic::Mothglass),
+    Object::Relic(isle_core::Relic::FlintEye),
+    Object::Relic(isle_core::Relic::HollowBell),
+    Object::Relic(isle_core::Relic::RedTooth),
+    Object::Relic(isle_core::Relic::PaleKnot),
+    Object::Relic(isle_core::Relic::StormLens),
+    Object::Relic(isle_core::Relic::GraveSeal),
+    Object::Relic(isle_core::Relic::NightCrown),
+    Object::Relic(isle_core::Relic::Deepheart),
     Object::Coins,
     Object::Arrows,
     Object::Potion,
     Object::Weapon,
+    Object::Oathfang,
     Object::Bow,
     Object::Armor,
+    Object::AshenCarapace,
     Object::Ring,
     Object::Treasure,
 ];
@@ -291,8 +310,10 @@ pub fn item_art(items: &[Item]) -> Option<Object> {
         Item::Gold(_) => Some(Object::Coins),
         Item::Arrows(_) => Some(Object::Arrows),
         Item::Potion => Some(Object::Potion),
+        Item::Weapon(isle_core::Weapon::Oathfang) => Some(Object::Oathfang),
         Item::Weapon(_) => Some(Object::Weapon),
         Item::Bow(_) => Some(Object::Bow),
+        Item::Armor(isle_core::Armor::AshenCarapace) => Some(Object::AshenCarapace),
         Item::Armor(_) => Some(Object::Armor),
         Item::Ring => Some(Object::Ring),
     }
@@ -2687,6 +2708,7 @@ mod tests {
             (Item::Relic(isle_core::Relic::EmberCharm), Object::Relic(isle_core::Relic::EmberCharm)),
             (Item::Relic(isle_core::Relic::Stillstone), Object::Relic(isle_core::Relic::Stillstone)),
             (Item::Relic(isle_core::Relic::HuntersToken), Object::Relic(isle_core::Relic::HuntersToken)),
+            (Item::Relic(isle_core::Relic::ExileHeart), Object::Relic(isle_core::Relic::ExileHeart)),
             (Item::Herb(isle_core::Herb::Woundleaf), Object::Herb(isle_core::Herb::Woundleaf)),
             (Item::Herb(isle_core::Herb::Bogmint), Object::Herb(isle_core::Herb::Bogmint)),
             (Item::Herb(isle_core::Herb::Sunroot), Object::Herb(isle_core::Herb::Sunroot)),
@@ -2694,8 +2716,10 @@ mod tests {
             (Item::Arrows(1), Object::Arrows),
             (Item::Potion, Object::Potion),
             (Item::Weapon(Weapon::Dagger), Object::Weapon),
+            (Item::Weapon(Weapon::Oathfang), Object::Oathfang),
             (Item::Bow(Bow::Shortbow), Object::Bow),
             (Item::Armor(Armor::Leather), Object::Armor),
+            (Item::Armor(Armor::AshenCarapace), Object::AshenCarapace),
             (Item::Ring, Object::Ring),
         ];
         for (item, expected) in variants {

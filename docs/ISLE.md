@@ -1,7 +1,7 @@
 # Isle
 
-Isle is a solo island adventure in the manner of *Island of Kesmai* (Kesmai, 1985), being merged with
-blah one system at a time. Its wilderness now uses blah's seeded procedural terrain and evolved regional
+Isle is a solo island adventure inspired by *Island of Kesmai* (Kesmai, 1985) and the *Death Dealer*
+books' Gath of Baal, being merged with blah one system at a time. Its wilderness uses blah's seeded procedural terrain and evolved regional
 life. Towns are generated on dry ground, each over its own generated Deep, floor after floor down.
 Characters are classless: practice grants power, while experience records adventuring rank.
 
@@ -112,8 +112,37 @@ Spells and weapon techniques share Focus. Metal armor adds two Focus to a spell'
 Focus also returns on its own anywhere: one point every fourth round, and one more in any round a blow of
 yours does useful damage to a real threat, at most one such point per round however many foes you hit.
 Health never returns on its own. The temple restores both resources. Experience thresholds for ranks 2–10
-are 100, 300, 700, 1,500, 3,100, 6,300, 12,700, 25,500, and 51,100. This is a prototype curve, not a
-measured promise of time-to-depth-10.
+are 100, 300, 700, 1,500, 3,100, 6,300, 12,700, 25,500, and 51,100. Those thresholds do not predict
+time-to-depth-10; the following fixed combat survey measures duel outcomes, not campaign time or floor clears.
+
+Each depth's actual den keeper was spawned by the game, using its rule of choosing the strongest of four
+drawn Deep individuals. We ran 256 matched duels per depth and character rank (64 world seeds, four den
+spawn rounds). Characters had STR/DEX/CON 14 and started at the named Blades and Vitality ranks, with full
+Health and 24 Focus; normal practice gains stayed enabled during the duel. Their loadouts advanced from short
+sword and leather (novice), to long sword and leather (practiced),
+chainmail (skilled), plate (adept), then plate and the warding ring (expert). The fighter attacked whenever
+adjacent and followed the foe along walkable paths when it moved. The game resolved each creature's real
+turns and automatic weapon techniques; the fighter used no spells, healing, rest, consumables, or retreat.
+Each cell gives observed win rate and mean Health lost among wins. All non-wins were deaths.
+
+| Deep floor | Den HP, mean (range) | Novice | Practiced | Skilled | Adept | Expert |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 9.7 (7–14) | 100.0% / 2.1 | 100.0% / 1.2 | 100.0% / 0.5 | 100.0% / 0.5 | 100.0% / 0.4 |
+| 2 | 13.5 (10–20) | 100.0% / 4.5 | 100.0% / 3.0 | 100.0% / 1.2 | 100.0% / 0.5 | 100.0% / 0.5 |
+| 3 | 18.0 (13–23) | 96.5% / 9.4 | 99.6% / 6.1 | 100.0% / 2.5 | 100.0% / 1.2 | 100.0% / 0.5 |
+| 4 | 23.0 (18–30) | 89.5% / 13.0 | 97.7% / 9.9 | 100.0% / 4.7 | 100.0% / 2.9 | 100.0% / 1.7 |
+| 5 | 28.3 (23–39) | 61.3% / 15.7 | 84.8% / 13.9 | 98.0% / 8.9 | 100.0% / 6.1 | 100.0% / 3.7 |
+| 6 | 33.8 (26–45) | 35.5% / 17.1 | 72.3% / 15.8 | 91.8% / 12.8 | 99.2% / 9.2 | 100.0% / 6.8 |
+| 7 | 40.5 (33–51) | 12.1% / 19.9 | 36.3% / 18.5 | 73.4% / 18.6 | 94.1% / 15.4 | 98.0% / 11.7 |
+| 8 | 46.8 (36–60) | 6.2% / 20.0 | 23.8% / 20.6 | 50.4% / 21.0 | 76.6% / 18.3 | 94.1% / 14.9 |
+| 9 | 54.0 (44–66) | 0.4% / 22.0 | 6.6% / 20.9 | 26.2% / 23.8 | 51.2% / 24.0 | 78.9% / 22.5 |
+| 10 | 61.0 (52–72) | 0.4% / 20.0 | 2.0% / 23.4 | 10.5% / 23.0 | 31.2% / 24.9 | 55.5% / 24.0 |
+
+Health lost is shown in points and only for wins. For example, the expert loadout won 142 of 256 depth-10
+duels and died in the other 114; its wins cost 24.0 Health on average out of 42. Depth 10 is still dangerous
+for the current top rank, not a victory lap. The survey measures no power beyond expert or depth 10, so a
+post-demigod tier remains a separate design discussion. The covenant below provides the first
+equipment-based step beyond mortal expert; it does not extend the practice ladder or add post-demigod foes.
 
 ## Weapon techniques
 
@@ -179,6 +208,108 @@ unlock the charred coffer, then `get all`/`,` at the tower for an ember charm, b
 Full-sack leftovers follow the ordinary cache rules. The tower's brazier goes cold permanently.
 Its badge changes from `!` to `?` when cleared, then disappears when claimed
 (`W!`, `W?`, and `W.` in the text map).
+
+### Deep conquests
+
+Stairs are always open. Sneaking deeper and taking treasure does not require killing earlier bosses.
+Defeating a floor's den keeper permanently records that specific town and depth as conquered.
+Death, travel, and save/load never erase it. `look` and the place panel show the current floor's status;
+`inventory` recalls all conquests. Older saves begin with no recorded conquests.
+
+The first keeper kill on each of depths 1–10 guarantees the following relic in the keeper's persistent
+ground pile, in addition to normal loot. Use `get` to collect it; a full sack leaves it safely on the
+ground. The prize is awarded once per town and floor, not once per respawn. Keepers still respawn and
+drop their ordinary hoards. Deeper floors retain open exploration and conquest records, but this reward
+set covers only the first ten floors; it does not introduce post-demigod content.
+
+Only one relic can be worn at a time. These are build choices, not ten stacking upgrades.
+Effects end on removal, capacity increases never refill Health or Focus, and practice is unchanged.
+The relics can be dropped and sold like ordinary relics; selling one does not renew its first-clear prize.
+
+| Depth | First-conquest relic | Benefit | Cost |
+|---:|---|---|---|
+| 1 | Ironroot bead | +1 melee damage | -1 archery accuracy |
+| 2 | Mothglass | +15 percentage points to hiding, capped at 100% | -1 armor class |
+| 3 | Flint eye | +2 arrow damage | -2 Spark damage |
+| 4 | Hollow bell | +4 maximum Focus | -2 melee damage |
+| 5 | Red tooth | +3 melee damage | -2 armor class |
+| 6 | Pale knot | +4 Heal recovery | -2 Spark damage |
+| 7 | Storm lens | +4 Spark damage | -4 maximum Focus |
+| 8 | Grave seal | +3 active ward protection | -3 Heal recovery |
+| 9 | Night crown | +2 armor class | -15 percentage points to hiding |
+| 10 | Deepheart | +8 maximum Health | -6 maximum Focus |
+
+Damage and Heal recovery remain at least one. Conquering depth 10 does not guarantee Oathfang:
+the ordinary mythic drop roll below remains separate from the guaranteed Deepheart prize.
+This milestone system does not establish a measured weeks-long campaign time.
+
+### The Exile's covenant
+
+The long hunt begins with the **existing respawning depth-10 den keeper**, not a new boss.
+Each eligible kill has a 2% initial chance to leave **Oathfang** in its ordinary persistent loot pile.
+Every failed kill increases the next chance quadratically:
+`200 + floor(9700 × min(misses, 20)² / 400)` basis points. Thus the chances after 0, 5, 10,
+15, and 20 misses are 2%, 8.06%, 26.25%, 56.56%, and 99%. It never reaches 100%;
+even the twenty-first kill can fail. Misses persist across death, travel between towns, and saves.
+Other depths, ordinary creatures on depth 10, and failed fights do not advance the ramp.
+The separate seeded roll does not spend combat dice. Once the blade drops, no keeper generates another,
+even if you leave it behind. A full sack leaves it on the ground.
+
+Picking up the blade awakens a remembered call:
+“They buried my body in the furnace and my name beneath the water.”
+`look` and `inventory` recall bearings to the **Ashen Forge** and **Well of Names** from anywhere on
+the surface; underground they remind you to return to daylight. Two seeded dry clearings are found by
+walking the actual map from home, not by guessing coordinates across water. Small islands may place the
+trials closer together. Seeing each site reveals its warning; neither discovery nor `get all` starts combat.
+
+- **Ashen Forge:** use `challenge` at the furnace to wake an ash colossus. It regenerates four Health
+  each turn and halves arrow damage. A landed Spark seals its wounds for three of its turns.
+  Defeat it, return to the furnace, and `get all` for the **ashen carapace**.
+- **Well of Names:** `challenge` wakes two hollow cantors on opposite sides. Every landed blow or shot
+  steals two Focus. Wards, binding, breaking firing lines, and closing distance offer different answers.
+  Defeat both original cantors and `get all` at the well for the **exile's heart**.
+
+The trials preserve original guardians, wounds, fire suppression, and finite lessons across retreat,
+death, and reload. Guardians never enter or attack into towns. Clearing a trial is permanent. A full
+sack leaves the unique reward in a persistent ground pile; claiming again cannot duplicate it.
+The sites' badges change from `!` to `?` when cleared, then disappear after claiming
+(`A!`/`A?`/`A.` for the Forge and `N!`/`N?`/`N.` for the Well in the text map).
+
+| Piece | Power | Price |
+|---|---|---|
+| Oathfang (Blades weapon) | 7–15 base damage, +2 accuracy; restores one third of useful melee damage as Health, minimum 1 | All weapon techniques cost +1 Focus while held; harmless foes and exhausted damage allowances cannot feed it |
+| Ashen carapace (metal armor) | 9 armor | All field Health recovery is halved, minimum 1, including spells, herbs, potions, rest, and Oathfang; temple healing is unchanged |
+| Exile's heart (relic) | +6 Spark damage; two passive Focus per fourth round instead of one | Each released spell also costs two Health; insufficient Health refuses the cast without consuming it; no practice for this blood cost |
+
+`inventory` explains each piece before equipping it. Use `wield oathfang`, `wear carapace`, and
+`wear exile heart`. Only **all three equipped together** grant demigod power: +20 maximum Health,
+four points of armor pierced by attacks and aimed spells, and arrows that ignore arrow-proof plating.
+The panel marks the active covenant. Merely owning the pieces is not ascension.
+Breaking the set immediately removes the power and clamps Health to the mortal maximum.
+Completing it again creates capacity, never free healing. Normal practice, individual trade-offs, and
+spell Focus costs remain in force.
+
+Pieces can be dropped and retrieved, but the outfitter refuses to buy them. Death retains equipped and
+carried gear as usual. Old saves start with an untouched hunt. There are no post-demigod enemies,
+second set, or runtime model calls in this prototype.
+
+The combat survey `measure_covenant_progression_and_both_wilderness_trials` uses real rounds and
+128 matched depth-10 den duels (32 world seeds, four spawn rounds). STR/DEX/CON are 14, with expert
+Blades and Vitality, ring, 24 Focus, and no spells, healing actions, or retreat. All loadouts start full:
+
+| Loadout | Wins / 128 | Mean Health remaining among wins |
+|---|---:|---:|
+| Ordinary expert (long sword, plate) | 82 | 14.7 / 42 |
+| Oathfang and plate | 122 | 29.8 / 42 |
+| Oathfang and carapace | 124 | 31.5 / 42 |
+| Complete covenant | 128 | 53.7 / 62 |
+
+These are encounter samples, not campaign odds or a guarantee against every keeper. The separate trial
+survey uses seed 7's actual sites, 128 combat seeds, STR/DEX/INT/CON 14, expert practice in all disciplines,
+ring, and full Health/Focus. The Forge loadout has Oathfang and plate; the Well loadout has Oathfang and
+carapace. Melee-only pursuit wins 116/128 at the Forge and 77/128 at the Well. A prepared policy
+(Shield, periodic Spark at the Forge, up to six potions below 18 Health, otherwise pursuit and melee)
+wins 127/128 and 128/128 respectively. Preparation matters; these are not tests of every possible strategy.
 
 ### Herbs and field recovery
 
@@ -360,6 +491,9 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
   full-sack leftovers, visible trade-offs, one-slot equipment, exposed rounds, no-refill removal, and reloads.
 - `python3 crates/isle/scripts/cinder.py` walks to the natural Watch, reads its warning, prepares and
   fights its guards, reloads partial progress, and checks the permanent reward and quiet tower.
+- `python3 crates/isle/scripts/mythic.py` starts from an explicit expert/first-drop checkpoint, then
+  picks up Oathfang, walks to both naturally placed trials, fights their real guardians, claims and
+  equips the rewards, and checks demigod power, no-refill swapping, and exact reload.
 - `python3 crates/isle/scripts/wildlife.py` checks evolved population, reload, the IN SIGHT panel,
   and shooting an actual spawned individual by its regional name.
 - `python3 crates/isle/scripts/towns.py` visits two generated towns, exercises their services, and checks

@@ -20,6 +20,10 @@ pub enum LandmarkKind {
     Shrine,
     /// A one-time guarded destination near the starting town.
     CinderWatch,
+    /// The covenant's trial of endurance.
+    AshenForge,
+    /// The covenant's trial of stolen Focus.
+    WellOfNames,
 }
 
 impl LandmarkKind {
@@ -30,6 +34,8 @@ impl LandmarkKind {
             Self::Camp => "abandoned camp",
             Self::Shrine => "ruined shrine",
             Self::CinderWatch => "Cinder Watch",
+            Self::AshenForge => "Ashen Forge",
+            Self::WellOfNames => "Well of Names",
         }
     }
 
@@ -40,6 +46,8 @@ impl LandmarkKind {
             Self::Camp => "A waxed bundle lies beside the cold fire.",
             Self::Shrine => "A small coffer rests beneath the broken altar.",
             Self::CinderWatch => "A charred coffer lies beneath the ruined watchtower.",
+            Self::AshenForge => "A buried furnace breathes beneath a shell of black iron.",
+            Self::WellOfNames => "Voices rise from a well with no reflection.",
         }
     }
 }
@@ -75,6 +83,11 @@ impl Landmark {
     }
 
     pub(crate) fn contents(self, seed: u64) -> Vec<Item> {
+        match self.kind {
+            LandmarkKind::AshenForge => return vec![Item::Armor(crate::Armor::AshenCarapace)],
+            LandmarkKind::WellOfNames => return vec![Item::Relic(crate::Relic::ExileHeart)],
+            _ => {}
+        }
         if self.kind == LandmarkKind::CinderWatch {
             return vec![Item::Relic(crate::Relic::EmberCharm), Item::Herb(crate::Herb::Bogmint), Item::Gold(120)];
         }

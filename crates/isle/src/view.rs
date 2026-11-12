@@ -59,6 +59,7 @@ const YOU: u32 = 0xff_f2_7a;
 const HP: u32 = 0xd0_48_48;
 const FOCUS: u32 = 0x5c_8c_f0;
 const CLOCK: u32 = 0x8c_c0_6a;
+const SET_GLOW: u32 = 0xb9_91_d5;
 const EMPTY_BAR: u32 = 0x20_22_2a;
 const CAVE_LIGHT: u32 = 0x0c_23_20;
 
@@ -517,6 +518,10 @@ impl IsleView {
             .child(pair("Bow", bow_text(p)))
             .child(pair("Worn", worn_text(p)))
             .child(dim_line_owned(practice_text(p)));
+        if let Some(status) = demigod_status(p) {
+            panel =
+                panel.child(div().h(px(LINE)).flex_none().text_size(px(12.0)).text_color(rgb(SET_GLOW)).child(status));
+        }
         if let Some(relic) = p.relic {
             panel = panel.child(pair("Relic", relic.name().into()));
             for line in wrap(relic.description(), 36) {
@@ -607,6 +612,9 @@ impl IsleView {
             panel.push(format!("Bow {}", bow_text(p)));
             panel.push(format!("Worn {}", worn_text(p)));
             panel.push(practice_text(p));
+            if let Some(status) = demigod_status(p) {
+                panel.push(status.into());
+            }
             if let Some(relic) = p.relic {
                 panel.push(format!("Relic {}", relic.name()));
                 panel.extend(wrap(relic.description(), 36));
@@ -726,17 +734,37 @@ fn cell(game: &Game, pos: Pos, labels: &[(Pos, char)]) -> (String, u32, Option<u
     }
     if let Some(site) = game.landmark_at(pos) {
         let color = if visible { HEADING } else { dimmed(HEADING) };
-        if site.kind == LandmarkKind::CinderWatch {
-            let glyph = if site.opened {
-                "W."
-            } else if game.cinder_watch().is_some_and(|watch| watch.phase == isle_core::WatchPhase::Cleared) {
-                "W?"
-            } else {
-                "W!"
-            };
-            return (glyph.into(), color, back);
-        }
-        return (if site.opened { "&." } else { "&?" }.into(), color, back);
+        let glyph = match site.kind {
+            LandmarkKind::CinderWatch => {
+                if site.opened {
+                    "W."
+                } else if game.cinder_watch().is_some_and(|watch| watch.phase == isle_core::WatchPhase::Cleared) {
+                    "W?"
+                } else {
+                    "W!"
+                }
+            }
+            LandmarkKind::AshenForge => {
+                if site.opened {
+                    "A."
+                } else if covenant_site_cleared(game, pos) {
+                    "A?"
+                } else {
+                    "A!"
+                }
+            }
+            LandmarkKind::WellOfNames => {
+                if site.opened {
+                    "N."
+                } else if covenant_site_cleared(game, pos) {
+                    "N?"
+                } else {
+                    "N!"
+                }
+            }
+            _ => return (if site.opened { "&." } else { "&?" }.into(), color, back),
+        };
+        return (glyph.into(), color, back);
     }
     if game.herb_at(pos).is_some_and(|patch| !patch.picked) {
         let color = 0x9a_c8_76;
@@ -790,6 +818,14 @@ fn practice_text(p: &Player) -> String {
     )
 }
 
+fn demigod_status(p: &Player) -> Option<&'static str> {
+    p.is_demigod().then_some("DEMIGOD · EXILE SET")
+}
+
+fn covenant_site_cleared(game: &Game, pos: Pos) -> bool {
+    game.covenant().trials.iter().any(|trial| trial.pos == pos && trial.phase == isle_core::WatchPhase::Cleared)
+}
+
 fn bow_text(p: &Player) -> String {
     match p.bow {
         Some(bow) => format!("{} · {} arrows{}", bow.name(), p.arrows, if p.nocked { " · NOCKED" } else { "" }),
@@ -831,7 +867,14 @@ fn place_text(game: &Game) -> String {
     match game.zone() {
         Zone::Shop => format!("{} · shop", game.level().name_at(game.player().pos)),
         Zone::Temple => format!("{} · temple", game.level().name_at(game.player().pos)),
-        Zone::Open => game.level().name_at(game.player().pos).to_owned(),
+        Zone::Open => {
+            let name = game.level().name_at(game.player().pos).to_owned();
+            if matches!(game.player().at, isle_core::LevelId::Deep(..)) {
+                format!("{name} · {}", if game.conquered(game.player().at) { "conquered" } else { "unconquered" })
+            } else {
+                name
+            }
+        }
     }
 }
 
@@ -881,6 +924,8 @@ fn initial(kind: Kind) -> char {
         Kind::Troll => 'T',
         Kind::CinderWarden => 'C',
         Kind::AshSentry => 'a',
+        Kind::AshColossus => 'X',
+        Kind::HollowCantor => 'h',
         Kind::Wild => '*',
     }
 }
@@ -954,6 +999,8 @@ fn map_cell_art_in<'a>(
             LandmarkKind::CinderWatch => Object::Watchtower {
                 cleared: game.cinder_watch().is_some_and(|watch| watch.phase == isle_core::WatchPhase::Cleared),
             },
+            LandmarkKind::AshenForge => Object::AshenForge,
+            LandmarkKind::WellOfNames => Object::WellOfNames,
         });
     }
     if let Some(patch) = game.herb_at(pos).filter(|patch| !patch.picked) {
@@ -1098,6 +1145,11 @@ fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache, step: u8, ela
                         if game.landmark_at(pos).is_some_and(|site| !site.opened) =>
                     {
                         Some("?")
+                    }
+                    Object::AshenForge | Object::WellOfNames
+                        if game.landmark_at(pos).is_some_and(|site| !site.opened) =>
+                    {
+                        Some(if covenant_site_cleared(game, pos) { "?" } else { "!" })
                     }
                     _ => None,
                 };
@@ -1626,6 +1678,63 @@ mod tests {
             let unknown: Game = serde_json::from_value(save.clone()).unwrap();
             assert!(map_cell_art(&unknown, (me.0 + 80, me.1), &[]).is_none());
             assert_eq!(cell(&unknown, (me.0 + 80, me.1), &[]).0, "  ");
+        }
+    }
+
+    #[test]
+    fn covenant_sites_have_distinct_markers_and_art() {
+        let game = made(7);
+        let me = game.player().pos;
+        let pos = (me.0 + 1, me.1);
+        let base = serde_json::to_value(&game).unwrap();
+        for (kind, object, unopened, opened) in [
+            (LandmarkKind::AshenForge, Object::AshenForge, "A!", "A."),
+            (LandmarkKind::WellOfNames, Object::WellOfNames, "N!", "N."),
+        ] {
+            let mut save = base.clone();
+            save["landmarks"] = serde_json::json!([isle_core::Landmark { pos, kind, opened: false }]);
+            let visible: Game = serde_json::from_value(save.clone()).unwrap();
+            assert_eq!(cell(&visible, pos, &[]).0, unopened);
+            assert_eq!(map_cell_art(&visible, pos, &[]).unwrap().terrain.object, Some(object));
+
+            save["covenant"]["trials"] = serde_json::json!([{
+                "pos": pos, "kind": kind, "phase": "Cleared", "guards": [null, null]
+            }]);
+            let cleared: Game = serde_json::from_value(save.clone()).unwrap();
+            assert_eq!(cell(&cleared, pos, &[]).0, if kind == LandmarkKind::AshenForge { "A?" } else { "N?" });
+
+            save["landmarks"][0]["opened"] = serde_json::json!(true);
+            let claimed: Game = serde_json::from_value(save.clone()).unwrap();
+            assert_eq!(cell(&claimed, pos, &[]).0, opened);
+
+            save["player"]["pos"] = serde_json::json!((me.0 + 40, me.1));
+            let remembered: Game = serde_json::from_value(save).unwrap();
+            assert!(!remembered.sees(pos));
+            assert_eq!(cell(&remembered, pos, &[]).0, opened);
+            assert!(map_cell_art(&remembered, pos, &[]).unwrap().remembered);
+            assert_eq!(map_cell_art(&remembered, pos, &[]).unwrap().terrain.object, Some(object));
+        }
+    }
+
+    #[test]
+    fn demigod_indicator_requires_the_full_equipped_set() {
+        let game = made(7);
+        let mut save = serde_json::to_value(&game).unwrap();
+        save["player"]["weapon"] = serde_json::json!("Oathfang");
+        save["player"]["armor"] = serde_json::json!("AshenCarapace");
+        save["player"]["relic"] = serde_json::json!("ExileHeart");
+        let complete: Game = serde_json::from_value(save.clone()).unwrap();
+        assert_eq!(demigod_status(complete.player()), Some("DEMIGOD · EXILE SET"));
+
+        for (field, value) in [
+            ("weapon", serde_json::json!("ShortSword")),
+            ("armor", serde_json::Value::Null),
+            ("relic", serde_json::Value::Null),
+        ] {
+            let mut incomplete = save.clone();
+            incomplete["player"][field] = value;
+            let incomplete: Game = serde_json::from_value(incomplete).unwrap();
+            assert_eq!(demigod_status(incomplete.player()), None, "{field}");
         }
     }
 
