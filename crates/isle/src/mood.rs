@@ -146,7 +146,7 @@ impl Mood {
 /// Lava seams: narrow, branching cracks, only in some regions of basalt floor.
 pub fn seam(seed: u64, p: (i64, i64)) -> bool {
     let (x, y) = (p.0 as f32, p.1 as f32);
-    value_noise(seed, 46, x / 21.0, y / 21.0).abs() < 0.035 && value_noise(seed, 47, x / 40.0, y / 40.0) > 0.12
+    value_noise(seed, 46, x / 21.0, y / 21.0).abs() < 0.028 && value_noise(seed, 47, x / 40.0, y / 40.0) > 0.25
 }
 
 pub const EMBER: [u8; 3] = [118, 36, 22];

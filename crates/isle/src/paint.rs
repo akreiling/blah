@@ -9,12 +9,14 @@ use crate::art::Object;
 use crate::mood::Stone;
 
 const SIDE: i32 = 32;
+/// Rows of headroom above an object's cell.
+pub const HEAD: i32 = 12;
 
 const fn hex(v: u32) -> [u8; 3] {
     [(v >> 16) as u8, (v >> 8) as u8, v as u8]
 }
 
-/// A surface look, chosen per biome and blended where biomes meet.
+/// A surface look, chosen per biome with ragged borders where biomes meet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Style {
     /// Temperate land: quiet greens, damp earth.
@@ -25,6 +27,7 @@ pub enum Style {
     Hearth,
 }
 
+#[cfg(test)]
 pub const STYLES: [Style; 3] = [Style::Moss, Style::Fable, Style::Hearth];
 
 /// The named colors one look draws with.
@@ -197,18 +200,19 @@ pub fn mix(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
 
 const WHITE: [u8; 3] = [255, 255, 255];
 
-/// A 32×32 transparent drawing surface. Like the studies' drawing calls, shapes replace pixels rather than
-/// compositing, so a shadow drawn first stays translucent only where nothing covers it.
+/// A 32-wide transparent drawing surface, with [`HEAD`] rows above the cell at negative y. Like the studies'
+/// drawing calls, shapes replace pixels rather than compositing, so a shadow drawn first stays translucent
+/// only where nothing covers it.
 pub struct Canvas(pub RgbaImage);
 
 impl Canvas {
     pub fn new() -> Self {
-        Canvas(RgbaImage::new(SIDE as u32, SIDE as u32))
+        Canvas(RgbaImage::new(SIDE as u32, (SIDE + HEAD) as u32))
     }
 
     fn set(&mut self, x: i32, y: i32, c: [u8; 4]) {
-        if (0..SIDE).contains(&x) && (0..SIDE).contains(&y) {
-            self.0.put_pixel(x as u32, y as u32, Rgba(c));
+        if (0..SIDE).contains(&x) && (-HEAD..SIDE).contains(&y) {
+            self.0.put_pixel(x as u32, (y + HEAD) as u32, Rgba(c));
         }
     }
 
@@ -307,8 +311,41 @@ impl Canvas {
     }
 
     fn shadow(&mut self, p: &Palette) {
+        self.shadow_in(p, &Grow::new(1, (16, 28)));
+    }
+
+    fn shadow_in(&mut self, p: &Palette, grow: &Grow) {
         let [r, g, b] = p.ink;
-        self.ellipse((5, 25, 27, 29), [r, g, b, 80], None);
+        let (x0, y0, x1, y1) = grow.rect(5, 25, 27, 29);
+        self.ellipse((x0, y0, x1, y1), [r, g, b, 80], None);
+    }
+}
+
+/// Natural objects come in three sizes, scaled about the foot of the trunk.
+const SIZES: [f32; 3] = [0.8, 1.0, 1.18];
+
+struct Grow {
+    scale: f32,
+    foot: (i32, i32),
+}
+
+impl Grow {
+    fn new(size: u8, foot: (i32, i32)) -> Self {
+        Grow { scale: SIZES[usize::from(size.min(2))], foot }
+    }
+
+    fn at(&self, (x, y): (i32, i32)) -> (i32, i32) {
+        let f = |v: i32, o: i32| o + ((v - o) as f32 * self.scale).round() as i32;
+        (f(x, self.foot.0), f(y, self.foot.1))
+    }
+
+    fn all(&self, points: &[(i32, i32)]) -> Vec<(i32, i32)> {
+        points.iter().map(|&p| self.at(p)).collect()
+    }
+
+    fn rect(&self, x0: i32, y0: i32, x1: i32, y1: i32) -> (i32, i32, i32, i32) {
+        let ((a, b), (c, d)) = (self.at((x0, y0)), self.at((x1, y1)));
+        (a, b, c, d)
     }
 }
 
@@ -316,40 +353,47 @@ fn solid(c: [u8; 3]) -> [u8; 4] {
     [c[0], c[1], c[2], 255]
 }
 
-/// Draw an object in `p`. `snowy` dusts conifers; `hot` threads boulders with lava.
-pub fn object(object: Object, p: &Palette, snowy: bool, hot: bool) -> RgbaImage {
+/// Draw an object in `p` at `size` (0 to 2; only natural objects vary). `snowy` dusts conifers; `hot` threads
+/// boulders with lava. The image is [`HEAD`] pixels taller than a cell, so big crowns can rise over the cell
+/// above; the cell's own square is its lower 32 rows.
+pub fn object(object: Object, p: &Palette, snowy: bool, hot: bool, size: u8) -> RgbaImage {
     let mut d = Canvas::new();
     let ink = Some(p.ink);
     match object {
         Object::Oak => {
-            d.shadow(p);
-            d.rect(14, 19, 17, 27, p.ink);
-            d.rect(15, 19, 16, 26, p.bark);
+            let g = Grow::new(size, (16, 28));
+            d.shadow_in(p, &g);
+            let (x0, y0, x1, y1) = g.rect(14, 19, 17, 27);
+            d.rect(x0, y0, x1, y1, p.ink);
+            d.rect(x0 + 1, y0, x1 - 1, y1 - 1, p.bark);
             d.poly(
-                &[(15, 2), (24, 8), (23, 12), (29, 17), (25, 23), (17, 25), (7, 23), (3, 18), (7, 12), (6, 8)],
+                &g.all(&[(15, 2), (24, 8), (23, 12), (29, 17), (25, 23), (17, 25), (7, 23), (3, 18), (7, 12), (6, 8)]),
                 p.leaf,
                 ink,
             );
-            d.poly(&[(15, 4), (22, 8), (20, 12), (11, 14), (6, 17), (8, 10)], p.leafhi, None);
-            d.line(&[(11, 19), (16, 16), (22, 17)], mix(p.leaf, p.ink, 0.25), 1);
-            d.line(&[(20, 20), (25, 19)], mix(p.leaf, p.ink, 0.25), 1);
-            for (x, y) in [(18, 6), (10, 9), (13, 12), (19, 10)] {
+            d.poly(&g.all(&[(15, 4), (22, 8), (20, 12), (11, 14), (6, 17), (8, 10)]), p.leafhi, None);
+            d.line(&g.all(&[(11, 19), (16, 16), (22, 17)]), mix(p.leaf, p.ink, 0.25), 1);
+            d.line(&g.all(&[(20, 20), (25, 19)]), mix(p.leaf, p.ink, 0.25), 1);
+            for at in [(18, 6), (10, 9), (13, 12), (19, 10)] {
+                let (x, y) = g.at(at);
                 d.point(x, y, mix(p.leafhi, WHITE, 0.25));
             }
         }
         Object::Pine => {
-            d.shadow(p);
-            d.rect(14, 22, 17, 28, p.ink);
-            d.rect(15, 22, 16, 27, p.bark);
+            let g = Grow::new(size, (16, 28));
+            d.shadow_in(p, &g);
+            let (x0, y0, x1, y1) = g.rect(14, 22, 17, 28);
+            d.rect(x0, y0, x1, y1, p.ink);
+            d.rect(x0 + 1, y0, x1 - 1, y1 - 1, p.bark);
             let tiers =
                 [(16, 1), (22, 9), (19, 9), (25, 16), (21, 16), (27, 23), (5, 23), (11, 16), (7, 16), (13, 9), (10, 9)];
-            d.poly(&tiers, p.leaf, ink);
+            d.poly(&g.all(&tiers), p.leaf, ink);
             let dark = mix(p.leaf, p.ink, 0.35);
-            d.poly(&[(17, 4), (21, 9), (18, 9)], dark, None);
-            d.poly(&[(18, 11), (24, 16), (20, 16)], dark, None);
-            d.poly(&[(20, 18), (26, 22), (17, 22)], dark, None);
+            d.poly(&g.all(&[(17, 4), (21, 9), (18, 9)]), dark, None);
+            d.poly(&g.all(&[(18, 11), (24, 16), (20, 16)]), dark, None);
+            d.poly(&g.all(&[(20, 18), (26, 22), (17, 22)]), dark, None);
             for line in [[(15, 3), (11, 8)], [(13, 10), (8, 15)], [(11, 17), (6, 22)]] {
-                d.line(&line, p.leafhi, 1);
+                d.line(&g.all(&line), p.leafhi, 1);
             }
             if snowy {
                 let snow = mix(p.snow, WHITE, 0.3);
@@ -360,18 +404,87 @@ pub fn object(object: Object, p: &Palette, snowy: bool, hot: bool) -> RgbaImage 
                     [(18, 16), (21, 16)],
                     [(6, 23), (10, 23)],
                 ] {
-                    d.line(&line, snow, 1);
+                    d.line(&g.all(&line), snow, 1);
                 }
             }
         }
+        Object::Acacia => {
+            let g = Grow::new(size, (16, 28));
+            let [r, gr, b] = p.ink;
+            let (x0, y0, x1, y1) = g.rect(2, 25, 30, 29);
+            d.ellipse((x0, y0, x1, y1), [r, gr, b, 80], None);
+            let trunk = g.all(&[(16, 28), (16, 20), (12, 13)]);
+            let branch = g.all(&[(16, 21), (21, 12)]);
+            for path in [&trunk, &branch] {
+                d.line(path, p.ink, 3);
+            }
+            for path in [&trunk, &branch] {
+                d.line(path, p.bark, 1);
+            }
+            let crown = [(2, 12), (6, 8), (12, 6), (20, 6), (26, 8), (30, 12), (25, 14), (16, 15), (7, 14)];
+            d.poly(&g.all(&crown), p.leaf, ink);
+            d.poly(&g.all(&[(6, 9), (12, 7), (20, 7), (25, 9), (21, 11), (10, 11)]), p.leafhi, None);
+            d.line(&g.all(&[(6, 13), (16, 14), (25, 13)]), mix(p.leaf, p.ink, 0.3), 1);
+        }
+        Object::Canopy => {
+            let g = Grow::new(size, (16, 28));
+            let [r, gr, b] = p.ink;
+            let (x0, y0, x1, y1) = g.rect(2, 24, 30, 30);
+            d.ellipse((x0, y0, x1, y1), [r, gr, b, 90], None);
+            d.poly(&g.all(&[(13, 28), (14, 17), (18, 17), (19, 28), (22, 29), (10, 29)]), p.bark, ink);
+            let dark = mix(p.leaf, p.ink, 0.5);
+            let crown = [(16, -4), (24, -1), (29, 5), (30, 13), (26, 20), (18, 22), (10, 21), (4, 17), (2, 9), (6, 1)];
+            d.poly(&g.all(&crown), dark, ink);
+            for (x0, y0, x1, y1) in [(5, 3, 16, 12), (16, 0, 27, 10), (10, 10, 23, 19)] {
+                let (a, b, c, e) = g.rect(x0, y0, x1, y1);
+                d.ellipse((a, b, c, e), solid(mix(p.leaf, p.ink, 0.25)), None);
+            }
+            for (x0, y0, x1, y1) in [(8, 4, 12, 7), (19, 1, 23, 4), (14, 11, 18, 14)] {
+                let (a, b, c, e) = g.rect(x0, y0, x1, y1);
+                d.ellipse((a, b, c, e), solid(p.leaf), None);
+            }
+            for vine in [[(7, 17), (7, 25)], [(24, 18), (24, 24)], [(12, 20), (11, 26)]] {
+                d.line(&g.all(&vine), mix(p.leaf, p.ink, 0.1), 1);
+            }
+        }
+        Object::Willow => {
+            let g = Grow::new(size, (16, 28));
+            d.shadow_in(p, &g);
+            let (x0, y0, x1, y1) = g.rect(14, 15, 17, 28);
+            d.rect(x0, y0, x1, y1, p.ink);
+            d.rect(x0 + 1, y0, x1 - 1, y1 - 1, p.bark);
+            let crown = [
+                (16, 1),
+                (24, 4),
+                (28, 10),
+                (29, 21),
+                (25, 17),
+                (22, 23),
+                (19, 18),
+                (16, 23),
+                (13, 18),
+                (10, 23),
+                (7, 17),
+                (3, 21),
+                (4, 10),
+                (8, 4),
+            ];
+            d.poly(&g.all(&crown), p.leaf, ink);
+            d.poly(&g.all(&[(10, 5), (16, 3), (22, 5), (18, 8), (12, 8)]), p.leafhi, None);
+            for (x, end) in [(7, 18), (11, 21), (15, 20), (19, 21), (23, 19), (26, 17)] {
+                d.line(&g.all(&[(x, 9), (x, end)]), mix(p.leafhi, p.leaf, 0.35), 1);
+            }
+        }
         Object::Boulder => {
-            d.shadow(p);
-            d.poly(&[(4, 23), (5, 15), (11, 10), (22, 11), (28, 19), (26, 26), (10, 27)], p.rock, ink);
-            d.poly(&[(6, 16), (12, 12), (21, 12), (17, 20), (8, 22)], p.stone, None);
-            d.line(&[(20, 15), (17, 20), (22, 24)], mix(p.rock, p.ink, 0.3), 1);
+            let g = Grow::new(size, (16, 27));
+            d.shadow_in(p, &g);
+            d.poly(&g.all(&[(4, 23), (5, 15), (11, 10), (22, 11), (28, 19), (26, 26), (10, 27)]), p.rock, ink);
+            d.poly(&g.all(&[(6, 16), (12, 12), (21, 12), (17, 20), (8, 22)]), p.stone, None);
+            d.line(&g.all(&[(20, 15), (17, 20), (22, 24)]), mix(p.rock, p.ink, 0.3), 1);
             if hot {
-                d.line(&[(19, 14), (17, 19), (20, 22)], p.lava, 1);
-                d.point(18, 19, p.glow);
+                d.line(&g.all(&[(19, 14), (17, 19), (20, 22)]), p.lava, 1);
+                let (x, y) = g.at((18, 19));
+                d.point(x, y, p.glow);
             }
         }
         Object::Door => {
@@ -503,7 +616,7 @@ mod tests {
     fn every_object_is_a_visible_outlined_shape_on_transparency() {
         for object in ALL_OBJECTS {
             for style in STYLES {
-                let image = super::object(object, surface(style), false, false);
+                let image = super::object(object, surface(style), false, false, 1);
                 let visible = image.pixels().filter(|p| p[3] == 255).count();
                 assert!(visible > 40 && visible < 900, "{object:?} {style:?}: {visible}");
                 assert!(image.pixels().any(|p| p.0[..3] == surface(style).ink), "{object:?} has an ink outline");
@@ -516,9 +629,24 @@ mod tests {
         for object in ALL_OBJECTS {
             let masks: Vec<Vec<u8>> = STYLES
                 .iter()
-                .map(|&s| super::object(object, surface(s), false, false).pixels().map(|p| p[3]).collect())
+                .map(|&s| super::object(object, surface(s), false, false, 1).pixels().map(|p| p[3]).collect())
                 .collect();
             assert!(masks.windows(2).all(|w| w[0] == w[1]), "{object:?}");
         }
+    }
+
+    #[test]
+    fn natural_objects_grow_in_sizes_and_big_crowns_rise_into_the_headroom() {
+        let area =
+            |object, size| super::object(object, &MOSS, false, false, size).pixels().filter(|p| p[3] == 255).count();
+        for object in [Object::Pine, Object::Oak, Object::Acacia, Object::Canopy, Object::Willow, Object::Boulder] {
+            assert!(area(object, 0) < area(object, 1) && area(object, 1) < area(object, 2), "{object:?}");
+        }
+        let above = |object, size| {
+            let image = super::object(object, &MOSS, false, false, size);
+            (0..HEAD as u32).any(|y| (0..32).any(|x| image.get_pixel(x, y)[3] != 0))
+        };
+        assert!(above(Object::Canopy, 1) && above(Object::Oak, 2));
+        assert!(!above(Object::Oak, 1) && !above(Object::Coins, 1), "only big crowns leave the cell");
     }
 }

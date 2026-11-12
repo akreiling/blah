@@ -4,9 +4,6 @@ The map is painted in code: ground in `src/art.rs`, palettes and objects in `src
 remain genome-generated. The player is a code-drawn figure shaped by practice and current gear; fixed-table
 creatures keep text markers.
 
-The PixelLab tilesets and object sheet in this directory (`terrain_<set>.png`, `objects.png`, `manifest.json`)
-are no longer drawn. They stay as a record of the earlier art and of what the generation tools produced.
-
 Each ground pixel is computed from its world position. Built ground (town streets and walls) owns exactly its
 cell's square. Natural ground is warped by seeded world-space noise, and its terrain at a pixel is the vote of
 the four nearest cell centers, weighted by distance, so corners round off. Underground, floors and walls are
@@ -14,13 +11,22 @@ natural too, giving organic caves. Edge shading reads the terrain a few pixels a
 shores, darker grass at path and wall edges, pale rims on cave walls.
 
 Palettes follow the biome (`style_of`): Moss (temperate), Fable (warm lowlands), and Hearth (cold, wet, or
-high). The four nearest cell centers blend the palettes, so looks change gradually across a border. The Deep
-paints in its stone (limestone, slate, or basalt) instead. Grass tufts and sand ripples sit on a shared 9px
-world lattice and grow only where their whole footprint has that terrain.
+high). A noisy threshold picks a nearby cell's look per pixel, giving biome borders a ragged band rather
+than a blur. Marshes grow reeds around damp earth and puddles; jungles have dark, dense growth; savannas
+have straw-colored grass and bare patches; deserts have lit dune crests and shaded faces. The Deep paints
+in its stone (limestone, slate, or basalt) instead. Grass tufts and sand ripples sit on a shared 9px world
+lattice and grow only where their whole footprint has that terrain. Water darkens away from shore, with
+ripple highlights and glitter. Rock has lit rims, shaded faces, and scree; snow gathers in drifts.
 
-The renderer uses only known terrain within one cell, substituting the center's ground, tint, and look for
-unknown cells. Cached ground images are per position and neighborhood, evicted when unused, and rebuilt at
-display-scale changes. Preview three biomes with coasts, roads, walled yards, objects, and items with
+Trees and boulders vary in size as well as mirroring. Jungles grow heavy canopies, savannas and deserts
+acacias, and marshes willows. Object images have 12 pixels of headroom above their 32px cell, so big crowns
+rise above the grid; the map frame clips the outermost crowns. Stairs keep a small `<` or `>` badge above
+actors, including the hero standing on them.
+
+The renderer uses only known terrain within two cells (looks within one), substituting the center's ground,
+tint, and look for unknown cells. Cached ground images are per position and neighborhood, evicted when
+unused, and rebuilt at display-scale changes. Preview three biomes with coasts, roads, walled yards,
+objects, and items with
 `mise exec -- cargo test -p isle contact_sheet -- --ignored`
 (`target/isle-world-art/paint-contact.png`). Measure CPU raster/cache costs with
 `mise exec -- cargo test -p isle ground_render_cost -- --ignored --nocapture`.
@@ -36,38 +42,21 @@ the same figures on grass under each sky, sand, dirt, rock, water, and each Deep
 (`target/isle-world-art/hero-contact.png`).
 
 Presentation-only weather grades surface ground and scenery in world-space patches. The round drives slow
-overcast/clear/mist changes; a separate 180 ms visual timer cycles eight cached grass-sway frames.
+overcast/clear/mist changes; a separate 180 ms visual timer cycles eight cached grass-sway and water-glitter
+frames. Mist wisps drift slowly over the ground. A separate shade layer dims remembered land and softens
+the edges of sight with ragged, dithered darkness. Like natural ground, the fog blends the nearest cell
+centers at a warped point, so steps of cells read as curves and patch corners round off; it also covers
+trees, whose crowns thin where they would hide an actor. Unknown land stays blank; sight rules do not change.
 Deep geology comes in seeded three-floor bands, with broad stone veins, damp slate patches, and narrow
 basalt seams. Seam heat and visible living cave light pulse through GPU opacity; remembered ground does
 not animate. Heroes and dropped items keep their original colors. Animation never changes rules or saves.
-Only visible cells retain their sway frames; unused images and display-scale variants are released.
+Only visible cells retain their animation frames; old mist steps, unused images, and display-scale
+variants are released.
 Preview palettes with `mise exec -- cargo test -p isle mood_contact_sheet -- --ignored`
 (`target/isle-world-art/mood-contact.png`), or launch with `--sky overcast|clear|mist` and
 `--stone limestone|slate|basalt`. The cost test above includes cold, sway-fill, cached, and scrolling frames.
 
-## The PixelLab library (retired)
-
-Use the existing gitignored `.env.local` entry `PIXELLAB_SECRET`, loaded by mise. Never paste the key into a
-command, source file, manifest, or log.
-
-```sh
-python3 -m venv target/pixellab-venv
-target/pixellab-venv/bin/python -m pip install 'Pillow>=12,<14'
-target/pixellab-venv/bin/python crates/isle/scripts/world_art.py status
-mise exec -- target/pixellab-venv/bin/python crates/isle/scripts/world_art.py generate terrain-shore --budget 5
-target/pixellab-venv/bin/python crates/isle/scripts/world_art.py process
-target/pixellab-venv/bin/python crates/isle/scripts/world_art.py contact
-target/pixellab-venv/bin/python -m unittest discover -s crates/isle/scripts -p test_world_art.py
-```
-
-Run from the repository root. Library entries are defined in `world_art.py`; add one there, then generate it.
-Each run spends at most `--budget` generations (default 5, the trial's daily slow allowance), so the library
-can grow a few entries a day. Generation sends only the art descriptions and style settings to PixelLab's
-documented REST API, never game saves, source files, or personal content. The authorization token goes only
-to `api.pixellab.ai`; redirects are refused.
-
-Originals and receipts stay under ignored `target/isle-world-art/library/`. An entry with a receipt is never
-generated again. A job still running when a run ends is recorded and collected by the next run, not
-resubmitted; a request whose outcome is unknown blocks that entry until inspected. `process`, `contact`,
-and `status` work offline and cost nothing. Review the contact sheet and the real game window before
-committing changed art.
+Preview all twelve land biomes and the edge of sight with
+`mise exec -- cargo test -p isle biome_contact_sheet -- --ignored`
+(`target/isle-world-art/biome-contact.png`). Review the contact sheets and the real game window before
+committing changed art. No external world-art assets or generation service are needed.

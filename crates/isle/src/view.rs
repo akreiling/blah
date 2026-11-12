@@ -875,8 +875,19 @@ struct MapCellArt<'a> {
 }
 
 /// The visual map's shared selection helper. Unknown cells are blank; memory carries terrain only.
+#[cfg(test)]
 fn map_cell_art<'a>(game: &'a Game, pos: Pos, labels: &[(Pos, char)]) -> Option<MapCellArt<'a>> {
-    let visible = game.sees(pos);
+    map_cell_art_in(game, &|at| game.sees(at), pos, labels)
+}
+
+/// [`map_cell_art`] with sight answered by `sees`, which must agree with [`Game::sees`].
+fn map_cell_art_in<'a>(
+    game: &'a Game,
+    sees: &dyn Fn(Pos) -> bool,
+    pos: Pos,
+    labels: &[(Pos, char)],
+) -> Option<MapCellArt<'a>> {
+    let visible = sees(pos);
     let remembered = !visible;
     if remembered && !game.remembers(pos) {
         return None;
@@ -899,7 +910,7 @@ fn map_cell_art<'a>(game: &'a Game, pos: Pos, labels: &[(Pos, char)]) -> Option<
     // Unknown neighbors take this cell's own ground and tint, so edges never reveal unexplored terrain.
     let near = |dx: i32, dy: i32| {
         let at = (pos.0 + dx, pos.1 + dy);
-        if (dx, dy) == (0, 0) || !(game.sees(at) || game.remembers(at)) {
+        if (dx, dy) == (0, 0) || !(sees(at) || game.remembers(at)) {
             terrain
         } else {
             terrain_art(level.tile(at), level.ground(at), deep, at)
@@ -910,121 +921,215 @@ fn map_cell_art<'a>(game: &'a Game, pos: Pos, labels: &[(Pos, char)]) -> Option<
         around: [-2, -1, 0, 1, 2].map(|dy| [-2, -1, 0, 1, 2].map(|dx| near(dx, dy).ground)),
         tints: [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| near(dx, dy).tint)),
         styles: [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| near(dx, dy).style)),
+        flavors: [-1, 0, 1].map(|dy| [-1, 0, 1].map(|dx| near(dx, dy).flavor)),
     };
     Some(MapCellArt { terrain, ground, remembered, lit: visible && game.illuminated(pos), actor })
 }
 
-/// The map, and whether anything in it moves. `step` advances the grass sway; `elapsed` seconds drive glows.
+/// How dark each cell around `pos` is drawn, rows north to south: 0 in sight, 1 remembered, 2 unknown.
+fn sight_levels(game: &Game, sees: &dyn Fn(Pos) -> bool, pos: Pos) -> [[u8; 3]; 3] {
+    [-1, 0, 1].map(|dy| {
+        [-1, 0, 1].map(|dx| {
+            let at = (pos.0 + dx, pos.1 + dy);
+            if sees(at) {
+                0
+            } else if game.remembers(at) {
+                1
+            } else {
+                2
+            }
+        })
+    })
+}
+
+/// The map, and whether anything in it moves. `step` advances the grass sway and water glitter; `elapsed`
+/// seconds drive glows and drifting mist.
 fn map(game: &Game, sprites: &mut SpriteCache, art: &mut ArtCache, step: u8, elapsed: f32) -> (Div, bool) {
+    // Mist drifts a pixel every 0.9 seconds.
+    let drift = (elapsed / 0.9) as u32;
     let me = game.player().pos;
     let mut animated = false;
     let labels: Vec<(Pos, char)> = game.sighted().iter().map(|s| (s.creature.pos, s.label)).collect();
-    let rows = (-SIGHT..=SIGHT).map(|dy| {
-        let cells = (-SIGHT..=SIGHT).map(|dx| {
+    // Every cell asks about its neighbors' sight too; cast each cell's rays once per frame.
+    const REACH: i32 = SIGHT + 2;
+    let seen: Vec<bool> = (-REACH..=REACH)
+        .flat_map(|dy| (-REACH..=REACH).map(move |dx| (me.0 + dx, me.1 + dy)))
+        .map(|pos| game.sees(pos))
+        .collect();
+    let sees = |pos: Pos| {
+        let (dx, dy) = (pos.0 - me.0, pos.1 - me.1);
+        if dx.abs() <= REACH && dy.abs() <= REACH {
+            seen[((dy + REACH) * (2 * REACH + 1) + dx + REACH) as usize]
+        } else {
+            game.sees(pos)
+        }
+    };
+    let cells: Vec<Option<MapCellArt>> = (-SIGHT..=SIGHT)
+        .flat_map(|dy| (-SIGHT..=SIGHT).map(move |dx| (me.0 + dx, me.1 + dy)))
+        .map(|pos| map_cell_art_in(game, &sees, pos, &labels))
+        .collect();
+    let at = |dx: i32, dy: i32| {
+        (dx.abs() <= SIGHT && dy.abs() <= SIGHT)
+            .then(|| cells[((dy + SIGHT) * VIEW + dx + SIGHT) as usize].as_ref())
+            .flatten()
+    };
+    let image_size = art.display_size();
+    let (object_w, object_h, object_top) = art.object_frame();
+    let layer = |image| img(image).size(px(image_size)).absolute().top_0().left_0();
+    let tall = |image| img(image).w(px(object_w)).h(px(object_h)).absolute().top(px(object_top)).left_0();
+    let cell = || div().w(px(CELL_W)).h(px(CELL_H)).flex_none().relative();
+    // Four stacked grids, so a tall crown covers the cell above it, the fog covers crowns as it covers the
+    // ground, and letters stay legible over both.
+    let (mut grounds, mut scenes, mut shades, mut marks) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for dy in -SIGHT..=SIGHT {
+        let (mut ground_row, mut scene_row, mut shade_row, mut mark_row) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for dx in -SIGHT..=SIGHT {
             let pos = (me.0 + dx, me.1 + dy);
-            let cell_art = map_cell_art(game, pos, &labels);
-            let mut base = div().w(px(CELL_W)).h(px(CELL_H)).flex_none().relative().bg(rgb(SCREEN));
-            if let Some(cell_art) = cell_art {
-                let image_size = art.display_size();
-                let ground = art.ground(cell_art.ground, cell_art.remembered, cell_art.lit);
-                base = base.child(img(ground).size(px(image_size)).absolute().top_0().left_0());
-                let visible = !cell_art.remembered;
-                if let Some(tufts) = art.tufts(cell_art.ground, step, cell_art.remembered, cell_art.lit) {
-                    animated |= visible;
-                    base = base.child(img(tufts).size(px(image_size)).absolute().top_0().left_0());
+            let Some(cell_art) = at(dx, dy) else {
+                ground_row.push(cell().bg(rgb(SCREEN)));
+                scene_row.push(cell());
+                // Unknown land stays blank, even where a known tree's crown would rise into it.
+                shade_row.push(cell().bg(rgb(SCREEN)));
+                mark_row.push(cell());
+                continue;
+            };
+            let mut ground = cell().bg(rgb(SCREEN)).child(layer(art.ground(cell_art.ground, cell_art.lit)));
+            let visible = !cell_art.remembered;
+            if let Some(tufts) = art.tufts(cell_art.ground, step, cell_art.remembered, cell_art.lit) {
+                animated |= visible;
+                ground = ground.child(layer(tufts));
+            }
+            if let Some(shimmer) = art.shimmer(cell_art.ground, step, cell_art.remembered, cell_art.lit) {
+                animated |= visible;
+                ground = ground.child(layer(shimmer));
+            }
+            if let Some(heat) = visible.then(|| art.heat(cell_art.ground, cell_art.lit)).flatten() {
+                animated = true;
+                let glow = 0.35 + 0.65 * mood::pulse(elapsed, 2.6);
+                ground = ground.child(layer(heat).opacity(glow));
+            }
+            if cell_art.lit {
+                // Living light breathes; every lit cell shares the phase, so the glow has no seams.
+                animated = true;
+                let alpha = (10.0 + 26.0 * mood::pulse(elapsed, 1.9)) as u32;
+                ground = ground.child(
+                    div().absolute().top_0().left_0().w(px(CELL_W)).h(px(CELL_H)).bg(rgba(0xa8_f0_d0_00 | alpha)),
+                );
+            }
+            if let Some(mist) = art.mist(pos, if visible { drift } else { 0 }) {
+                animated |= visible;
+                ground = ground.child(layer(mist));
+            }
+            ground_row.push(ground);
+
+            let mut scene = cell();
+            let mut mark = cell();
+            let mut marker = None;
+            if let Some(object) = cell_art.terrain.object {
+                let image = tall(art.object(&cell_art.terrain, object, cell_art.lit));
+                // A crown never hides whoever stands just north of it; it thins to show them.
+                let veils = at(dx, dy - 1).is_some_and(|north| north.actor.is_some());
+                scene = scene.child(if veils && art.rises(&cell_art.terrain, object) {
+                    image.opacity(0.45)
+                } else {
+                    image
+                });
+                marker = match object {
+                    Object::StairsUp => Some("<"),
+                    Object::StairsDown => Some(">"),
+                    _ => None,
+                };
+            }
+            match cell_art.actor {
+                Some(MapActor::Player) => {
+                    scene = scene.child(layer(art.hero(Look::of(game.player()), cell_art.lit)));
                 }
-                if let Some(heat) = visible.then(|| art.heat(cell_art.ground, cell_art.lit)).flatten() {
-                    animated = true;
-                    let glow = 0.35 + 0.65 * mood::pulse(elapsed, 2.6);
-                    base = base.child(img(heat).size(px(image_size)).absolute().top_0().left_0().opacity(glow));
-                }
-                if cell_art.lit {
-                    // Living light breathes; every lit cell shares the phase, so the glow has no seams.
-                    animated = true;
-                    let alpha = (10.0 + 26.0 * mood::pulse(elapsed, 1.9)) as u32;
-                    base = base.child(
-                        div().absolute().top_0().left_0().w(px(CELL_W)).h(px(CELL_H)).bg(rgba(0xa8_f0_d0_00 | alpha)),
-                    );
-                }
-                if let Some(object) = cell_art.terrain.object {
-                    let image = art.object(
-                        object,
-                        cell_art.terrain.mirrored,
-                        cell_art.terrain.style,
-                        cell_art.remembered,
-                        cell_art.lit,
-                    );
-                    base = base.child(img(image).size(px(image_size)).absolute().top_0().left_0());
-                    let marker = match object {
-                        Object::StairsUp => Some("<"),
-                        Object::StairsDown => Some(">"),
-                        _ => None,
-                    };
-                    if let Some(marker) = marker {
-                        base = base.child(
+                Some(MapActor::Creature { creature, label }) if sprite_creature(game, pos).is_some() => {
+                    let color = creature_color(creature.kind, creature.hunting);
+                    if let Some(image) = sprites.get(creature) {
+                        let display_size = sprites.display_size();
+                        let inset = (CELL_W - display_size) / 2.0;
+                        scene =
+                            scene.child(img(image).size(px(display_size)).absolute().top(px(inset)).left(px(inset)));
+                        mark = mark.child(
                             div()
                                 .absolute()
                                 .top_0()
                                 .left_0()
                                 .w(px(12.0))
                                 .h(px(14.0))
-                                .bg(rgba(0x071013d0))
-                                .text_color(rgb(0xff_ff_ff))
-                                .text_size(px(11.0))
+                                .bg(rgb(SCREEN))
+                                .text_color(rgb(color))
+                                .text_size(px(12.0))
                                 .line_height(px(14.0))
                                 .font_weight(FontWeight::BOLD)
-                                .child(marker),
+                                .child(label.to_string()),
                         );
+                    } else {
+                        mark = creature_glyph(mark, creature, label);
                     }
                 }
-                match cell_art.actor {
-                    Some(MapActor::Player) => {
-                        let image = art.hero(Look::of(game.player()), cell_art.lit);
-                        base = base.child(img(image).size(px(image_size)).absolute().top_0().left_0());
-                    }
-                    Some(MapActor::Creature { creature, label }) if sprite_creature(game, pos).is_some() => {
-                        let color = creature_color(creature.kind, creature.hunting);
-                        if let Some(image) = sprites.get(creature) {
-                            let display_size = sprites.display_size();
-                            let inset = (CELL_W - display_size) / 2.0;
-                            base =
-                                base.child(img(image).size(px(display_size)).absolute().top(px(inset)).left(px(inset)));
-                            base = base.child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .left_0()
-                                    .w(px(12.0))
-                                    .h(px(14.0))
-                                    .bg(rgb(SCREEN))
-                                    .text_color(rgb(color))
-                                    .text_size(px(12.0))
-                                    .line_height(px(14.0))
-                                    .font_weight(FontWeight::BOLD)
-                                    .child(label.to_string()),
-                            );
-                        } else {
-                            base = creature_glyph(base, creature, label);
-                        }
-                    }
-                    Some(MapActor::Creature { creature, label }) => {
-                        base = creature_glyph(base, creature, label);
-                    }
-                    Some(MapActor::Item(object)) => {
-                        let image = art.item(object);
-                        base = base.child(img(image).size(px(image_size)).absolute().top_0().left_0());
-                    }
-                    None => {}
+                Some(MapActor::Creature { creature, label }) => {
+                    mark = creature_glyph(mark, creature, label);
                 }
+                Some(MapActor::Item(object)) => {
+                    scene = scene.child(tall(art.item(object)));
+                }
+                None => {}
             }
-            if dx == 0 && dy == 0 { base.font_weight(FontWeight::BOLD) } else { base }
-        });
-        div().flex().flex_row().children(cells.collect::<Vec<_>>())
-    });
-    let column = frame().w(px(MAP_W)).h(px(MAP_H)).flex().flex_col().children(rows.collect::<Vec<_>>());
-    (column, animated)
+            scene_row.push(scene);
+            // Remembered land is dimmed over its objects as well as its ground, so the edge of sight is soft
+            // for both.
+            shade_row.push(match art.shade(pos, sight_levels(game, &sees, pos)) {
+                Some(shade) => cell().child(layer(shade)),
+                None => cell(),
+            });
+            // Stairs stay legible even under the hero who just climbed them.
+            if let Some(marker) = marker {
+                mark = mark.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .w(px(12.0))
+                        .h(px(14.0))
+                        .bg(rgba(0x071013d0))
+                        .text_color(rgb(0xff_ff_ff))
+                        .text_size(px(11.0))
+                        .line_height(px(14.0))
+                        .font_weight(FontWeight::BOLD)
+                        .child(marker),
+                );
+            }
+            mark_row.push(mark);
+        }
+        grounds.push(ground_row);
+        scenes.push(scene_row);
+        shades.push(shade_row);
+        marks.push(mark_row);
+    }
+    let grid = |rows: Vec<Vec<Div>>| {
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .flex()
+            .flex_col()
+            .children(rows.into_iter().map(|row| div().flex().flex_row().children(row)))
+    };
+    let side = VIEW as f32 * CELL_W;
+    let layers = div()
+        .relative()
+        .w(px(side))
+        .h(px(VIEW as f32 * CELL_H))
+        .child(grid(grounds))
+        .child(grid(scenes))
+        .child(grid(shades))
+        .child(grid(marks));
+    // Tall crowns in the top row rise into the frame's border; clip them there.
+    (frame().w(px(MAP_W)).h(px(MAP_H)).overflow_hidden().child(layers), animated)
 }
-
 fn creature_glyph(base: Div, creature: &Creature, label: char) -> Div {
     let color = creature_color(creature.kind, creature.hunting);
     base.child(
@@ -1431,6 +1536,7 @@ mod tests {
                         if dx.abs() <= 1 && dy.abs() <= 1 {
                             assert_eq!(cell.ground.tints[(dy + 1) as usize][(dx + 1) as usize], expected.tint);
                             assert_eq!(cell.ground.styles[(dy + 1) as usize][(dx + 1) as usize], expected.style);
+                            assert_eq!(cell.ground.flavors[(dy + 1) as usize][(dx + 1) as usize], expected.flavor);
                         }
                     }
                 }

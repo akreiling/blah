@@ -17,17 +17,21 @@ snow, rock, and Deep caves) takes its shape from nearby cell centers through a s
 corners round off, and a lone pond is a blob; town streets and walls keep square edges and straight masonry.
 Each biome picks a look from its climate: warm lowlands (desert, savanna, jungle, badlands) are sunlit and
 golden, cold, wet, or high land (tundra, taiga, swamp, hills, mountains, peaks) is cool and blue-green, and the
-temperate rest is mossy. Looks blend across biome borders. Water and rock keep a little of their biome's color.
-Meadow patches, swaying grass tufts, sand ripples, and rock cracks vary natural ground. Trees (conifers in the
-cold, broadleaves in the warm), boulders, doors, stairs, services, and ground items are code-drawn objects in
-the biome's look; trees and boulders also vary by mirroring. Unknown neighbors never shape a visible edge. Your character is a code-drawn figure: your highest weapon, magic, or stealth
+temperate rest is mossy. Looks meet in ragged bands across biome borders. Water and rock keep a little of
+their biome's color. Marsh puddles and reeds, dark jungle growth, dry savanna patches, desert dunes, rock
+relief, and snow drifts vary natural ground. Trees (conifers, broadleaves, canopies, acacias, and willows),
+boulders, doors, stairs, services, and ground items are code-drawn objects in the biome's look; trees and
+boulders vary by size and mirroring, with big crowns rising above their cell. Unknown neighbors never shape
+a visible edge. Your character is a code-drawn figure: your highest weapon, magic, or stealth
 practice rank shapes its clothing and headgear, while your current weapon, bow, armor, and ring appear
 on the body. Skilled practice adds gold trim; a shadowed yellow ring marks your feet. Fixed-table creatures keep
 their text glyphs, and the text map still represents you as `@`.
-`crates/isle/assets/world/README.md` describes the art library and how to grow it.
+`crates/isle/assets/world/README.md` describes the renderer and its preview sheets.
 
 The sky shifts slowly with the round between overcast, clear spells, and mist; sunlight and mist vary
-in broad patches across the land. Grass tufts sway while you think. Deep floors have seeded bands of
+in broad patches across the land. Grass tufts sway, water glitters over shaded depths, and mist wisps drift
+while you think. Ragged, soft darkness marks the edges of sight without changing visibility, and stair
+badges remain legible above your figure. Deep floors have seeded bands of
 limestone, damp slate, and basalt, with broad veins; basalt cracks and living cave light gently pulse.
 Remembered ground stays still. These are visual effects only: animation never advances a round or changes
 the save. Preview a fixed look with `just isle --sky overcast|clear|mist` or
