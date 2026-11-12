@@ -116,9 +116,9 @@ time-to-depth-10.
 ## The island
 
 Beyond towns, the surface continues into blah's seeded biomes, with trees that thin sight
-and rocks that block movement and sight. Sight is round, reaching eight cells in every direction, and ray
-cast: several rays run between the two cells, and each tree a ray crosses costs three of those eight cells,
-so you see five cells away past one tree, two past two, and can glimpse past the edge of a trunk. Creatures
+and rocks that block movement and sight. Sight is round, reaching six cells in every direction, and ray
+cast: several rays run between the two cells, and each tree a ray crosses costs three of those six cells,
+so you see three cells away past one tree, nothing past two, and can glimpse past the edge of a trunk. Creatures
 see you by the same rays. Deep water and snow peaks are impassable; shallow
 water can be waded. Explored wilderness stays remembered across saves, including west and north of town.
 Every town guarantees an outfitter (`buy`, `sell`, `list`), a temple (`heal` for up to five gold),

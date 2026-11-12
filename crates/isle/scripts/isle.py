@@ -77,7 +77,11 @@ class Isle:
         return self.request("state", **options)["screen"]
 
     def quit(self):
-        self.request("text", text="quit\n")
+        # The app may exit before its reply to quit is written; the exit code is the real answer.
+        try:
+            self.request("text", text="quit\n")
+        except (ConnectionError, json.JSONDecodeError):
+            pass
         return self.app.wait(timeout=10)
 
 def hp(screen):
