@@ -107,11 +107,32 @@ opening strikes, and genuine escapes. Utility magic has another twelve shared le
 a blow, a stun must extend its hold, and healing must restore tracked injury from an active encounter.
 These useful paid casts also teach Focus, once per cast and only while the encounter has lessons left.
 
-Spells share Focus. Metal armor adds two Focus to a spell's cost, except Shield. `rest` explicitly recovers
-two Health and six Focus per round, but leaves you exposed outside safety. Walking and ordinary waiting
-restore neither. The temple restores both resources. Experience thresholds for ranks 2–10 are 100, 300,
-700, 1,500, 3,100, 6,300, 12,700, 25,500, and 51,100. This is a prototype curve, not a measured promise of
-time-to-depth-10.
+Spells and weapon techniques share Focus. Metal armor adds two Focus to a spell's cost, except Shield.
+`rest` explicitly recovers two Health and six Focus per round, but leaves you exposed outside safety.
+Focus also returns on its own anywhere: one point every fourth round, and one more in any round a blow of
+yours does useful damage to a real threat, at most one such point per round however many foes you hit.
+Health never returns on its own. The temple restores both resources. Experience thresholds for ranks 2–10
+are 100, 300, 700, 1,500, 3,100, 6,300, 12,700, 25,500, and 51,100. This is a prototype curve, not a
+measured promise of time-to-depth-10.
+
+## Weapon techniques
+
+At skilled, each weapon family fires one technique of its own. There is no command to learn and nothing to
+aim: a technique fires when its moment comes, spends Focus, and never fires against something too weak to
+teach you anything. `skills` lists each weapon's technique and what it costs.
+
+| Weapon | Technique | Focus | When it fires and what it does |
+|---|---|---|---|
+| Dagger | feint | 2 | A missed thrust draws that foe's guard: your next attack on it hits at +4 for double damage |
+| Blades | parry | 2 | Once a round, turns one close blow that beats your armor by under four and readies a riposte: +4 to hit and +2 damage |
+| Blunt | stagger | 2 | A hit five or more over the foe's armor costs it its next action |
+| Staff | sweep | 2 | Each attack carries on to the most dangerous other foe beside you, for two less damage |
+| Archery | steady shot | 1 | +2 to hit and damage at three or more cells with nothing hunting you from beside you |
+
+A parry needs a duel: anything else hunting you from the next cell spoils it, so a skilled blade handles one
+dangerous opponent well and is still in real danger when surrounded. Steady shot likewise needs quiet and
+distance, while sweep and stagger are the techniques that answer a crowd. A readied feint or riposte shows
+in the panel and serves only your very next command, whatever that command is.
 
 ## The island
 
@@ -326,6 +347,9 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
 - `python3 crates/isle/scripts/smoke.py` checks the protocol against a real window in both pacing modes.
 - `python3 crates/isle/scripts/progression.py` checks name-only creation, the practice panel, no-time
   `skills`, shared Focus, explicit recovery, and exact save/reload.
+- `python3 crates/isle/scripts/techniques.py` checks that `skills` prices each weapon's technique only once
+  it is earned, that a skilled blade parries and ripostes with no command of its own, that the readied
+  advantage reaches the panel, and that distant shots fly steady.
 - `python3 crates/isle/scripts/wilderness.py` checks leaving town, biome rendering, local map origins,
   wilderness memory, and save/reload.
 - `python3 crates/isle/scripts/landmarks.py` walks from town to a naturally generated site, checks its

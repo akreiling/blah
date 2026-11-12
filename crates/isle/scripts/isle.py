@@ -84,6 +84,19 @@ class Isle:
             pass
         return self.app.wait(timeout=10)
 
+FOCUS_TICK = 4
+
+
+def focus_returned(before_round, after_round):
+    """Focus that comes back on its own between two round numbers: one point every fourth round."""
+    return after_round // FOCUS_TICK - before_round // FOCUS_TICK
+
+
+def drifted(player, returned):
+    """A player snapshot with `returned` points of self-returning Focus added, never past the maximum."""
+    return {**player, "focus": min(player["focus"] + returned, player["max_focus"])}
+
+
 def hp(screen):
     """Current and maximum health from the panel."""
     line = next(l for l in screen["panel"] if l.startswith("HP "))

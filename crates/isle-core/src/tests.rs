@@ -190,23 +190,29 @@ fn everyone_can_cast_every_spell_and_metal_only_penalizes_non_wards() {
     game.place(Kind::Orc, (me.0 + 1, me.1));
     game.player_mut().armor = Some(Armor::Chainmail);
 
+    // Focus moves for three reasons, so each total names them: a spell's cost, the point that returns
+    // every fourth round, and the point a blow that hurts a real threat returns.
     round(&mut game, "chant heal");
     assert_eq!(game.player().chanted, Some(Spell::Heal));
     round(&mut game, "cast");
-    assert_eq!(game.player().focus, 18, "metal adds two Focus to Heal");
+    assert_eq!(game.player().focus, 24 - 6, "metal adds two Focus to Heal");
 
     round(&mut game, "chant shield");
     round(&mut game, "cast");
     assert!(game.player().shield > 0);
-    assert_eq!(game.player().focus, 14, "Warding has no metal penalty");
+    assert_eq!(game.player().focus, 18 - 4 + 1, "Warding has no metal penalty, and round four returns a point");
 
     round(&mut game, "chant spark");
     round(&mut game, "cast orc");
-    assert_eq!(game.player().focus, 9, "Spark costs three plus two in metal");
+    assert_eq!(
+        game.player().focus,
+        15 - 5 + 1,
+        "Spark costs three plus two in metal, and hurting the orc pays back one"
+    );
 
     round(&mut game, "chant stun");
     round(&mut game, "cast orc");
-    assert_eq!(game.player().focus, 2, "Stun costs five plus two in metal");
+    assert_eq!(game.player().focus, 11 - 7 + 1, "Stun costs five plus two in metal, and round eight returns a point");
 
     game.round(Some(Command::Hide));
     assert!(!said(&game, "no knack for hiding"));

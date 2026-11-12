@@ -15,6 +15,7 @@ mod map;
 mod practice;
 mod relic;
 mod rng;
+mod technique;
 mod town;
 mod wildlife;
 
@@ -31,5 +32,6 @@ pub use landmark::{Landmark, LandmarkKind};
 pub use map::{LevelId, Place, Pos, Terrain, Tile, Zone, distance, line};
 pub use practice::{Practice, Practices};
 pub use relic::Relic;
+pub use technique::{Readied, TECHNIQUE_RANK, Technique};
 pub use town::Town;
 pub use wildlife::{CaveTraits, DEEP, Lineage, Wildlife};

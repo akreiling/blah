@@ -5,7 +5,7 @@ import json
 import pathlib
 import tempfile
 
-from isle import Isle
+from isle import Isle, drifted, focus_returned
 from landmarks import glyph, paths
 
 RECOVERY = {"Woundleaf": (6, 0), "Bogmint": (0, 8), "Sunroot": (3, 4)}
@@ -88,13 +88,17 @@ def herbs():
                 health, focus = RECOVERY[expected]
                 assert reply["round"] == before["round"] + 1
                 assert reply["game"]["player"]["hp"] == before["player"]["hp"] + health
-                assert reply["game"]["player"]["focus"] == before["player"]["focus"] + focus
+                returned = focus_returned(before["round"], reply["round"])
+                assert reply["game"]["player"]["focus"] == min(
+                    before["player"]["focus"] + focus + returned, reply["game"]["player"]["max_focus"])
                 assert reply["game"]["player"]["practice"] == before["player"]["practice"]
                 assert reply["game"]["rng"] == before["rng"]
                 assert {"Herb": expected} not in reply["game"]["player"]["sack"]
                 after = reply["game"]["player"]
+                used = reply["round"]
                 reply = isle.batch(f"use {expected.lower()}\n", game=True)
-                assert reply["game"]["player"] == after
+                after = drifted(after, focus_returned(used, reply["round"]))
+                assert reply["game"]["player"] == after, "an empty sack has no herb to waste"
                 assert isle.quit() == 0
             with Isle(save=path) as isle:
                 reply = isle.request("state", game=True)

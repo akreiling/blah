@@ -818,6 +818,9 @@ fn states_text(game: &Game) -> Option<String> {
     if p.hidden {
         states.push("hidden".into());
     }
+    if let Some(readied) = p.readied {
+        states.push(readied.name().into());
+    }
     if game.illuminated(p.pos) {
         states.push("lit · no hiding".into());
     }

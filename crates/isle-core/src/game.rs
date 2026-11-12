@@ -16,10 +16,13 @@ use crate::relic::Relic;
 use crate::rng::Rng;
 use crate::town::{Town, Towns};
 use crate::wildlife::{LifeCache, Wildlife};
-use crate::{CinderWatch, WatchPhase};
+use crate::{CinderWatch, Readied, TECHNIQUE_RANK, Technique, WatchPhase};
 
 /// Cells a character or creature sees.
 pub const SIGHT: i32 = 6;
+
+/// Rounds per point of Focus that returns on its own, anywhere.
+pub const FOCUS_TICK: u64 = 4;
 /// Cells a creature notices you from.
 const NOTICE: i32 = 7;
 /// Rounds a creature keeps hunting after losing sight of you.
@@ -124,7 +127,7 @@ pub struct Player {
     pub hp: i32,
     /// Health at full.
     pub max_hp: i32,
-    /// Focus available for spells.
+    /// Focus available for spells and weapon techniques.
     pub focus: i32,
     /// Focus capacity, raised by Focus practice.
     pub max_focus: i32,
@@ -168,6 +171,15 @@ pub struct Player {
     /// Bounded injury provenance, consumed by every source of healing.
     #[serde(default)]
     injuries: Vec<InjurySource>,
+    /// Whether a blade has already parried a blow this round.
+    #[serde(default)]
+    pub parried: bool,
+    /// A technique's advantage, kept only for the next command.
+    #[serde(default)]
+    pub readied: Option<Readied>,
+    /// The last round useful damage restored Focus; extra sweep hits cannot multiply recovery.
+    #[serde(default)]
+    focus_success_round: Option<u64>,
 }
 
 /// The bonus a stat gives.
@@ -214,6 +226,9 @@ impl Player {
             shield: 0,
             shield_focus_credit: 0,
             injuries: Vec::new(),
+            parried: false,
+            readied: None,
+            focus_success_round: None,
         }
     }
 
@@ -817,7 +832,13 @@ impl Game {
         let steps = rank_steps(skill.rank());
         match practice {
             Practice::Dagger | Practice::Blades | Practice::Blunt | Practice::Staff | Practice::Archery => {
-                format!("+{steps} accuracy, +{} damage", skill.bonus())
+                let technique = Technique::of(practice).expect("every weapon family has a technique");
+                let known = if skill.rank() >= TECHNIQUE_RANK {
+                    format!("{} ({} Focus): {}", technique.name(), technique.cost(), technique.description())
+                } else {
+                    format!("{} at {}", technique.name(), TECHNIQUE_RANK.name())
+                };
+                format!("+{steps} accuracy, +{} damage; {known}", skill.bonus())
             }
             Practice::Evocation => format!("Spark: +{steps} accuracy, +{} damage", skill.bonus()),
             Practice::Warding => format!("ward: +{steps} protection, +{} rounds", 5 * steps),
@@ -846,9 +867,12 @@ impl Game {
         let hide_action = command.as_ref().is_some_and(|c| matches!(c, Command::Hide));
         let stealth_action = command.as_ref().is_some_and(|c| matches!(c, Command::Move(_) | Command::Hide));
         self.round += 1;
+        // A prepared advantage serves only the very next command, whatever it is.
+        let readied = self.player.readied.take();
+        self.player.parried = false;
         match command {
-            Some(command) => self.perform(command),
-            None => self.stand_ready(),
+            Some(command) => self.perform(command, readied),
+            None => self.stand_ready(readied),
         }
         if self.player.at == LevelId::Surface {
             self.towns.ensure(self.seed, self.terrain, self.player.pos);
@@ -876,10 +900,10 @@ impl Game {
         self.update_seen();
     }
 
-    fn perform(&mut self, command: Command) {
+    fn perform(&mut self, command: Command, readied: Option<Readied>) {
         match command {
             Command::Move(steps) => self.walk(&steps),
-            Command::Attack(target) => self.attack(target),
+            Command::Attack(target) => self.attack(target, readied),
             Command::Nock => self.nock(),
             Command::Shoot(target) => self.shoot(target),
             Command::Chant(spell) => self.chant(spell),
@@ -899,12 +923,12 @@ impl Game {
             Command::Sell(what) => self.sell(&what),
             Command::Heal => self.temple_heal(),
             Command::Challenge => self.challenge_watch(),
-            Command::Wait => self.stand_ready(),
+            Command::Wait => self.stand_ready(readied),
         }
     }
 
     /// Standing ready, you strike back at whatever is hunting you from the next cell.
-    fn stand_ready(&mut self) {
+    fn stand_ready(&mut self, readied: Option<Readied>) {
         let me = self.player.pos;
         let attacker = self
             .sighted()
@@ -912,12 +936,19 @@ impl Game {
             .find(|s| s.creature.hunting && distance(s.creature.pos, me) <= 1)
             .map(|s| s.label);
         if let Some(label) = attacker {
-            self.attack(Some(Target::Label(label)));
+            self.attack(Some(Target::Label(label)), readied);
         }
     }
 
     fn hunter_adjacent(&self) -> Option<&Creature> {
         self.creatures.iter().find(|c| c.at == self.player.at && c.hunting && distance(c.pos, self.player.pos) <= 1)
+    }
+
+    /// Whether anything but the creature at `index` is hunting you from the next cell.
+    fn flanked_by_another(&self, index: usize) -> bool {
+        self.creatures.iter().enumerate().any(|(other, c)| {
+            other != index && c.at == self.player.at && c.hunting && distance(c.pos, self.player.pos) <= 1
+        })
     }
 
     fn walk(&mut self, steps: &[Dir]) {
@@ -1092,22 +1123,59 @@ impl Game {
         self.creatures.iter().position(|c| c.id == id)
     }
 
-    fn attack(&mut self, target: Option<Target>) {
+    /// The creature named by `target` beside you, or whatever stands beside you when none is named.
+    fn melee_target(&mut self, target: Option<Target>) -> Option<usize> {
         let target = match target {
             Some(t) => Some(t),
             None => {
-                // A bare attack means whatever stands beside you.
                 let me = self.player.pos;
                 let beside = self.sighted().into_iter().find(|s| distance(s.creature.pos, me) <= 1).map(|s| s.label);
                 beside.map(Target::Label)
             }
         };
-        let Some(index) = self.find_target(target) else { return };
-        let name = self.creatures[index].stats().name;
+        let index = self.find_target(target)?;
         if distance(self.creatures[index].pos, self.player.pos) > 1 {
+            let name = self.creatures[index].stats().name;
             self.say(Tone::Info, format!("The {name} is out of reach."));
-            return;
+            return None;
         }
+        Some(index)
+    }
+
+    fn attack(&mut self, target: Option<Target>, readied: Option<Readied>) {
+        let Some(index) = self.melee_target(target) else { return };
+        let id = self.creatures[index].id;
+        let (to_hit, extra, feinted) = match readied {
+            Some(Readied::Riposte) => (4, 2, false),
+            Some(Readied::Feint(feinted)) if feinted == id => (0, 0, true),
+            _ => (0, 0, false),
+        };
+        self.swing(index, to_hit, extra, feinted);
+        if self.knows(Technique::Sweep) {
+            let me = self.player.pos;
+            let beside: Vec<u32> = self
+                .sighted()
+                .iter()
+                .filter(|s| s.creature.id != id && distance(s.creature.pos, me) <= 1)
+                .map(|s| s.creature.id)
+                .collect();
+            // Carry on to the most dangerous neighbor that is worth the Focus.
+            let next = beside
+                .into_iter()
+                .filter_map(|next| self.creatures.iter().position(|c| c.id == next))
+                .max_by_key(|&index| (self.threat(index, Practice::Staff), std::cmp::Reverse(index)));
+            if let Some(index) = next.filter(|&index| self.use_technique(Technique::Sweep, index)) {
+                let name = self.creatures[index].stats().name;
+                self.say(Tone::Info, format!("Your staff sweeps on to the {name}."));
+                self.swing(index, 0, -2, false);
+            }
+        }
+    }
+
+    /// One melee blow at `index`. Returns whether it landed (the creature may have died).
+    fn swing(&mut self, index: usize, to_hit: i32, extra: i32, feinted: bool) -> bool {
+        let name = self.creatures[index].stats().name;
+        let id = self.creatures[index].id;
         self.player.nocked = false;
         let ambush = std::mem::take(&mut self.player.hidden);
         if ambush {
@@ -1118,29 +1186,62 @@ impl Game {
         let weapon_skill = self.player.practice.get(practice);
         let stealth_skill = self.player.practice.get(Practice::Stealth);
         let ac = self.creatures[index].stats().ac;
-        let roll = self.rng.d20() + self.player.melee_bonus() + if ambush { 4 } else { 0 };
-        if roll < ac && roll - self.player.melee_bonus() != 20 {
+        let natural = self.rng.d20();
+        let roll = natural + self.player.melee_bonus() + to_hit + if ambush || feinted { 4 } else { 0 };
+        if roll < ac && natural != 20 {
             self.say(Tone::Miss, format!("You miss the {name}."));
+            if !feinted && self.use_technique(Technique::Feint, index) {
+                self.player.readied = Some(Readied::Feint(id));
+                self.say(Tone::Info, format!("Your thrust draws the {name}'s guard."));
+            }
             self.provoke(index);
-            return;
+            return false;
         }
         let (lo, hi) = self.player.weapon.damage();
-        let mut damage = (self.rng.range(lo, hi) + modifier(self.player.str) + weapon_skill.bonus()).max(1);
+        let mut damage = (self.rng.range(lo, hi) + modifier(self.player.str) + weapon_skill.bonus() + extra).max(1);
         if ambush {
             if opening {
                 damage += stealth_skill.bonus();
             }
             damage *= 3;
             self.say(Tone::Hit, format!("You strike the {name} from the shadows for {damage}!"));
+        } else if feinted {
+            damage *= 2;
+            self.say(Tone::Hit, format!("You slip past the {name}'s guard for {damage}!"));
+        } else if to_hit > 0 {
+            self.say(Tone::Hit, format!("You riposte, hitting the {name} for {damage}."));
         } else {
             self.say(Tone::Hit, format!("You hit the {name} for {damage}."));
         }
         if opening {
             self.teach_stealth(index, 3);
         }
+        let staggers =
+            damage < self.creatures[index].hp && roll >= ac + 5 && self.use_technique(Technique::Stagger, index);
         self.wound(index, damage, practice, 0);
+        if staggers && let Some(index) = self.creatures.iter().position(|c| c.id == id) {
+            self.creatures[index].stunned = self.creatures[index].stunned.max(1);
+            self.say(Tone::Hit, format!("The {name} staggers!"));
+        }
+        true
     }
 
+    /// Whether a technique is earned and the character holds what it needs.
+    fn knows(&self, technique: Technique) -> bool {
+        self.player.practice.get(technique.practice()).rank() >= TECHNIQUE_RANK
+            && (technique == Technique::SteadyShot || technique.suits(self.player.weapon))
+    }
+
+    /// Fires `technique` against the creature at `index` when it is known, affordable, and worth it,
+    /// paying its Focus. Foes too weak to teach practice are not worth it.
+    fn use_technique(&mut self, technique: Technique, index: usize) -> bool {
+        let cost = technique.cost();
+        if !self.knows(technique) || self.player.focus < cost || self.threat(index, technique.practice()) < 10 {
+            return false;
+        }
+        self.player.focus -= cost;
+        true
+    }
     fn nock(&mut self) {
         let p = &self.player;
         let refusal = match (p.bow, p.arrows, p.nocked) {
@@ -1202,8 +1303,12 @@ impl Game {
         let stats = self.creatures[index].stats();
         let to = self.creatures[index].pos;
         let close = distance(self.player.pos, to) <= 1;
+        let steady = distance(self.player.pos, to) >= 3
+            && self.hunter_adjacent().is_none()
+            && self.use_technique(Technique::SteadyShot, index);
         let natural = self.rng.d20();
-        let roll = natural + self.player.missile_bonus() + if ambush { 4 } else { 0 } - if close { 4 } else { 0 };
+        let roll = natural + self.player.missile_bonus() + if ambush { 4 } else { 0 } - if close { 4 } else { 0 }
+            + if steady { 2 } else { 0 };
         if roll < stats.ac && natural != 20 {
             self.say(Tone::Miss, format!("Your arrow misses the {}.", stats.name));
             if self.rng.chance(75) {
@@ -1213,7 +1318,9 @@ impl Game {
             return;
         }
         let (lo, hi) = bow.damage();
-        let mut damage = (self.rng.range(lo, hi) + modifier(self.player.dex).max(0) + archery.bonus()).max(1);
+        let mut damage =
+            (self.rng.range(lo, hi) + modifier(self.player.dex).max(0) + archery.bonus() + if steady { 2 } else { 0 })
+                .max(1);
         if ambush {
             if opening {
                 damage += stealth.bonus();
@@ -1223,7 +1330,13 @@ impl Game {
         if stats.arrow_proof {
             damage = (damage / 2).max(1);
         }
-        let how = if ambush { "from hiding " } else { "" };
+        let how = if ambush {
+            "from hiding "
+        } else if steady {
+            "steady "
+        } else {
+            ""
+        };
         self.say(Tone::Hit, format!("Your arrow {how}strikes the {} for {damage}!", stats.name));
         if self.rng.chance(50) {
             self.drop_at(self.player.at, to, Item::Arrows(1));
@@ -1357,6 +1470,11 @@ impl Game {
         let useful = self.creatures[index].spend_damage(damage);
         self.creatures[index].hp -= damage;
         if useful > 0 && threat >= 10 {
+            // Success steadies the mind, but a sweep cannot pay for itself with extra targets.
+            if self.player.focus_success_round != Some(self.round) {
+                self.player.focus = (self.player.focus + 1).min(self.player.max_focus);
+                self.player.focus_success_round = Some(self.round);
+            }
             let evidence = useful.saturating_mul(threat);
             self.learn_practice(discipline, evidence, threat);
             if focus_spent > 0 {
@@ -2356,6 +2474,18 @@ impl Game {
             }
             return;
         }
+        if natural != 20
+            && missile.is_none()
+            && !self.player.parried
+            && roll < ac + ward + 4
+            && !self.flanked_by_another(index)
+            && self.use_technique(Technique::Parry, index)
+        {
+            self.say(Tone::Miss, format!("You parry the {name}'s blow. A riposte is ready."));
+            self.player.parried = true;
+            self.player.readied = Some(Readied::Riposte);
+            return;
+        }
         let damage = self.rng.range(lo, hi);
         let threat = self.threat(index, Practice::Vitality);
         let restoration_threat = self.threat(index, Practice::Restoration);
@@ -2431,6 +2561,9 @@ impl Game {
         p.hidden = false;
         p.shield_focus_credit = 0;
         p.injuries.clear();
+        p.parried = false;
+        p.readied = None;
+        p.focus_success_round = None;
         p.at = LevelId::Surface;
         p.pos = self.revival;
         if gold > 0 {
@@ -2447,6 +2580,9 @@ impl Game {
 
     fn recover(&mut self) {
         let p = &mut self.player;
+        if self.round.is_multiple_of(FOCUS_TICK) {
+            p.focus = (p.focus + 1).min(p.max_focus);
+        }
         if p.shield > 0 {
             p.shield -= 1;
             if p.shield == 0 {
@@ -2647,6 +2783,435 @@ impl Game {
     }
 }
 
+#[cfg(test)]
+mod technique_tests {
+    use super::*;
+    use crate::{Parsed, parse};
+
+    fn made() -> Game {
+        let mut game = Game::new(7);
+        game.answer("Wren");
+        game.clear_creatures();
+        // Strong enough that a rat teaches nothing, as in the practice tests.
+        (game.player.str, game.player.dex, game.player.con) = (18, 18, 18);
+        game
+    }
+
+    fn run(game: &mut Game, line: &str) {
+        match parse(line).unwrap() {
+            Parsed::Round(command) => game.round(Some(command)),
+            Parsed::Instant(command) => game.instant(command),
+        }
+    }
+
+    fn skilled(game: &mut Game, practice: Practice) {
+        game.player.practice.learn(practice, 4_000, 100);
+        assert_eq!(game.player.practice.get(practice).rank(), TECHNIQUE_RANK);
+    }
+
+    /// A fixed creature at `(dx, dy)` from the character, held still unless `held` is false.
+    fn put(game: &mut Game, kind: Kind, dx: i32, dy: i32, held: bool) -> u32 {
+        let pos = game.player.pos;
+        let id = game.place(kind, (pos.0 + dx, pos.1 + dy));
+        game.creatures.last_mut().unwrap().stunned = if held { 100 } else { 0 };
+        id
+    }
+
+    fn index(game: &Game, id: u32) -> usize {
+        game.creatures.iter().position(|c| c.id == id).unwrap()
+    }
+
+    fn natural(n: i32) -> Rng {
+        Rng::new((0..10_000).find(|&s| Rng::new(s).d20() == n).expect("a seed rolls every face"))
+    }
+
+    /// Damage dealt so far, from the creature's finite allowance (pit trolls regenerate health).
+    fn taken(game: &Game, id: u32) -> i32 {
+        let c = &game.creatures[index(game, id)];
+        c.stats().hp - c.learning_damage_left
+    }
+
+    fn said(game: &Game, since: usize, text: &str) -> bool {
+        game.log[since..].iter().any(|line| line.text.contains(text))
+    }
+
+    #[test]
+    fn rats_are_too_weak_to_spend_focus_on_and_trolls_are_not() {
+        let mut game = made();
+        let rat = put(&mut game, Kind::Rat, 1, 0, true);
+        let troll = put(&mut game, Kind::Troll, -1, 0, true);
+        for practice in [Practice::Dagger, Practice::Blades, Practice::Blunt, Practice::Staff, Practice::Archery] {
+            assert!(game.threat(index(&game, rat), practice) < 10);
+            assert!(game.threat(index(&game, troll), practice) >= 10);
+        }
+        assert!(game.practice_benefit(Practice::Blades).contains("parry at skilled"));
+        skilled(&mut game, Practice::Blades);
+        assert!(game.practice_benefit(Practice::Blades).contains("parry (2 Focus): once a round"));
+    }
+
+    #[test]
+    fn parry_fires_once_a_round_on_close_blows_from_real_threats_while_focus_lasts() {
+        let mut game = made();
+        let troll = put(&mut game, Kind::Troll, 1, 0, true);
+        let rat = put(&mut game, Kind::Rat, -1, 0, true);
+        let ac = game.player.ac();
+        // A natural 10 at this bonus just beats armor: inside the parry's four points.
+        let hit = ac - 10;
+        let strike = |game: &mut Game, id: u32, n: i32, missile: Option<&str>| {
+            let hp = game.player.hp;
+            game.rng = natural(n);
+            let index = index(game, id);
+            game.creature_strike(index, hit, (1, 1), missile);
+            hp - game.player.hp
+        };
+        assert_eq!(strike(&mut game, troll, 10, None), 1, "novices do not parry");
+        game.player.practice.learn(Practice::Blades, 3_999, 100);
+        assert_eq!(strike(&mut game, troll, 10, None), 1, "practiced is not enough");
+        skilled(&mut game, Practice::Blades);
+        let focus = game.player.focus;
+        assert_eq!(strike(&mut game, troll, 10, None), 0);
+        assert_eq!(
+            (game.player.focus, game.player.readied, game.player.parried),
+            (focus - 2, Some(Readied::Riposte), true)
+        );
+        assert_eq!(strike(&mut game, troll, 10, None), 1, "one parry a round");
+        game.player.parried = false;
+        assert_eq!(strike(&mut game, troll, 10, Some("arrow")), 1, "arrows cannot be parried");
+        assert_eq!(strike(&mut game, troll, 14, None), 1, "a blow four past armor beats the parry");
+        assert_eq!(strike(&mut game, rat, 10, None), 1, "a rat is not worth the Focus");
+        let i = index(&game, rat);
+        game.creatures[i].hunting = true;
+        assert_eq!(strike(&mut game, troll, 10, None), 1, "a second hunter beside you spoils the parry");
+        game.creatures[i].hunting = false;
+        assert_eq!(strike(&mut game, troll, 10, None), 0, "alone with the troll again, the parry returns");
+        game.player.parried = false;
+        game.player.focus = 1;
+        assert_eq!(strike(&mut game, troll, 10, None), 1, "no Focus, no parry");
+        assert_eq!(game.player.focus, 1);
+        game.player.weapon = Weapon::Mace;
+        game.player.focus = 24;
+        assert_eq!(strike(&mut game, troll, 10, None), 1, "a mace cannot parry");
+    }
+
+    #[test]
+    fn riposte_adds_four_to_hit_and_two_damage_on_the_next_command_only() {
+        let mut game = made();
+        skilled(&mut game, Practice::Blades);
+        let id = put(&mut game, Kind::Troll, 1, 0, true);
+        let n = 14 - game.player.melee_bonus() - 4;
+        assert!((2..=19).contains(&n));
+        game.rng = natural(n);
+        let since = game.log.len();
+        run(&mut game, "attack troll");
+        assert!(said(&game, since, "You miss the pit troll"));
+        game.player.readied = Some(Readied::Riposte);
+        game.rng = natural(n);
+        let mut dice = game.rng.clone();
+        dice.d20();
+        let skill = game.player.practice.get(Practice::Blades).bonus();
+        let expected = dice.range(2, 7) + modifier(game.player.str) + skill + 2;
+        let since = game.log.len();
+        run(&mut game, "attack troll");
+        assert!(said(&game, since, "You riposte"));
+        assert_eq!(taken(&game, id), expected);
+        // Standing ready strikes back as a riposte too; anything else spends the advantage.
+        let i = index(&game, id);
+        game.creatures[i].hunting = true;
+        game.player.readied = Some(Readied::Riposte);
+        game.rng = natural(n);
+        let since = game.log.len();
+        run(&mut game, "wait");
+        assert!(said(&game, since, "You riposte"));
+        game.player.readied = Some(Readied::Riposte);
+        run(&mut game, "rest");
+        assert_eq!(game.player.readied, None);
+    }
+
+    #[test]
+    fn a_missed_thrust_draws_a_real_threats_guard_for_double_damage() {
+        let mut game = made();
+        game.player.weapon = Weapon::Dagger;
+        skilled(&mut game, Practice::Dagger);
+        let west = put(&mut game, Kind::Troll, -1, 0, true);
+        let east = put(&mut game, Kind::Troll, 1, 0, true);
+        let focus = game.player.focus;
+        game.rng = natural(1);
+        let since = game.log.len();
+        run(&mut game, "attack a");
+        assert!(said(&game, since, "Your thrust draws the pit troll's guard"));
+        assert_eq!((game.player.readied, game.player.focus), (Some(Readied::Feint(west)), focus - 2));
+        let n = 14 - game.player.melee_bonus() - 4;
+        game.rng = natural(n);
+        let mut dice = game.rng.clone();
+        dice.d20();
+        let skill = game.player.practice.get(Practice::Dagger).bonus();
+        let expected = 2 * (dice.range(1, 4) + modifier(game.player.str) + skill).max(1);
+        let since = game.log.len();
+        run(&mut game, "attack a");
+        assert!(said(&game, since, "You slip past the pit troll's guard"));
+        assert_eq!(taken(&game, west), expected);
+        game.rng = natural(1);
+        run(&mut game, "attack a");
+        game.rng = natural(n);
+        let since = game.log.len();
+        run(&mut game, "attack b");
+        assert!(said(&game, since, "You miss the pit troll"), "the drawn guard was the other troll's");
+        assert_eq!(taken(&game, east), 0);
+        game.clear_creatures();
+        put(&mut game, Kind::Rat, 1, 0, true);
+        let focus = game.player.focus;
+        game.rng = natural(1);
+        run(&mut game, "attack rat");
+        assert_eq!((game.player.readied, game.player.focus), (None, focus));
+    }
+
+    #[test]
+    fn a_solid_mace_hit_staggers_a_real_threat_out_of_its_next_action() {
+        let mut game = made();
+        game.player.weapon = Weapon::Mace;
+        skilled(&mut game, Practice::Blunt);
+        let id = put(&mut game, Kind::Troll, 1, 0, false);
+        let i = index(&game, id);
+        game.creatures[i].hunting = true;
+        let focus = game.player.focus;
+        let bare = 14 - game.player.melee_bonus();
+        assert!((2..=14).contains(&bare));
+        game.rng = natural(bare);
+        let since = game.log.len();
+        run(&mut game, "attack troll");
+        assert!(said(&game, since, "You hit the pit troll"));
+        assert!(!said(&game, since, "staggers"), "a bare hit is not solid");
+        assert_eq!(game.player.focus, focus);
+        game.player.hp = game.player.max_hp;
+        game.rng = natural(20);
+        let since = game.log.len();
+        run(&mut game, "attack troll");
+        assert!(said(&game, since, "The pit troll staggers"));
+        assert_eq!(game.player.focus, focus - 1, "a useful hit returns one Focus");
+        assert_eq!(game.player.hp, game.player.max_hp, "the staggered troll lost its action: {:?}", &game.log[since..]);
+    }
+
+    #[test]
+    fn sweep_carries_on_to_the_most_dangerous_neighbor_and_never_farther() {
+        let mut game = made();
+        game.player.weapon = Weapon::Staff;
+        skilled(&mut game, Practice::Staff);
+        let first = put(&mut game, Kind::Troll, 1, 0, true);
+        let rat = put(&mut game, Kind::Rat, 0, 1, true);
+        let second = put(&mut game, Kind::Troll, -1, 0, true);
+        let far = put(&mut game, Kind::Troll, 3, 0, true);
+        game.player.focus = 10;
+        let focus = game.player.focus;
+        game.rng = natural(20);
+        let since = game.log.len();
+        run(&mut game, "attack b");
+        let target = game.sighted().iter().find(|s| s.label == 'B').map(|s| s.creature.id);
+        assert!(target == Some(first) || target == Some(second));
+        let other = if target == Some(first) { second } else { first };
+        assert!(said(&game, since, "Your staff sweeps on to the pit troll"));
+        assert!(game.creatures[index(&game, other)].hunting, "the sweep reached the other troll");
+        assert!(!game.creatures[index(&game, rat)].hunting, "the rat was not worth it");
+        assert!(!game.creatures[index(&game, far)].hunting);
+        assert_eq!(game.player.focus, focus - 2 + 1, "the round returns at most one Focus, even with two hits");
+        game.player.focus = 0;
+        let since = game.log.len();
+        run(&mut game, "attack b");
+        assert!(!said(&game, since, "sweeps"));
+    }
+
+    #[test]
+    fn steady_shot_needs_distance_quiet_and_a_real_threat() {
+        let mut game = made();
+        skilled(&mut game, Practice::Archery);
+        let id = put(&mut game, Kind::Troll, 3, 0, true);
+        let n = 14 - game.player.missile_bonus() - 2;
+        assert!((2..=19).contains(&n));
+        run(&mut game, "nock");
+        game.rng = natural(n);
+        let mut dice = game.rng.clone();
+        dice.d20();
+        let skill = game.player.practice.get(Practice::Archery).bonus();
+        let expected = dice.range(1, 6) + modifier(game.player.dex).max(0) + skill + 2;
+        let focus = game.player.focus;
+        let since = game.log.len();
+        run(&mut game, "shoot troll");
+        assert!(said(&game, since, "Your arrow steady strikes"));
+        assert_eq!(taken(&game, id), expected);
+        assert_eq!(game.player.focus, focus, "a useful steady shot pays back its one Focus");
+        let near = put(&mut game, Kind::Troll, 2, 1, true);
+        run(&mut game, "nock");
+        game.rng = natural(n);
+        let since = game.log.len();
+        let label = game.sighted().iter().find(|s| s.creature.id == near).unwrap().label;
+        run(&mut game, &format!("shoot {label}"));
+        assert!(said(&game, since, "Your arrow misses"), "two cells is too close to steady");
+        let i = index(&game, near);
+        game.creatures[i].pos = (game.player.pos.0 + 1, game.player.pos.1 + 1);
+        game.creatures[i].hunting = true;
+        run(&mut game, "nock");
+        game.rng = natural(n);
+        let since = game.log.len();
+        let label = game.sighted().iter().find(|s| s.creature.id == id).unwrap().label;
+        run(&mut game, &format!("shoot {label}"));
+        assert!(said(&game, since, "Your arrow misses"), "a hunter beside you spoils the shot");
+    }
+
+    #[test]
+    fn successes_restore_focus_once_per_round_only_while_the_foe_has_useful_damage_left() {
+        let mut game = made();
+        let troll = put(&mut game, Kind::Troll, 1, 0, true);
+        let rat = put(&mut game, Kind::Rat, -1, 0, true);
+        game.player.focus = 10;
+        game.wound(index(&game, rat), 1, Practice::Blades, 0);
+        assert_eq!(game.player.focus, 10, "harmless successes give no Focus");
+        game.wound(index(&game, troll), 1, Practice::Blades, 0);
+        assert_eq!(game.player.focus, 11);
+        let mut game: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        game.wound(index(&game, troll), 1, Practice::Blades, 0);
+        assert_eq!(game.player.focus, 11, "neither extra hits nor reload renew the round's recovery");
+        game.round += 1;
+        game.wound(index(&game, troll), 1, Practice::Blades, 0);
+        assert_eq!(game.player.focus, 12, "another round can earn Focus");
+        let i = index(&game, troll);
+        game.creatures[i].learning_damage_left = 0;
+        game.round += 1;
+        game.wound(i, 1, Practice::Blades, 0);
+        assert_eq!(game.player.focus, 12, "regenerated creature health cannot farm Focus");
+        game.player.relic = Some(Relic::Stillstone);
+        game.player.refresh_focus_capacity();
+        game.player.focus = game.player.max_focus;
+        game.round = FOCUS_TICK;
+        game.recover();
+        assert_eq!(game.player.focus, 20, "passive recovery respects the reduced maximum");
+        game.creatures[i].learning_damage_left = 1;
+        game.wound(i, 1, Practice::Blades, 0);
+        assert_eq!(game.player.focus, 20, "success recovery respects the reduced maximum");
+    }
+
+    #[test]
+    fn lethal_mace_hits_do_not_spend_focus_to_stagger_a_corpse() {
+        let mut game = made();
+        game.player.weapon = Weapon::Mace;
+        skilled(&mut game, Practice::Blunt);
+        let id = put(&mut game, Kind::Troll, 1, 0, true);
+        let i = index(&game, id);
+        game.creatures[i].hp = 1;
+        game.player.focus = 10;
+        game.rng = natural(20);
+        run(&mut game, "attack troll");
+        assert!(!game.creatures.iter().any(|c| c.id == id));
+        assert_eq!(game.player.focus, 11, "only the success refund, with no wasted technique cost");
+    }
+
+    /// The balance the design asks of a skilled character: one peer is a win worth having, two peers
+    /// are a real risk of death, and Focus spent on techniques is what makes the difference. Measured
+    /// through whole rounds with the crudest play there is, so a thoughtful player keeps a margin these
+    /// numbers do not show.
+    #[test]
+    fn a_skilled_character_beats_one_peer_and_risks_death_against_two() {
+        const TRIALS: u32 = 256;
+        let mut base = Game::new(7);
+        base.answer("Wren");
+        base.clear_creatures();
+        // An ordinary body in starter gear, not a champion: only the weapon and Vitality are earned.
+        (base.player.str, base.player.dex, base.player.con) = (14, 14, 14);
+        base.learn_practice(Practice::Vitality, 4_000, 100);
+        base.player.hp = base.player.max_hp;
+        let full = base.player.max_hp;
+        // Hack and hope: attack whatever is beside you every round, never retreat, heal, ward, or flee.
+        let fight = |weapon: Weapon, orcs: usize, spare_focus: bool| {
+            let mut deaths = 0;
+            let mut kept = 0;
+            for seed in 0..TRIALS {
+                let mut game = base.clone();
+                game.rng = Rng::new(u64::from(seed));
+                game.player.weapon = weapon;
+                skilled(&mut game, Practice::weapon(weapon));
+                if !spare_focus {
+                    // The same fighter with nothing left to spend: every technique priced out.
+                    game.player.max_focus = 0;
+                    game.player.focus = 0;
+                }
+                put(&mut game, Kind::Orc, 1, 0, false);
+                if orcs == 2 {
+                    put(&mut game, Kind::Orc, -1, 0, false);
+                }
+                for _ in 0..200 {
+                    game.round(Some(Command::Attack(None)));
+                    if game.player.deaths > 0 || game.creatures.is_empty() {
+                        break;
+                    }
+                }
+                assert!(game.creatures.is_empty() || game.player.deaths > 0, "the fight must end: {weapon:?}");
+                deaths += u32::from(game.player.deaths > 0);
+                kept += if game.player.deaths > 0 { 0 } else { game.player.hp };
+            }
+            (deaths, kept / TRIALS as i32)
+        };
+        let weapons = [Weapon::Dagger, Weapon::ShortSword, Weapon::Mace, Weapon::Staff];
+        let mut rows = Vec::new();
+        for weapon in weapons {
+            for orcs in [1, 2] {
+                for spare_focus in [true, false] {
+                    let (deaths, kept) = fight(weapon, orcs, spare_focus);
+                    rows.push((weapon, orcs, spare_focus, deaths, kept));
+                }
+            }
+        }
+        let report = rows
+            .iter()
+            .map(|(weapon, orcs, spare_focus, deaths, kept)| {
+                let focus = if *spare_focus { "with Focus" } else { "spent dry" };
+                format!(
+                    "{:>11} vs {orcs} orc(s), {focus}: died {deaths:>3}/{TRIALS}, mean Health kept {kept:>2}/{full}",
+                    weapon.name()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        println!("{report}");
+        let row = |weapon: Weapon, orcs: usize, spare_focus: bool| {
+            rows.iter()
+                .find(|r| r.0 == weapon && r.1 == orcs && r.2 == spare_focus)
+                .map(|&(_, _, _, deaths, kept)| (deaths, kept))
+                .expect("every case was measured")
+        };
+        for weapon in weapons {
+            let duel = row(weapon, 1, true);
+            let pair = row(weapon, 2, true);
+            let dry_duel = row(weapon, 1, false);
+            let dry_pair = row(weapon, 2, false);
+            // One peer: a win worth having.
+            assert!(duel.0 * 20 <= TRIALS, "one peer should rarely kill you: {weapon:?}\n{report}");
+            assert!(duel.1 * 2 >= full, "one peer should leave a reserve: {weapon:?}\n{report}");
+            // Two peers: death is a live possibility, and the second one at least halves the spoils.
+            assert!(pair.0 * 8 >= TRIALS, "two peers should risk death: {weapon:?}\n{report}");
+            assert!(pair.1 * 2 <= duel.1, "a second peer should halve what you walk away with: {weapon:?}\n{report}");
+            // Focus must buy survival where the weapon's technique applies, without carrying the fight.
+            assert!(duel.1 >= dry_duel.1, "spent Focus should never cost you a duel: {weapon:?}\n{report}");
+            assert!(pair.0 < dry_pair.0, "spent Focus should buy survival against two: {weapon:?}\n{report}");
+            assert!(duel.1 * 2 < dry_duel.1 * 3, "techniques should not carry the duel: {weapon:?}\n{report}");
+        }
+    }
+
+    #[test]
+    fn technique_state_survives_reload_old_saves_load_and_death_clears_it() {
+        let mut game = made();
+        game.player.parried = true;
+        game.player.readied = Some(Readied::Feint(9));
+        let copy: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        assert_eq!(copy, game);
+        let mut save = serde_json::to_value(&game).unwrap();
+        let player = save["player"].as_object_mut().unwrap();
+        player.remove("parried");
+        player.remove("readied");
+        let old: Game = serde_json::from_value(save).unwrap();
+        assert!(!old.player.parried);
+        assert_eq!(old.player.readied, None);
+        game.die();
+        assert!(!game.player.parried && game.player.readied.is_none());
+    }
+}
 #[cfg(test)]
 mod cinder_tests {
     use super::*;
@@ -2936,16 +3501,18 @@ mod cinder_tests {
             assert_eq!(game.player.deaths, 0, "{:?}", game.log);
             let target =
                 if game.creatures.iter().any(|c| c.kind == Kind::AshSentry) { "ash sentry" } else { "cinder warden" };
+            // Ordinary sense, not optimal play: drink when hurt, keep the ward up, close with whatever
+            // is in reach, and spark only what is too far to reach this round.
+            let reach = game.creatures.iter().find(|c| distance(c.pos, game.player.pos) <= 1).map(|c| c.stats().name);
             if game.player.hp <= game.player.max_hp - 8 && game.player.sack.contains(&Item::Potion) {
                 run(&mut game, "quaff");
             } else if game.player.chanted.is_some() {
                 run(&mut game, &format!("cast {target}"));
             } else if game.player.shield <= 2 && game.player.focus >= 4 {
                 run(&mut game, "chant shield");
-            } else if let Some(enemy) = game.creatures.iter().find(|c| distance(c.pos, game.player.pos) <= 1) {
-                let name = enemy.stats().name;
+            } else if let Some(name) = reach {
                 run(&mut game, &format!("attack {name}"));
-            } else if game.player.focus >= 3 {
+            } else if game.player.focus >= 3 && game.creatures.iter().all(|c| distance(c.pos, game.player.pos) > 2) {
                 run(&mut game, "chant spark");
             } else {
                 let next = game.creatures[0].pos;
@@ -3866,7 +4433,8 @@ mod progression_tests {
         assert_eq!(game.player.relic, Some(Relic::Stillstone));
         assert_eq!((game.player.focus, game.player.max_focus), (28, 28));
         game.round(Some(Command::Remove("relic".into())));
-        assert_eq!((game.player.focus, game.player.max_focus), (28, 32));
+        // Removal lifts the cap without refilling; the fourth round returns one point on its own.
+        assert_eq!((game.player.focus, game.player.max_focus), (28 + 1, 32));
     }
 
     #[test]
@@ -3919,7 +4487,8 @@ mod progression_tests {
         game.round(Some(Command::Sell("stillstone".into())));
         assert_eq!(game.player.gold, gold + 75);
         assert!(!game.player.sack.contains(&Item::Relic(Relic::Stillstone)));
-        assert_eq!((game.player.focus, game.player.max_focus), (20, 24));
+        // Selling refills nothing; the one point gained in all this came from the eighth round.
+        assert_eq!((game.player.focus, game.player.max_focus), (20 + 1, 24));
     }
 
     fn expected_skill(evidence: u32, threat: u32) -> Skill {
@@ -4110,8 +4679,8 @@ mod progression_tests {
         novice.creatures[0].hp = 1_000;
         let mut practiced = novice.clone();
         practiced.learn_practice(Practice::Blades, 1_000, 100);
-        novice.attack(Some(Target::Label('A')));
-        practiced.attack(Some(Target::Label('A')));
+        novice.attack(Some(Target::Label('A')), None);
+        practiced.attack(Some(Target::Label('A')), None);
         assert_eq!(novice.creatures[0].hp - practiced.creatures[0].hp, 1, "blades practice adds real damage");
 
         let mut novice = made(16);
@@ -4403,7 +4972,7 @@ mod progression_tests {
         let id = opening.place(Kind::Troll, (opening.player.pos.0 + 1, opening.player.pos.1));
         opening.creatures[0].hp = 1_000;
         let threat = opening.threat(0, Practice::Stealth);
-        opening.attack(Some(Target::Label('A')));
+        opening.attack(Some(Target::Label('A')), None);
         assert_eq!(opening.creatures[0].stealth_lessons_left, 9);
         assert!(opening.creatures[0].revealed_by_attack);
         assert_eq!(opening.player.practice.get(Practice::Stealth), expected_skill(6 * threat, threat),);
@@ -4430,15 +4999,16 @@ mod progression_tests {
     }
 
     #[test]
-    fn ordinary_waiting_does_not_regenerate_health_or_focus() {
+    fn ordinary_waiting_recovers_focus_slowly_but_never_health() {
         let mut game = made(19);
         game.player.hp -= 5;
         game.player.focus -= 5;
         let before = (game.player.hp, game.player.focus);
-        for _ in 0..10 {
+        for round in 1..=10 {
             game.round(None);
+            assert_eq!(game.player.hp, before.0);
+            assert_eq!(game.player.focus, before.1 + (round / FOCUS_TICK) as i32);
         }
-        assert_eq!((game.player.hp, game.player.focus), before);
         game.player.hp = game.player.max_hp - 10;
         game.player.focus = game.player.max_focus - 10;
         let before = (game.player.hp, game.player.focus);

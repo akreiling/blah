@@ -88,7 +88,9 @@ mod tests {
         assert_eq!((game.player().focus, game.player().max_focus), (20, 20));
         for _ in 0..4 {
             run(&mut game, "remove relic");
-            assert_eq!((game.player().focus, game.player().max_focus), (20, 24));
+            // Lifting the cap refills nothing; only the point every fourth round returns on its own.
+            let tick = i32::from(game.round_number().is_multiple_of(crate::game::FOCUS_TICK));
+            assert_eq!((game.player().focus, game.player().max_focus), (20 + tick, 24));
             run(&mut game, "wear stillstone");
             assert_eq!((game.player().focus, game.player().max_focus), (20, 20));
         }

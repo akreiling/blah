@@ -8,7 +8,7 @@ import json
 import pathlib
 import tempfile
 
-from isle import Isle, panel_value
+from isle import Isle, focus_returned, panel_value
 
 
 def progression():
@@ -38,8 +38,11 @@ def progression():
         assert 0 < player["focus"] < player["max_focus"]
         assert player["practice"] == practice, "safe spell toggles teach nothing"
         focus = player["focus"]
+        waiting = reply["round"]
         reply = isle.batch("wait\n" * 8, "right", "left", game=True, interrupt=False)
-        assert reply["game"]["player"]["focus"] == focus, "waiting and walking do not refill Focus"
+        returned = focus_returned(waiting, reply["round"])
+        assert returned > 0, "eight rounds of waiting pass at least one Focus tick"
+        assert reply["game"]["player"]["focus"] == focus + returned, "waiting returns Focus only on the slow tick"
         assert reply["game"]["player"]["practice"] == practice
         save = reply["game"]
         assert json.loads(isle.save.read_text()) == save

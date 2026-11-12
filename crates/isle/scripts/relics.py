@@ -4,7 +4,7 @@ import json
 import pathlib
 import tempfile
 
-from isle import Isle
+from isle import Isle, focus_returned
 from landmarks import paths
 
 RELICS = {
@@ -78,12 +78,14 @@ def relics():
             expected_max = before["player"]["max_focus"] - (4 if relic == "Stillstone" else 0)
             assert reply["game"]["player"]["max_focus"] == expected_max
             worn = reply["game"]["player"]
+            worn_round = reply["round"]
             assert isle.quit() == 0
         with Isle(save=path) as isle:
             assert isle.request("state", game=True)["game"]["player"] == worn
             reply = isle.batch("remove relic\n", game=True)
             assert not reply["game"]["player"]["relic"]
-            assert reply["game"]["player"]["focus"] == worn["focus"], "removal cannot refill Focus"
+            returned = focus_returned(worn_round, reply["round"])
+            assert reply["game"]["player"]["focus"] == worn["focus"] + returned, "removal cannot refill Focus"
             assert reply["game"]["player"]["max_focus"] == before["player"]["max_focus"]
             assert reply["game"]["player"]["sack"].count({"Relic": relic}) == 1
             assert not any(row.startswith("Relic ") for row in isle.screen()["panel"])

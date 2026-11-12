@@ -4,7 +4,7 @@ import json
 import pathlib
 import tempfile
 
-from isle import Isle
+from isle import Isle, drifted, focus_returned
 from landmarks import paths, glyph
 
 KINDS = {"CinderWarden": "cinder warden", "AshSentry": "ash sentry"}
@@ -80,7 +80,8 @@ def cinder():
                     command = "chant shield"
                 elif adjacent:
                     command = f"attack {KINDS[adjacent['kind']]}"
-                elif player["focus"] >= 3:
+                elif player["focus"] >= 3 and all(
+                        max(abs(c["pos"][i] - player["pos"][i]) for i in (0, 1)) > 2 for c in enemies):
                     command = "chant spark"
                 else:
                     dx, dy = (target["pos"][i] - player["pos"][i] for i in (0, 1))
@@ -100,6 +101,7 @@ def cinder():
             assert {"Relic": "EmberCharm"} in reply["game"]["player"]["sack"]
             assert {"Herb": "Bogmint"} in reply["game"]["player"]["sack"]
             claimed = reply["game"]["player"]
+            claimed_round = reply["round"]
             assert isle.quit() == 0
         with Isle(save=path) as isle:
             assert isle.request("state", game=True)["game"]["player"] == claimed
@@ -107,6 +109,7 @@ def cinder():
             expected = {**claimed, "shield": max(0, claimed["shield"] - 2)}
             if not expected["shield"]:
                 expected["shield_focus_credit"] = 0
+            expected = drifted(expected, focus_returned(claimed_round, reply["round"]))
             assert reply["game"]["player"] == expected
             assert not guards(reply["game"])
             # Step aside so the hero does not cover the remembered tower marker.
