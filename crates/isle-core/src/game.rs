@@ -2569,7 +2569,8 @@ impl Game {
         }
         let terrain = self.terrain;
         let productivity = terrain.biome(me).biome().productivity;
-        let count = self.creatures.iter().filter(|c| c.kind == Kind::Wild).count();
+        // Deep inhabitants are also wild; counting them would let a full Deep empty the wilderness.
+        let count = self.creatures.iter().filter(|c| c.kind == Kind::Wild && c.at == LevelId::Surface).count();
         if count >= blah_core::capacity(productivity) {
             return;
         }
@@ -4670,6 +4671,31 @@ mod wildlife_tests {
         game.player.pos = (1_000_000, -1_000_000);
         game.round(Some(Command::Rest));
         assert!(game.creatures.iter().all(|c| distance(c.pos, game.player.pos) <= 32));
+    }
+
+    #[test]
+    fn deep_inhabitants_do_not_fill_the_surface_population() {
+        let mut game = made();
+        let town = game.towns.home;
+        for depth in 1..=3 {
+            let deep = Deep::new(town, depth);
+            game.player.at = deep.level();
+            game.player.pos = deep.spawns()[0].0;
+            game.open_deep(deep);
+            game.round(Some(Command::Wait));
+        }
+        let below = game.creatures.iter().filter(|c| c.kind == Kind::Wild && c.at != LevelId::Surface).count();
+        assert!(below >= 12, "three populated floors outnumber any surface cap: {below}");
+        game.player.at = LevelId::Surface;
+        game.player.pos = clearing(&game);
+        game.wild_ready = 0;
+        for _ in 0..30 {
+            game.round(Some(Command::Rest));
+        }
+        assert!(
+            game.creatures.iter().any(|c| c.at == LevelId::Surface),
+            "the wilderness fills even while the Deep below is full"
+        );
     }
 
     #[test]
