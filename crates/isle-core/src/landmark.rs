@@ -78,6 +78,11 @@ impl Landmark {
             LandmarkKind::Camp => Item::Arrows(12),
             _ => Item::Potion,
         });
+        // A separate stream leaves ordinary treasure and combat dice unchanged.
+        let mut relics = blah_core::Rng::keyed(seed, b"isl-reli", &[self.pos.0 as u64, self.pos.1 as u64]);
+        if self.kind == LandmarkKind::Shrine || relics.below(4) == 0 {
+            items.push(Item::Relic(crate::Relic::ALL[relics.below(crate::Relic::ALL.len())]));
+        }
         items
     }
 }

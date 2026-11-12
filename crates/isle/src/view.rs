@@ -517,6 +517,12 @@ impl IsleView {
             .child(pair("Bow", bow_text(p)))
             .child(pair("Worn", worn_text(p)))
             .child(dim_line_owned(practice_text(p)));
+        if let Some(relic) = p.relic {
+            panel = panel.child(pair("Relic", relic.name().into()));
+            for line in wrap(relic.description(), 36) {
+                panel = panel.child(dim_line_owned(line));
+            }
+        }
         if let Some(states) = states_text(game) {
             panel = panel.child(div().h(px(LINE)).text_color(rgb(HEADING)).child(states));
         }
@@ -601,6 +607,10 @@ impl IsleView {
             panel.push(format!("Bow {}", bow_text(p)));
             panel.push(format!("Worn {}", worn_text(p)));
             panel.push(practice_text(p));
+            if let Some(relic) = p.relic {
+                panel.push(format!("Relic {}", relic.name()));
+                panel.extend(wrap(relic.description(), 36));
+            }
             panel.extend(states_text(game));
             panel.push(format!("Place {}", place_text(game)));
             let number = game.round_number() + 1;

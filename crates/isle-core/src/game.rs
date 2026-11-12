@@ -12,6 +12,7 @@ use crate::herb::{HerbPatch, SECTOR as HERB_SECTOR};
 use crate::landmark::{Landmark, SECTOR};
 use crate::map::{LevelId, Place, Pos, Terrain, Tile, Zone, distance};
 use crate::practice::{Practice, Practices, rank_steps};
+use crate::relic::Relic;
 use crate::rng::Rng;
 use crate::town::{Town, Towns};
 use crate::wildlife::{LifeCache, Wildlife};
@@ -142,6 +143,9 @@ pub struct Player {
     pub armor: Option<Armor>,
     /// Whether the ring of warding is worn.
     pub ring: bool,
+    /// The one relic worn, separate from armor and the ring.
+    #[serde(default)]
+    pub relic: Option<Relic>,
     /// Everything else carried.
     pub sack: Vec<Item>,
     /// Coins.
@@ -199,6 +203,7 @@ impl Player {
             arrows: 12,
             armor: Some(Armor::Leather),
             ring: false,
+            relic: None,
             sack: vec![Item::Weapon(Weapon::Staff), Item::Potion],
             gold: 50,
             nocked: false,
@@ -223,7 +228,33 @@ impl Player {
     }
 
     fn missile_bonus(&self) -> i32 {
-        modifier(self.dex) + rank_steps(self.practice.get(Practice::Archery).rank())
+        modifier(self.dex)
+            + rank_steps(self.practice.get(Practice::Archery).rank())
+            + if self.relic == Some(Relic::HuntersToken) { 2 } else { 0 }
+    }
+
+    fn refresh_focus_capacity(&mut self) {
+        self.max_focus = self.practice.get(Practice::Focus).focus_capacity()
+            - if self.relic == Some(Relic::Stillstone) { 4 } else { 0 };
+        self.focus = self.focus.min(self.max_focus);
+    }
+
+    /// Protection from the active Shield, including practice and the currently worn relic.
+    pub fn ward_protection(&self, missile: bool) -> i32 {
+        if self.shield == 0 {
+            return 0;
+        }
+        (if missile { 6 } else { 3 })
+            + rank_steps(self.practice.get(Practice::Warding).rank())
+            + if self.relic == Some(Relic::Stillstone) { 2 } else { 0 }
+    }
+
+    /// Percentage chance of a hiding attempt before adjacent watchers and cave light refuse it.
+    pub fn hiding_chance(&self, watchers: i32) -> i32 {
+        let base = (60 + modifier(self.dex) * 5 + 5 * rank_steps(self.practice.get(Practice::Stealth).rank())
+            - watchers * 15)
+            .clamp(0, 100);
+        (base - if self.relic == Some(Relic::HuntersToken) { 15 } else { 0 }).max(0)
     }
 
     fn baseline_max_hp(&self) -> i32 {
@@ -694,6 +725,15 @@ impl Game {
                     let items: Vec<String> = p.sack.iter().map(|i| i.name()).collect();
                     format!("Sack: {}. You have {} gold.", items.join(", "), p.gold)
                 });
+                lines.push(match p.relic {
+                    Some(relic) => format!("Worn relic: {} — {}.", relic.name(), relic.description()),
+                    None => "Worn relic: none. You may wear one relic at a time.".into(),
+                });
+                for relic in Relic::ALL {
+                    if p.sack.contains(&Item::Relic(relic)) {
+                        lines.push(format!("{} — {}.", relic.name(), relic.description()));
+                    }
+                }
                 for line in lines {
                     self.say(Tone::Info, line);
                 }
@@ -769,7 +809,9 @@ impl Game {
             Practice::Binding => format!("Stun: +{steps} rounds"),
             Practice::Stealth => format!("+{}% hiding chance, +{} opening damage", 5 * steps, skill.bonus()),
             Practice::Vitality => format!("+{} maximum Health (currently {})", 4 * steps, self.player.max_hp),
-            Practice::Focus => format!("maximum Focus: {}", skill.focus_capacity()),
+            Practice::Focus => {
+                format!("maximum Focus: {} ({} from practice)", self.player.max_focus, skill.focus_capacity())
+            }
         }
     }
 
@@ -831,6 +873,7 @@ impl Game {
             Command::Drop(what) => self.drop_item(&what),
             Command::Wield(what) => self.wield(&what),
             Command::Wear(what) => self.wear(&what),
+            Command::Remove(what) => self.remove_relic(&what),
             Command::Quaff => self.quaff(),
             Command::Use(what) => self.use_herb(&what),
             Command::Rest => self.rest(),
@@ -1170,7 +1213,9 @@ impl Game {
             if spell == Spell::Heal {
                 let skill = self.player.practice.get(Practice::Restoration);
                 let before = self.player.hp;
-                let healing = self.rng.range(4, 12) + 2 * rank_steps(skill.rank());
+                let healing = (self.rng.range(4, 12) + 2 * rank_steps(skill.rank())
+                    - if self.player.relic == Some(Relic::EmberCharm) { 3 } else { 0 })
+                .max(1);
                 self.player.hp = (self.player.hp + healing).min(self.player.max_hp);
                 let healed = self.player.hp - before;
                 self.say(Tone::Gain, format!("Warmth knits your wounds. (+{healed} health)"));
@@ -1228,7 +1273,11 @@ impl Game {
             return;
         }
         let skill = self.player.practice.get(Practice::Evocation);
-        let damage = (self.rng.range(2, 8) + modifier(self.player.int).max(0) + skill.bonus()).max(1);
+        let damage = (self.rng.range(2, 8)
+            + modifier(self.player.int).max(0)
+            + skill.bonus()
+            + if self.player.relic == Some(Relic::EmberCharm) { 2 } else { 0 })
+        .max(1);
         self.say(Tone::Hit, format!("A spark leaps from your hand and burns the {} for {damage}!", stats.name));
         self.wound(index, damage, Practice::Evocation, cost);
     }
@@ -1244,8 +1293,7 @@ impl Game {
             return;
         }
         let watchers = self.creatures.iter().filter(|c| c.at == self.player.at && c.hunting).count() as i32;
-        let stealth = self.player.practice.get(Practice::Stealth);
-        if self.rng.chance(60 + modifier(self.player.dex) * 5 + 5 * rank_steps(stealth.rank()) - watchers * 15) {
+        if self.rng.chance(self.player.hiding_chance(watchers)) {
             self.player.hidden = true;
             for c in self.creatures.iter_mut().filter(|c| c.at == self.player.at) {
                 c.hunting = false;
@@ -1300,13 +1348,12 @@ impl Game {
 
     fn learn_practice(&mut self, discipline: Practice, evidence: u32, threat: u32) {
         let Some(rank) = self.player.practice.learn(discipline, evidence, threat) else { return };
-        let skill = self.player.practice.get(discipline);
         match discipline {
             Practice::Vitality => {
                 self.player.max_hp = self.player.baseline_max_hp() + 4 * rank_steps(rank);
             }
             Practice::Focus => {
-                self.player.max_focus = skill.focus_capacity();
+                self.player.refresh_focus_capacity();
             }
             _ => {}
         }
@@ -1725,6 +1772,16 @@ impl Game {
             return;
         };
         match self.player.sack[i] {
+            Item::Relic(relic) => {
+                match self.player.relic.replace(relic) {
+                    Some(old) => self.player.sack[i] = Item::Relic(old),
+                    None => {
+                        self.player.sack.remove(i);
+                    }
+                }
+                self.player.refresh_focus_capacity();
+                self.say(Tone::Gain, format!("You wear the {}. {}.", relic.name(), relic.description()));
+            }
             Item::Armor(a) => {
                 match self.player.armor.replace(a) {
                     Some(old) => self.player.sack[i] = Item::Armor(old),
@@ -1739,6 +1796,21 @@ impl Game {
             }
             other => self.say(Tone::Info, format!("You can't wear {}.", other.name())),
         }
+    }
+
+    fn remove_relic(&mut self, what: &str) {
+        let Some(relic) = self.player.relic.filter(|&relic| Item::Relic(relic).matches(what)) else {
+            self.say(Tone::Info, format!("You wear no {what}."));
+            return;
+        };
+        if self.player.sack.len() >= SACK {
+            self.say(Tone::Info, "Your sack is full; make room before removing your relic.");
+            return;
+        }
+        self.player.relic = None;
+        self.player.sack.push(Item::Relic(relic));
+        self.player.refresh_focus_capacity();
+        self.say(Tone::Info, format!("You remove the {}. Its benefit and cost end.", relic.name()));
     }
 
     fn quaff(&mut self) {
@@ -2133,12 +2205,7 @@ impl Game {
     fn creature_strike(&mut self, index: usize, hit: i32, (lo, hi): (i32, i32), missile: Option<&str>) {
         let name = self.creatures[index].stats().name;
         let natural = self.rng.d20();
-        let warding = rank_steps(self.player.practice.get(Practice::Warding).rank());
-        let ward = match (self.player.shield > 0, missile.is_some()) {
-            (true, true) => 6 + warding,
-            (true, false) => 3 + warding,
-            (false, _) => 0,
-        };
+        let ward = self.player.ward_protection(missile.is_some());
         let roll = natural + hit;
         let ac = self.player.ac();
         if natural != 20 && roll < ac + ward {
@@ -3346,6 +3413,82 @@ mod progression_tests {
         game.answer("Wren");
         game.clear_creatures();
         game
+    }
+
+    #[test]
+    fn relic_focus_cost_survives_earned_capacity_and_death_without_swap_refills() {
+        let mut game = made(7);
+        game.player.sack.push(Item::Relic(Relic::Stillstone));
+        game.round(Some(Command::Wear("stillstone".into())));
+        game.player.focus = 5;
+        game.learn_practice(Practice::Focus, 1_000, 200);
+        assert_eq!(game.player.practice.get(Practice::Focus).rank(), Rank::Practiced);
+        assert_eq!((game.player.focus, game.player.max_focus), (5, 22));
+        game.round(Some(Command::Remove("relic".into())));
+        assert_eq!((game.player.focus, game.player.max_focus), (5, 26));
+        game.round(Some(Command::Wear("stillstone".into())));
+        game.learn_practice(Practice::Focus, 29_000, 200);
+        assert_eq!(game.player.practice.get(Practice::Focus).rank(), Rank::Expert);
+        assert_eq!((game.player.focus, game.player.max_focus), (5, 28));
+        game.player.hp = 0;
+        game.die();
+        assert_eq!(game.player.relic, Some(Relic::Stillstone));
+        assert_eq!((game.player.focus, game.player.max_focus), (28, 28));
+        game.round(Some(Command::Remove("relic".into())));
+        assert_eq!((game.player.focus, game.player.max_focus), (28, 32));
+    }
+
+    #[test]
+    fn relic_changes_take_exposed_rounds_and_active_wards_use_current_equipment() {
+        let mut game = made(7);
+        game.player.dex = 10;
+        game.player.armor = None;
+        game.player.shield = 10;
+        let pos = game.player.pos;
+        let id = game.place(Kind::Orc, (pos.0 + 1, pos.1));
+        let index = game.creatures.iter().position(|c| c.id == id).unwrap();
+        game.creatures[index].hunting = true;
+        game.creatures[index].last_seen = Some(pos);
+        game.player.sack.push(Item::Relic(Relic::Stillstone));
+        // +4 Orc accuracy: natural 10 beats the ordinary ward (AC 13), not Stillstone (AC 15).
+        game.rng = rng_for_d20(10);
+        let health = game.player.hp;
+        game.round(Some(Command::Wear("stillstone".into())));
+        assert_eq!(game.player.hp, health);
+        assert!(game.log.iter().any(|line| line.text.contains("ward turns aside")));
+        game.rng = rng_for_d20(10);
+        game.round(Some(Command::Remove("relic".into())));
+        assert!(game.player.hp < health, "removal spends a round and ends protection immediately");
+        assert!(game.player.shield > 0, "an old Shield is not a snapshot of the relic bonus");
+    }
+
+    #[test]
+    fn stillstone_recovery_respects_reduced_capacity_and_removed_relics_can_be_sold() {
+        let mut game = made(7);
+        game.player.sack.push(Item::Relic(Relic::Stillstone));
+        game.round(Some(Command::Wear("stillstone".into())));
+        game.player.focus = 19;
+        game.round(Some(Command::Rest));
+        assert_eq!((game.player.focus, game.player.max_focus), (20, 20));
+        game.player.focus = 19;
+        game.player.sack.push(Item::Herb(crate::Herb::Bogmint));
+        game.round(Some(Command::Use("bogmint".into())));
+        assert_eq!((game.player.focus, game.player.max_focus), (20, 20));
+        game.player.focus = 1;
+        game.player.pos = game.towns.home.respawn();
+        game.round(Some(Command::Heal));
+        assert_eq!((game.player.focus, game.player.max_focus), (20, 20));
+        game.player.pos = game.towns.home.shop();
+        let gold = game.player.gold;
+        game.round(Some(Command::Sell("stillstone".into())));
+        assert_eq!(game.player.gold, gold, "a worn relic is not in the sack to sell");
+        game.round(Some(Command::Remove("relic".into())));
+        game.round(Some(Command::Drop("stillstone".into())));
+        game.round(Some(Command::Get("relic".into())));
+        game.round(Some(Command::Sell("stillstone".into())));
+        assert_eq!(game.player.gold, gold + 75);
+        assert!(!game.player.sack.contains(&Item::Relic(Relic::Stillstone)));
+        assert_eq!((game.player.focus, game.player.max_focus), (20, 24));
     }
 
     fn expected_skill(evidence: u32, threat: u32) -> Skill {

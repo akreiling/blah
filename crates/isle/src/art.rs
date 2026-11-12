@@ -95,6 +95,7 @@ pub enum Object {
     Camp,
     Shrine,
     Herb(isle_core::Herb),
+    Relic(isle_core::Relic),
     Coins,
     Arrows,
     Potion,
@@ -112,7 +113,7 @@ impl Object {
 }
 
 #[cfg(test)]
-pub const ALL_OBJECTS: [Object; 25] = [
+pub const ALL_OBJECTS: [Object; 28] = [
     Object::Pine,
     Object::Oak,
     Object::Acacia,
@@ -130,6 +131,9 @@ pub const ALL_OBJECTS: [Object; 25] = [
     Object::Herb(isle_core::Herb::Woundleaf),
     Object::Herb(isle_core::Herb::Bogmint),
     Object::Herb(isle_core::Herb::Sunroot),
+    Object::Relic(isle_core::Relic::EmberCharm),
+    Object::Relic(isle_core::Relic::Stillstone),
+    Object::Relic(isle_core::Relic::HuntersToken),
     Object::Coins,
     Object::Arrows,
     Object::Potion,
@@ -273,6 +277,7 @@ pub fn item_art(items: &[Item]) -> Option<Object> {
         return Some(Object::Treasure);
     }
     match items.first()? {
+        Item::Relic(relic) => Some(Object::Relic(*relic)),
         Item::Herb(herb) => Some(Object::Herb(*herb)),
         Item::Gold(_) => Some(Object::Coins),
         Item::Arrows(_) => Some(Object::Arrows),
@@ -2045,6 +2050,29 @@ mod tests {
         save(&image, "herb-contact.png");
     }
 
+    /// Preview the three relic shapes on grass, sand, and snow.
+    #[test]
+    #[ignore]
+    fn relic_contact_sheet() {
+        let cache = ArtCache::new(7);
+        let world = |x: i32, _: i32| match x / 4 {
+            0 => (Terrain::Grass, Style::Moss),
+            1 => (Terrain::Sand, Style::Fable),
+            _ => (Terrain::Snow, Style::Hearth),
+        };
+        let objects = |x: i32, y: i32| {
+            let relic = match y {
+                1 => Some(isle_core::Relic::EmberCharm),
+                3 => Some(isle_core::Relic::Stillstone),
+                5 => Some(isle_core::Relic::HuntersToken),
+                _ => None,
+            };
+            (x.rem_euclid(4) == 1).then_some(relic.map(Object::Relic)).flatten()
+        };
+        let image = scene(&cache, &world, Mood::Surface(mood::Sky { clear: 4, mist: 0 }), (12, 7), &objects);
+        save(&image, "relic-contact.png");
+    }
+
     /// Paint a scene of `w`×`h` cells under `mood`, with tufts, heat, and `objects` on top.
     fn scene(
         cache: &ArtCache,
@@ -2622,6 +2650,9 @@ mod tests {
     #[test]
     fn every_item_variant_and_mixed_pile_has_an_icon() {
         let variants = [
+            (Item::Relic(isle_core::Relic::EmberCharm), Object::Relic(isle_core::Relic::EmberCharm)),
+            (Item::Relic(isle_core::Relic::Stillstone), Object::Relic(isle_core::Relic::Stillstone)),
+            (Item::Relic(isle_core::Relic::HuntersToken), Object::Relic(isle_core::Relic::HuntersToken)),
             (Item::Herb(isle_core::Herb::Woundleaf), Object::Herb(isle_core::Herb::Woundleaf)),
             (Item::Herb(isle_core::Herb::Bogmint), Object::Herb(isle_core::Herb::Bogmint)),
             (Item::Herb(isle_core::Herb::Sunroot), Object::Herb(isle_core::Herb::Sunroot)),

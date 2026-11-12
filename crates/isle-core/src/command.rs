@@ -119,8 +119,10 @@ pub enum Command {
     Drop(String),
     /// Take a weapon or bow in hand.
     Wield(String),
-    /// Put on armor or the ring.
+    /// Put on armor, the ring, or one relic.
     Wear(String),
+    /// Return the worn relic to the sack.
+    Remove(String),
     /// Drink a healing potion.
     Quaff,
     /// Consume a named herb from the sack.
@@ -177,6 +179,7 @@ enum Verb {
     Drop,
     Wield,
     Wear,
+    Remove,
     Quaff,
     Use,
     Rest,
@@ -194,7 +197,7 @@ enum Verb {
 }
 
 /// Verbs with the shortest prefix each accepts. Earlier entries win, so `we` is wear and `w` is west.
-const VERBS: [(&str, usize, Verb); 29] = [
+const VERBS: [(&str, usize, Verb); 30] = [
     ("attack", 1, Verb::Attack),
     ("fight", 1, Verb::Attack),
     ("kill", 1, Verb::Attack),
@@ -211,6 +214,7 @@ const VERBS: [(&str, usize, Verb); 29] = [
     ("quaff", 1, Verb::Quaff),
     ("drink", 3, Verb::Quaff),
     ("rest", 1, Verb::Rest),
+    ("remove", 3, Verb::Remove),
     ("down", 1, Verb::Down),
     ("up", 1, Verb::Up),
     ("use", 2, Verb::Use),
@@ -271,6 +275,7 @@ pub fn parse(line: &str) -> Result<Parsed, String> {
         Verb::Drop => Command::Drop(need("drop")?),
         Verb::Wield => Command::Wield(need("wield")?),
         Verb::Wear => Command::Wear(need("wear")?),
+        Verb::Remove => Command::Remove(need("remove")?),
         Verb::Quaff => Command::Quaff,
         Verb::Use => Command::Use(need("use")?),
         Verb::Rest => Command::Rest,
@@ -313,7 +318,7 @@ pub const HELP: [&str; 10] = [
     "Fight: attack <who>, nock then shoot <who>. Who is a letter (shoot a) or a name (sh 2 orc).",
     "Magic: chant <spell>, then cast [who]. Spells: spark, shield, heal, stun. Metal adds 2 Focus except shield.",
     "Hide: hide, then strike or shoot from hiding for extra damage. Anyone can hide and chant.",
-    "Things: get <item>|all (also gathers herbs), drop, wield, wear, quaff, use <herb>, inventory, look.",
+    "Things: get <item>|all, drop, wield, wear, remove <relic>, quaff, use <herb>, inventory, look.",
     "Town: buy <item>, sell <item>, list (in the shop); heal (in the temple).",
     "Growth: useful practice improves powers; kills raise adventuring rank. Skills lists practice. Rest recovers.",
     "Chain rounds with ;  (nock; shoot a). A chain stops if you are hurt or something new appears.",
@@ -340,6 +345,9 @@ mod tests {
         assert_eq!(round("shoot at the b"), Command::Shoot(Some(Target::Label('B'))));
         assert_eq!(round("a"), Command::Attack(None));
         assert_eq!(round("get all"), Command::Get("all".into()));
+        assert_eq!(round("wear ember charm"), Command::Wear("ember charm".into()));
+        assert_eq!(round("rem relic"), Command::Remove("relic".into()));
+        assert_eq!(round("r"), Command::Rest);
         assert_eq!(round("use woundleaf"), Command::Use("woundleaf".into()));
         assert_eq!(round("us bogmint"), Command::Use("bogmint".into()));
         assert_eq!(round("u"), Command::Up);
@@ -367,6 +375,7 @@ mod tests {
         assert!(parse("xyzzy").unwrap_err().contains("xyzzy"));
         assert_eq!(parse("get").unwrap_err(), "Get what?");
         assert_eq!(parse("use").unwrap_err(), "Use what?");
+        assert_eq!(parse("remove").unwrap_err(), "Remove what?");
         assert!(parse("chant fireball").unwrap_err().contains("fireball"));
     }
 }

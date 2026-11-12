@@ -650,6 +650,27 @@ pub fn object(object: Object, p: &Palette, snowy: bool, hot: bool, size: u8) -> 
             d.line(&[(10, 17), (11, 15)], mix(p.gold, WHITE, 0.45), 1);
             d.ellipse((13, 7, 18, 12), solid(p.glow), ink);
         }
+        Object::Relic(relic) => match relic {
+            isle_core::Relic::EmberCharm => {
+                d.line(&[(9, 6), (11, 13), (21, 13), (23, 6)], p.gold, 2);
+                d.poly(&[(16, 12), (23, 20), (16, 29), (9, 20)], p.gold, ink);
+                d.poly(&[(16, 15), (20, 20), (16, 26), (12, 20)], p.red, ink);
+                d.line(&[(16, 17), (14, 20)], p.glow, 1);
+            }
+            isle_core::Relic::Stillstone => {
+                d.poly(&[(12, 6), (22, 10), (25, 24), (17, 29), (7, 23), (8, 12)], p.steel, ink);
+                d.poly(&[(12, 8), (20, 11), (21, 16), (9, 20)], p.stone, None);
+                d.line(&[(12, 14), (20, 14), (12, 22), (20, 22)], p.ink, 2);
+                d.line(&[(16, 12), (16, 24)], p.glow, 1);
+            }
+            isle_core::Relic::HuntersToken => {
+                d.ellipse((6, 8, 26, 29), solid(p.bark), ink);
+                d.ellipse((8, 10, 24, 27), solid(p.gold), ink);
+                d.line(&[(12, 24), (21, 13)], p.ink, 2);
+                d.poly(&[(17, 13), (23, 11), (22, 17)], p.steel, ink);
+                d.line(&[(10, 20), (15, 24)], p.bark, 2);
+            }
+        },
         Object::Treasure => {
             d.shadow(p);
             d.poly(&[(7, 13), (23, 13), (26, 18), (25, 26), (6, 26), (6, 18)], p.bark, ink);

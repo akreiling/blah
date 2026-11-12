@@ -127,6 +127,8 @@ impl Armor {
 /// A thing that can lie on the ground or in the sack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Item {
+    /// A relic with a benefit and a cost while worn.
+    Relic(crate::Relic),
     /// A gathered field-recovery herb.
     Herb(crate::Herb),
     /// A hand weapon.
@@ -149,6 +151,7 @@ impl Item {
     /// The item as the log names it, with a count where it has one.
     pub fn name(self) -> String {
         match self {
+            Item::Relic(relic) => relic.name().into(),
             Item::Herb(herb) => herb.name().into(),
             Item::Weapon(w) => w.name().into(),
             Item::Bow(b) => b.name().into(),
@@ -164,6 +167,7 @@ impl Item {
     /// The words a player may type for it.
     pub(crate) fn words(self) -> &'static str {
         match self {
+            Item::Relic(relic) => relic.words(),
             Item::Herb(crate::Herb::Woundleaf) => "woundleaf herb",
             Item::Herb(crate::Herb::Bogmint) => "bogmint mint herb",
             Item::Herb(crate::Herb::Sunroot) => "sunroot root herb",
@@ -210,6 +214,7 @@ pub const SHOP: [(Item, u32); 11] = [
 /// What the outfitter pays for `item`: half its price, or a token sum for things he doesn't stock.
 pub fn sale_price(item: Item) -> u32 {
     match item {
+        Item::Relic(_) => 75,
         Item::Herb(_) => 2,
         Item::Ring => 150,
         Item::Gold(_) | Item::Arrows(_) => 0,

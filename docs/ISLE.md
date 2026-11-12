@@ -137,6 +137,7 @@ terrain. Seeing one logs a discovery, and its pixel-art remains stay on the reme
 
 Stand on the site and use `get all`, or press `,` with an empty command line, to open its cache and
 take what fits in one round. It holds coins, gear, and extra arrows or a healing potion.
+Every shrine cache also holds a relic; cairns and camps have a one-in-four chance.
 Opening is permanent: waiting, leaving, dying, and reloading never refill it. A full sack leaves
 the remaining contents on the ground, where you can return for them. The site itself remains.
 
@@ -163,6 +164,32 @@ Recovery never exceeds your current capacities. If the herb cannot restore eithe
 but the attempted command still takes a round. Herbs grant no practice or XP; dressing a wound removes
 its tracked injury just as a potion does, so later magic cannot claim it again.
 You can drop, pick up, or sell gathered herbs (two gold each); outfitters do not stock them.
+
+### Relics and trade-offs
+
+Relics come from wilderness caches, not starting gear or outfitter stock. Their finds use a separate
+seeded stream, so opening a cache never spends combat dice. Each has its own ground sprite.
+`inventory` describes both the benefit and cost before you equip one; the ordinary side panel repeats
+both while it is worn.
+
+| Relic | Benefit while worn | Cost while worn |
+|---|---|---|
+| Ember charm | +2 Spark damage | −3 Heal recovery, with a minimum of 1; herbs and potions are unaffected |
+| Stillstone | +2 melee and missile protection from an active Shield | −4 maximum Focus |
+| Hunter's token | +2 archery accuracy, not damage | −15 percentage points to hiding attempts, even at the normal chance cap |
+
+`wear ember charm`, `wear stillstone`, or `wear hunter's token` equips one relic in its own slot,
+separate from armor and the ring. Wearing another swaps the old relic into the same sack slot, so a
+full sack can still swap. `remove relic` (or name it) returns it to the sack; a full sack refuses removal
+without losing anything. Equipping and removing each take one exposed round. Benefits and costs use
+the currently worn relic: removing Stillstone ends its protection bonus even if an old Shield still lasts.
+The token changes new hiding attempts, not the chance of retaining concealment while walking.
+
+Stillstone clamps current Focus to its reduced capacity. Removing it, swapping relics, and earning
+capacity through practice never refill Focus. The cost remains as Focus practice grows; rest, herbs,
+the temple, and revival respect the current reduced maximum. Relics grant no practice, change no earned
+ranks, and remain worn after death and reload. Removed relics can be dropped, picked up, or sold for
+75 gold each. Caches never refill, including after a relic is sold.
 
 ### Towns, wildlife, and the Deep
 
@@ -287,6 +314,8 @@ return `{"error":"..."}`. A timeout leaves the outcome uncertain, so inspect sta
   map marker and directions, opens its cache, and verifies one-time and partial claims across reloads.
 - `python3 crates/isle/scripts/herbs.py` finds natural plants in three biomes, checks full-sack gathering,
   exact recovery, no practice gains, map markers, and permanent harvest state across reloads.
+- `python3 crates/isle/scripts/relics.py` walks from town until a natural cache yields a relic, checks
+  full-sack leftovers, visible trade-offs, one-slot equipment, exposed rounds, no-refill removal, and reloads.
 - `python3 crates/isle/scripts/wildlife.py` checks evolved population, reload, the IN SIGHT panel,
   and shooting an actual spawned individual by its regional name.
 - `python3 crates/isle/scripts/towns.py` visits two generated towns, exercises their services, and checks
